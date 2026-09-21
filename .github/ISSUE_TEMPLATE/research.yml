@@ -1,0 +1,123 @@
+name: Research task
+description: Plan research that supports a documented project decision.
+title: "[Research]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use the [ICT Research Methods catalogue](https://ictresearchmethods.nl/) and the [DOT Framework](https://ictresearchmethods.nl/dot-framework/) to choose methods. Link every selected method directly in the method plan below.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Research question
+      description: Write one focused, answerable question. Add subquestions only when needed.
+      placeholder: |
+        Main question: ...?
+
+        Subquestions:
+        - ...?
+    validations:
+      required: true
+
+  - type: textarea
+    id: decision
+    attributes:
+      label: Decision and context
+      description: Explain which project decision this research informs and link the parent or related issues.
+      placeholder: "This research informs ... for #..."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: primary_strategy
+    attributes:
+      label: Primary DOT strategy
+      description: Choose the main strategy. Include complementary strategies in the method plan when triangulation is useful.
+      options:
+        - Library — available work and expert knowledge
+        - Field — users and application context
+        - Lab — controlled testing and measurement
+        - Showroom — comparison and expert validation
+        - Workshop — exploration and improvement
+    validations:
+      required: true
+
+  - type: textarea
+    id: methods
+    attributes:
+      label: Research methods
+      description: Link each method to its page on ictresearchmethods.nl and explain why it fits the question.
+      placeholder: |
+        - [Document analysis](https://ictresearchmethods.nl/field/document-analysis/) — inspect existing project and organisational documentation.
+        - [Expert interview](https://ictresearchmethods.nl/library/expert-interview/) — validate assumptions with domain expertise.
+    validations:
+      required: true
+
+  - type: textarea
+    id: approach
+    attributes:
+      label: Method execution and evidence
+      description: Describe sources or participants, selection criteria, procedure, evidence to retain, and how results will be analysed.
+      placeholder: |
+        Sources or participants: ...
+        Selection criteria: ...
+        Procedure: ...
+        Evidence and analysis: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: triangulation
+    attributes:
+      label: Validation and triangulation
+      description: Explain how findings will be checked, challenged, or combined with another source or method.
+    validations:
+      required: true
+
+  - type: textarea
+    id: deliverable
+    attributes:
+      label: Deliverable
+      description: State where findings, sources, limitations, and the resulting recommendation or decision will be documented.
+      placeholder: Research report, decision record, comparison table, proof of concept, or linked project documentation
+    validations:
+      required: true
+
+  - type: textarea
+    id: done
+    attributes:
+      label: Definition of done
+      placeholder: |
+        - [ ] The research question is answered with traceable evidence.
+        - [ ] Sources and method limitations are documented.
+        - [ ] Risks and conflicting findings are reported.
+        - [ ] A recommendation or decision is linked to the relevant issue.
+    validations:
+      required: true
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks, ethics, and constraints
+      description: Cover bias, access, privacy, consent, confidential data, source reliability, API terms or limits, and time constraints where relevant.
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and timebox
+      description: Link blockers and state the planned timebox.
+      placeholder: "Blocked by #...; timebox: ..."
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Final checks
+      options:
+        - label: Every selected research method has a direct ICT Research Methods link.
+          required: true
+        - label: The planned evidence does not expose secrets or personal data.
+          required: true
+

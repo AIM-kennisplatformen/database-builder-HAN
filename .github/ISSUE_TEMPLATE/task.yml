@@ -1,0 +1,54 @@
+name: Implementation task
+description: Define a bounded technical, documentation, or maintenance task.
+title: "[Task]: "
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: State the result this task must produce and why it matters.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context and related issues
+      description: Link the parent issue, requirement, research result, or architectural decision.
+      placeholder: "Parent: #...; informed by #..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: work
+    attributes:
+      label: Work to perform
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Definition of done
+      description: Use verifiable outcomes, including tests or documentation where applicable.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and blockers
+      placeholder: "Blocked by #...; requires ..."
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks and constraints
+      description: Note technical, data, privacy, security, external-service, or schedule risks and mitigations.
+

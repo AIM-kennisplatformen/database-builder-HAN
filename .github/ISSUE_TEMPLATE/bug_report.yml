@@ -1,0 +1,82 @@
+name: Bug report
+description: Report reproducible behaviour that is incorrect or unexpected.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for documenting the problem. Remove secrets and personal data from examples, logs, and screenshots.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the incorrect behaviour and its impact.
+      placeholder: What did you observe, and who or what is affected?
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      placeholder: What should have happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest reliable reproduction, including safe sample input where useful.
+      placeholder: |
+        1. Run ...
+        2. Provide ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact
+      options:
+        - Blocks development or a core workflow
+        - Major degradation with a workaround
+        - Minor or cosmetic problem
+        - Unknown
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the branch or commit, operating system, Python version, and relevant dependency versions.
+      placeholder: Branch/commit, OS, Python and dependency versions
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs or other evidence
+      description: Paste concise logs, stack traces, screenshots, or links. Remove credentials and personal data.
+      render: shell
+
+  - type: textarea
+    id: related
+    attributes:
+      label: Related issues or context
+      placeholder: "#123, documentation, or other relevant context"
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Final checks
+      options:
+        - label: I searched the existing issues for duplicates.
+          required: true
+        - label: I removed secrets and personal data from this report.
+          required: true
+

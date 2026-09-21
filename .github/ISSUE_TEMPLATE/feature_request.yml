@@ -1,0 +1,64 @@
+name: Feature request
+description: Propose a new capability or a meaningful change in behaviour.
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or opportunity
+      description: Describe the user need before proposing a solution.
+      placeholder: Who needs what, in which situation, and why?
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the observable result and value.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Outline a solution if one is already known. Otherwise, state what still needs investigation.
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      placeholder: |
+        - [ ] Given ..., when ..., then ...
+        - [ ] ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope boundaries
+      description: State what is explicitly in and out of scope.
+      placeholder: |
+        In scope:
+        - ...
+
+        Out of scope:
+        - ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and related issues
+      description: Link prerequisites, parent issues, external systems, or decisions.
+      placeholder: "Blocked by #...; relates to #..."
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks and constraints
+      description: Consider data quality, privacy, security, API limits, maintainability, performance, and schedule.
+
