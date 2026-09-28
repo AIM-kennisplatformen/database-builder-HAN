@@ -55,6 +55,18 @@
 - Cache invalidation strategies
 - TTL policies
 
+### Data Sources
+
+Distinguish systems that supply data from stores owned by the documented system. For each source, record:
+
+- Which relevant data it supplies or may supply
+- Whether the source and field mapping are confirmed or still under investigation
+- Ownership and authority for the data
+- Access method and relevant permissions
+- Available identifiers and joining constraints
+- Freshness, update cadence, and source modification markers
+- Evidence supporting the mapping
+
 ### Data Ownership and Sensitivity
 
 - Which service/component owns which data?
@@ -105,6 +117,12 @@
 | [Name] | S3/GCS/Azure Blob | [What's stored] | [Service/team] |
 | [Name] | Redis/Memcached | [What's cached] | [Service/team] |
 | [Name] | File system | [What's stored] | [Service/team] |
+
+## Data Sources Overview
+
+| Source | Type | Relevant Data | Authority/Owner | Status |
+|--------|------|---------------|-----------------|--------|
+| [Name] | API/database/file/etc. | [Data supplied] | [Owning system/team] | [Confirmed/under investigation] |
 
 ## Database Model
 
