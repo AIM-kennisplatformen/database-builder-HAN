@@ -18,52 +18,78 @@ Those goals are described in the [Functional Overview](02-functional-overview.md
 The relationships below are planned for this project.
 Studio already has a chat application and a configurable MCP client, but this repository does not yet provide the HAN MCP server.
 
-```mermaid
-C4Context
-    title Planned HAN Knowledge-Platform Back-End Context
+```plantuml
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
 
-    Person(staff, "HAN staff", "Seek colleagues, expertise, and related projects")
-    Person(developer, "Developer", "Builds and operates the back end")
-    System(han, "HAN knowledge-platform back end", "Pipeline, TypeDB graph, and MCP server")
-    System_Ext(studio, "Studio", "Existing chat application and agent")
-    System_Ext(msgraph, "Microsoft Graph", "Candidate HAN information source")
-    System_Ext(ubw, "UBW FRIS", "Candidate project-data source for a proof of concept")
-    System_Ext(external, "Selected external sources", "Candidate enrichment or validation data")
-    System_Ext(langfuse, "Langfuse", "Planned observability service")
+title HAN Knowledge-Platform Management App
 
-    Rel(staff, studio, "Asks about expertise and projects")
-    Rel(studio, han, "Calls the planned MCP server for graph context")
-    Rel(developer, han, "Builds and operates")
-    Rel(han, msgraph, "Retrieves selected data")
-    Rel(han, ubw, "Tests selected data mapping")
-    Rel(han, external, "Retrieves selected data if justified")
-    Rel(han, langfuse, "Reports planned traces")
+Boundary(studio_app, "Studio App Context", "") {
+  Person_Ext(staff, "HAN staff", "Finds expertise")
+  System_Ext(studio, "Studio", "Chat and MCP client")
+  System_Ext(langfuse, "Langfuse", "")
+}
+
+Boundary(management_app, "Management App Context", "") {
+  Person(unknown_manager, "?", "At this time it is unknown who will be the user of the Management App.")
+  System(han, "HAN Knowledge Platform", "MCP server, Management App")
+}
+
+Boundary(data_sources, "External data sources", "") {
+  System_Ext(msgraph, "MS Graph", "Planned source")
+  System_Ext(ubwfris, "UBW FRIS", "Planned source")
+  System_Ext(other, "Other sources", "Planned sources")
+}
+
+Rel(staff, studio, "Asks about expertise")
+Rel(studio, han, "Gets knowledgegraph context")
+Rel(studio, langfuse, "Logs LLM calls")
+
+Rel(unknown_manager, han, "Builds knowledgegraph and maps data sources")
+Rel(han, msgraph, "")
+Rel(han, ubwfris, "")
+Rel(han, other, "")
+Rel(han, langfuse, "Logs MCP tool internal calls")
+@enduml
 ```
 
 <details>
-<summary>View Mermaid source</summary>
+<summary>View PlantUML source</summary>
 
-```text
-C4Context
-    title Planned HAN Knowledge-Platform Back-End Context
+````text
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
 
-    Person(staff, "HAN staff", "Seek colleagues, expertise, and related projects")
-    Person(developer, "Developer", "Builds and operates the back end")
-    System(han, "HAN knowledge-platform back end", "Pipeline, TypeDB graph, and MCP server")
-    System_Ext(studio, "Studio", "Existing chat application and agent")
-    System_Ext(msgraph, "Microsoft Graph", "Candidate HAN information source")
-    System_Ext(ubw, "UBW FRIS", "Candidate project-data source for a proof of concept")
-    System_Ext(external, "Selected external sources", "Candidate enrichment or validation data")
-    System_Ext(langfuse, "Langfuse", "Planned observability service")
+title HAN Knowledge-Platform Management App
 
-    Rel(staff, studio, "Asks about expertise and projects")
-    Rel(studio, han, "Calls the planned MCP server for graph context")
-    Rel(developer, han, "Builds and operates")
-    Rel(han, msgraph, "Retrieves selected data")
-    Rel(han, ubw, "Tests selected data mapping")
-    Rel(han, external, "Retrieves selected data if justified")
-    Rel(han, langfuse, "Reports planned traces")
-```
+Boundary(studio_app, "Studio App Context", "") {
+  Person_Ext(staff, "HAN staff", "Finds expertise")
+  System_Ext(studio, "Studio", "Chat and MCP client")
+  System_Ext(langfuse, "Langfuse", "")
+}
+
+Boundary(management_app, "Management App Context", "") {
+  Person(unknown_manager, "?", "At this time it is unknown who will be the user of the Management App.")
+  System(han, "HAN Knowledge Platform", "MCP server, Management App")
+}
+
+Boundary(data_sources, "External data sources", "") {
+  System_Ext(msgraph, "MS Graph", "Planned source")
+  System_Ext(ubwfris, "UBW FRIS", "Planned source")
+  System_Ext(other, "Other sources", "Planned sources")
+}
+
+Rel(staff, studio, "Asks about expertise")
+Rel(studio, han, "Gets knowledgegraph context")
+Rel(studio, langfuse, "Logs LLM calls")
+
+Rel(unknown_manager, han, "Builds knowledgegraph and maps data sources")
+Rel(han, msgraph, "")
+Rel(han, ubwfris, "")
+Rel(han, other, "")
+Rel(han, langfuse, "Logs MCP tool internal calls")
+@enduml
+````
 
 </details>
 

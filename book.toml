@@ -8,5 +8,6 @@ language = "en"
 build-dir = "book"
 create-missing = false
 
-[preprocessor.mermaid-ssr]
-on-error = "fail"
+[preprocessor.plantuml]
+plantuml-cmd = "plantuml"
+fail-on-error = true

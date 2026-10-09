@@ -32,13 +32,16 @@ jobs:
             https://github.com/rust-lang/mdBook/releases/download/v0.5.4/mdbook-v0.5.4-x86_64-unknown-linux-gnu.tar.gz \
             --output "$RUNNER_TEMP/mdbook.tar.gz"
           tar -xzf "$RUNNER_TEMP/mdbook.tar.gz" -C "$RUNNER_TEMP" mdbook
-      - name: Install mdbook-mermaid-ssr 0.3.0
+      - name: Install PlantUML
         run: |
-          cargo install mdbook-mermaid-ssr --version 0.3.0 --locked --root "$RUNNER_TEMP/mdbook-mermaid-ssr"
-          echo "$RUNNER_TEMP/mdbook-mermaid-ssr/bin" >> "$GITHUB_PATH"
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y plantuml
+      - name: Install mdbook-plantuml 2.0.0
+        run: |
+          cargo install mdbook-plantuml --version 2.0.0 --locked --root "$RUNNER_TEMP/mdbook-plantuml"
+          echo "$RUNNER_TEMP/mdbook-plantuml/bin" >> "$GITHUB_PATH"
       - name: Build guidebook
         run: |
-          mdbook-mermaid-ssr supports html
           "$RUNNER_TEMP/mdbook" build
       - name: Configure GitHub Pages
         if: github.ref == 'refs/heads/main'
