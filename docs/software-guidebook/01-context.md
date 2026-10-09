@@ -40,6 +40,33 @@ C4Context
     Rel(han, langfuse, "Reports planned traces")
 ```
 
+<details>
+<summary>View Mermaid source</summary>
+
+```text
+C4Context
+    title Planned HAN Knowledge-Platform Back-End Context
+
+    Person(staff, "HAN staff", "Seek colleagues, expertise, and related projects")
+    Person(developer, "Developer", "Builds and operates the back end")
+    System(han, "HAN knowledge-platform back end", "Pipeline, TypeDB graph, and MCP server")
+    System_Ext(studio, "Studio", "Existing chat application and agent")
+    System_Ext(msgraph, "Microsoft Graph", "Candidate HAN information source")
+    System_Ext(ubw, "UBW FRIS", "Candidate project-data source for a proof of concept")
+    System_Ext(external, "Selected external sources", "Candidate enrichment or validation data")
+    System_Ext(langfuse, "Langfuse", "Planned observability service")
+
+    Rel(staff, studio, "Asks about expertise and projects")
+    Rel(studio, han, "Calls the planned MCP server for graph context")
+    Rel(developer, han, "Builds and operates")
+    Rel(han, msgraph, "Retrieves selected data")
+    Rel(han, ubw, "Tests selected data mapping")
+    Rel(han, external, "Retrieves selected data if justified")
+    Rel(han, langfuse, "Reports planned traces")
+```
+
+</details>
+
 The source relationships are candidates rather than completed integrations, as described by [pipeline issue #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16).
 The planned MCP and Langfuse boundary comes from [MCP issue #17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17).
 Studio's [README](https://github.com/AIM-kennisplatformen/studio/blob/main/README.md) and [agent configuration code](https://github.com/AIM-kennisplatformen/studio/blob/main/src/backend/utility/chat_util.py) show its existing chat and MCP-client roles.

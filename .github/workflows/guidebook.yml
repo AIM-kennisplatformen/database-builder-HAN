@@ -4,14 +4,16 @@ on:
   pull_request:
     paths:
       - book.toml
-      - docs/**
+      - docs/software-guidebook/**
+      - .agents/skills/software-guidebook/**
       - .github/workflows/guidebook.yml
   push:
     branches:
       - main
     paths:
       - book.toml
-      - docs/**
+      - docs/software-guidebook/**
+      - .agents/skills/software-guidebook/**
       - .github/workflows/guidebook.yml
   workflow_dispatch:
 
