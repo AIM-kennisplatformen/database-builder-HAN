@@ -1,50 +1,67 @@
 # Functional Overview
 
-The following capabilities describe user goals for the HAN knowledge platform. Their priority, definitions, and supporting data still need validation.
+The initial functional scope centers on a locally run demonstration of expert discovery through Studio.
+A functional management API and developer-only UI proof of concept support manual correction of source links.
+The [Context chapter](01-context.md) shows the actors and system boundaries.
+These are planned capabilities; this repository does not yet implement them.
 
-## Core Capabilities
+## User Goals and Validation Status
 
-1. **Find a colleague with relevant expertise**
-   - Researchers and educational professionals want to find colleagues with the expertise, experience, or skills needed for a project or work problem.
-   - They want enough context about a colleague's organizational role and past work to decide whom to contact.
+- **Find colleagues relevant to a topic — main local-demo journey.**
+  Simon reports that he and Marijn Siebel prioritized expert discovery at the start of this project.
+  Earlier candidate needs are recorded in [issue #5](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/5); source coverage and match quality still require validation.
+- **Discover related people and projects — useful context, separate journey uncommitted.**
+  [Issue #5](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/5) records the earlier need.
+  Confirm whether available source links make a separate exploration journey useful.
+- **Correct an ambiguous or wrong source link — operator journey in scope.**
+  Simon confirmed a functional management API and developer-only UI proof of concept.
+  [Pipeline issue #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16) must select the first supported link types and correction behavior.
+- **Review personal project hours — uncommitted candidate proof of concept.**
+  Real UBW FRIS access is unavailable for this project.
+  Simon proposes demonstrating hours spent but will review the HR scope with Marijn Siebel and Sander Maijers.
+  Remaining hours and weekly capacity cannot be assumed from hours spent.
+- **Check a colleague's capacity or review billability — uncommitted candidate journeys.**
+  Earlier needs appear in [issue #5](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/5).
+  Marijn Siebel and Sander Maijers must decide whether either belongs in this proof of concept; data meaning and access remain unresolved.
 
-2. **Discover related people and projects**
-   - Researchers want to find colleagues and projects connected to an expertise domain or societal theme so they can explore collaboration and existing work.
+## Expert Discovery Journey
 
-3. **Check a colleague's availability**
-   - Project initiators and managers want to see a colleague's capacity during a period they choose before planning that colleague's project work.
+1. An authenticated HAN staff member asks in a locally run Studio instance for colleagues relevant to a topic or work problem.
+2. Studio requests graph context through the HAN MCP server and conveys which authenticated user made the request.
+3. The response presents a list of relevant colleagues. Each visible result has a name, work email address, a reason for the match, and a traceable source for its connection to the topic.
+4. The result distinguishes a recorded skill from a project association or another kind of expertise connection. Department and function are valuable additional context when available.
+5. The staff member uses the information to decide whom to contact outside the system.
 
-4. **Understand project hours and billability**
-   - Staff want to see their own project hours and remaining allocation. Managers want to understand billability for the employees or teams they manage so they can plan work.
+A source-backed explanation is required for each match; an unverified expertise label alone is insufficient.
+Richer supporting evidence, such as a publication or project history, is desirable if suitable data can be obtained.
+A colleague without enough information to contact them is omitted from staff-facing results.
+The list need not be ranked.
+The selected enrichment source may be a trusted API, dataset, or approved manual import, as investigated in [issue #7](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/7).
+No document-text extraction is planned for finding expertise.
 
-## User Journeys
+This journey is a locally run demonstration, not a claim of production deployment.
+Microsoft Graph has production access for this project, while UBW FRIS is available only as demo data.
+The actual fields, coverage, source joins, and result quality require validation under [issues #6](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/6), [#7](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/7), and [#9](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/9).
+The MCP identity and authorization design remains open under [issue #17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17).
 
-### Find expertise for a project or work problem
+## Manual Mapping Journey
 
-1. A researcher or educational professional identifies the expertise, experience, or skill they need.
-2. They review relevant colleagues and the context behind each match, such as organizational affiliation and project experience.
-3. They choose a colleague to contact for a project contribution or advice.
+1. A developer or designated operator inspects an ambiguous or unmatched link between a source record and a person, project, topic, or other graph entity.
+2. They use the management API, through a developer-only UI proof of concept, to choose or create the intended link or to correct a previously accepted mapping.
+3. A subsequent expert-discovery query reflects the corrected connection.
 
-### Explore interdisciplinary collaboration
+This API is not called by Studio and is not a staff-facing feedback path.
+A staff member who notices an irrelevant result would need to report it outside the initial product flow; no reporting mechanism is planned yet.
+The precise API operations and first supported link types remain for [pipeline issue #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16).
 
-1. A researcher chooses an expertise domain or societal theme.
-2. They explore colleagues and projects connected to it.
-3. They identify existing work to join or people to approach about a new collaboration.
+## Candidate Journeys Awaiting Scope Decision
 
-### Plan a colleague's contribution
+The earlier functional overview included checking a colleague's capacity, reviewing personal project hours and remaining allocation, and reviewing team billability.
+None is a committed initial journey.
+A possible narrower demonstration would show hours spent from permitted UBW FRIS demo data.
+The project cannot currently claim that UBW FRIS provides a person's weekly working hours or enough information to derive remaining allocation.
+Simon will discuss the value and scope of any HR-data demonstration with Marijn Siebel and Sander Maijers.
 
-1. A project initiator or manager selects a colleague and the period in which help is needed.
-2. They review the colleague's available capacity for that period.
-3. They use that information when planning the project contribution.
-
-### Review personal project hours
-
-1. A staff member selects one of their projects.
-2. They review their recorded hours and remaining allocation.
-3. They use the figures to plan their remaining work.
-
-### Review team billability
-
-1. A manager selects an employee or team they manage.
-2. They review the relevant billable hours or billability measure.
-3. They use the overview to inform project planning and staff deployment.
+The project is not defining detailed rules for who may view another person's hours, capacity, or billability from the unavailable real data.
+The MCP interaction must carry the requesting user's identity so that later permission or role-based controls can be applied.
+Access policy and enforcement remain open in [issue #17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17).

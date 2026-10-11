@@ -1,0 +1,25 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+
+title HAN Knowledge Platform - planned system context
+
+Person(staff, "HAN staff", "Finds colleagues with relevant expertise")
+Person(operator, "Developer or operator", "Resolves source links")
+
+System(han, "HAN Knowledge Platform", "Connects source data and provides colleague context")
+
+System_Ext(studio, "Studio", "Chat application used by HAN staff")
+System_Ext(msgraph, "Microsoft Graph", "Production-access colleague data")
+System_Ext(ubwfris, "UBW FRIS", "Demo data only")
+System_Ext(enrichment, "Selected enrichment source", "Trusted API, dataset, or manual import")
+System_Ext(langfuse, "Langfuse", "Planned tracing destination")
+
+Rel(staff, studio, "Asks for relevant colleagues")
+Rel(studio, han, "Requests colleague context for an authenticated user")
+Rel(han, studio, "Returns colleague matches and reasons")
+Rel(operator, han, "Reviews and corrects unresolved source links")
+Rel(han, msgraph, "Retrieves colleague data")
+Rel(han, ubwfris, "Uses demo data where selected")
+Rel(han, enrichment, "Uses selected enrichment data")
+Rel(han, langfuse, "Sends planned traces")
+@enduml

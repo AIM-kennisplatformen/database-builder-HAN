@@ -1,125 +1,88 @@
 # Context
 
-## System Overview
+## System Purpose and Boundary
 
-The HAN knowledge-platform back end is a planned system for bringing selected structured information into a TypeDB knowledge graph and making graph context available to the existing Studio chat application through a Model Context Protocol (MCP) server.
-The pipeline, graph, and MCP server are within this project's boundary; Studio is outside it.
-This repository currently contains guidebook and architecture work, but no implementation of those services.
-[Initial architecture issue #13](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/13) defines the planned work.
+The HAN knowledge platform is a planned back end that brings selected source data into a TypeDB knowledge graph and makes graph context available to the existing Studio chat application through a Model Context Protocol (MCP) server.
+The data pipeline, TypeDB graph, MCP server, management API, and developer-only management UI proof of concept are inside this project's boundary.
+Studio, source systems, and Langfuse are outside it.
+This repository currently contains architecture documentation but no implementation of those services.
+[Issue #14](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/14) defines the context and functional-scope work.
 
-## Why This System Exists
+The primary user goal is to find HAN colleagues relevant to a topic.
+An expertise connection can be a recorded skill, project involvement, or another sourced association; the kind of connection must be clear in the result.
+The [Functional Overview](02-functional-overview.md) defines the journey and its validation status.
 
-HAN staff need to find colleagues with relevant expertise and discover related people and projects.
-Those goals are described in the [Functional Overview](02-functional-overview.md); their priority and supporting data still need validation.
-[Data exploration issue #4](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/4) explains why the older pipeline and theoretical graph schema need rebuilding around data that can actually be obtained.
+## People and External Systems
+
+- **Authenticated HAN staff** use Studio for expert discovery.
+- **Developers or designated operators** run the pipeline and resolve ambiguous or unmatched links through the management API.
+  A developer-only UI demonstrates this work.
+- **Studio** provides the existing chat application and MCP client.
+  A local demo will connect it to the planned HAN MCP server.
+- **Microsoft Graph** provides production-access colleague data.
+  Useful fields and coverage remain under [research issue #6](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/6).
+- **UBW FRIS** supplies demo data only; real data access is unavailable for this project.
+  Its usable fields remain under [research issue #9](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/9).
+- **An enrichment source** remains to be selected under [research issue #7](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/7).
+  A trusted API, dataset, or approved manual import could be suitable.
+- **Langfuse** is a planned destination for MCP traces.
+  Its logging boundary is addressed by [issue #17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17).
+
+The future end user of a management platform is unknown.
+This project includes a functional management API and a developer-only UI proof of concept, not an end-user management application.
 
 ## System Context Diagram
 
-The relationships below are planned for this project.
-Studio already has a chat application and a configurable MCP client, but this repository does not yet provide the HAN MCP server.
+This diagram shows planned interactions and data movement, not implemented integrations.
+It shows the HAN knowledge platform as one system and Studio as a separate internal system.
+The pipeline, graph, MCP server, management API, and developer UI belong to a later container view.
+The exact pipeline and MCP component designs belong to [issues #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16) and [#17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17).
 
 ```plantuml
-@startuml
-!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
-
-title HAN Knowledge-Platform Management App
-
-Boundary(studio_app, "Studio App Context", "") {
-  Person_Ext(staff, "HAN staff", "Finds expertise")
-  System_Ext(studio, "Studio", "Chat and MCP client")
-  System_Ext(langfuse, "Langfuse", "")
-}
-
-Boundary(management_app, "Management App Context", "") {
-  Person(unknown_manager, "?", "At this time it is unknown who will be the user of the Management App.")
-  System(han, "HAN Knowledge Platform", "MCP server, Management App")
-}
-
-Boundary(data_sources, "External data sources", "") {
-  System_Ext(msgraph, "MS Graph", "Planned source")
-  System_Ext(ubwfris, "UBW FRIS", "Planned source")
-  System_Ext(other, "Other sources", "Planned sources")
-}
-
-Rel(staff, studio, "Asks about expertise")
-Rel(studio, han, "Gets knowledgegraph context")
-Rel(studio, langfuse, "Logs LLM calls")
-
-Rel(unknown_manager, han, "Builds knowledgegraph and maps data sources")
-Rel(han, msgraph, "")
-Rel(han, ubwfris, "")
-Rel(han, other, "")
-Rel(han, langfuse, "Logs MCP tool internal calls")
-@enduml
+{{#include diagrams/system-context.puml}}
 ```
 
 <details>
 <summary>View PlantUML source</summary>
 
-````text
-@startuml
-!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
-
-title HAN Knowledge-Platform Management App
-
-Boundary(studio_app, "Studio App Context", "") {
-  Person_Ext(staff, "HAN staff", "Finds expertise")
-  System_Ext(studio, "Studio", "Chat and MCP client")
-  System_Ext(langfuse, "Langfuse", "")
-}
-
-Boundary(management_app, "Management App Context", "") {
-  Person(unknown_manager, "?", "At this time it is unknown who will be the user of the Management App.")
-  System(han, "HAN Knowledge Platform", "MCP server, Management App")
-}
-
-Boundary(data_sources, "External data sources", "") {
-  System_Ext(msgraph, "MS Graph", "Planned source")
-  System_Ext(ubwfris, "UBW FRIS", "Planned source")
-  System_Ext(other, "Other sources", "Planned sources")
-}
-
-Rel(staff, studio, "Asks about expertise")
-Rel(studio, han, "Gets knowledgegraph context")
-Rel(studio, langfuse, "Logs LLM calls")
-
-Rel(unknown_manager, han, "Builds knowledgegraph and maps data sources")
-Rel(han, msgraph, "")
-Rel(han, ubwfris, "")
-Rel(han, other, "")
-Rel(han, langfuse, "Logs MCP tool internal calls")
-@enduml
-````
+```text
+{{#include diagrams/system-context.puml}}
+```
 
 </details>
 
-The source relationships are candidates rather than completed integrations, as described by [pipeline issue #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16).
-The planned MCP and Langfuse boundary comes from [MCP issue #17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17).
-Studio's [README](https://github.com/AIM-kennisplatformen/studio/blob/main/README.md) and [agent configuration code](https://github.com/AIM-kennisplatformen/studio/blob/main/src/backend/utility/chat_util.py) show its existing chat and MCP-client roles.
+Studio already provides a chat application and configurable MCP client, as shown by its [README](https://github.com/AIM-kennisplatformen/studio/blob/main/README.md) and [agent configuration](https://github.com/AIM-kennisplatformen/studio/blob/main/src/backend/utility/chat_util.py).
+Studio authenticates users through [Authentik](https://github.com/AIM-kennisplatformen/studio/blob/main/src/backend/endpoints/auth.py).
+The local demo must convey the authenticated user's identity to the HAN MCP request.
+The format and trust mechanism for that identity, and the resulting authorization rules, remain design questions for [issue #17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17).
+Studio does not access TypeDB or call the management API.
 
-## People and Interests
+## Initial Scope and Exclusions
 
-| Role | Interest or interaction |
-| --- | --- |
-| HAN staff | Use Studio to seek expertise, colleagues, and related projects. |
-| Developer | Builds and operates the planned pipeline, graph, and MCP server. |
-| Knowledge-platform researchers | Need to evaluate whether graph-backed answers rest on suitable source data. |
-| Project lead and architecture reviewers | Need a reviewable system boundary and evidence for source and design choices. |
+The main deliverable is a locally run Studio demonstration in which authenticated HAN staff ask for expertise and receive a list of relevant colleagues with names, work email addresses, source-backed match reasons, and the kind of connection behind each match.
+Department and function add substantial value where available.
+A colleague without enough information to contact them is excluded from staff-facing results.
+A ranked list is not required.
+Richer supporting evidence is desirable, but each match must remain traceable to a source and explainable.
 
-The staff information needs are described in the [Functional Overview](02-functional-overview.md).
-[Issues #13](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/13) and [#14](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/14) call for stakeholder review of the architecture and scope.
+The operator path includes a functional API for resolving ambiguous or unmatched source links and correcting accepted mappings.
+A developer-only UI proof of concept must demonstrate a correction that is reflected in a later expert-discovery query.
+The first supported link types and precise mapping operations belong to [issue #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16).
 
-## External Systems and Scope
+Contacting or booking colleagues, extracting expertise from document text, a staff-facing correction or feedback feature, and a production management UI are outside this initial scope.
+A staff member would need a separate way to report a bad result; no reporting path is planned yet.
+Project hours, capacity, and billability are uncommitted candidate journeys pending discussion with Marijn Siebel and Sander Maijers.
+Simon has proposed demonstrating hours spent, but no HR-data proof of concept has been agreed.
 
-Studio is the user-facing chat application.
-Its agent can use a configured MCP client; connecting it to this project's MCP server remains planned.
-Microsoft Graph, UBW FRIS, and other external data sources are candidates whose usable fields, access, and quality remain under research in [issues #4](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/4), [#6](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/6), and [#9](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/9).
-Langfuse is a planned destination for MCP-related traces under [issue #17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17).
+## Stakeholder Feedback and Open Decisions
 
-The proposed initial proof of concept focuses on finding colleagues with relevant expertise and discovering related people and projects.
-Availability, project hours, and billability remain broader user goals in the [Functional Overview](02-functional-overview.md), with their priority and data needs still to be validated.
-This project uses Studio's existing chat interface rather than building another staff-facing chat application.
+Simon reports that he and Marijn Siebel prioritized expert discovery at the start of this project because access to real UBW FRIS data was unavailable.
+This design interview established the local-demo boundary, minimum colleague result, management API and developer UI scope, and the separation between Studio, MCP access, and manual correction.
+These are scope decisions for the initial architecture, not claims that integrations have been built.
 
-Studio already authenticates its users through [Authentik](https://github.com/AIM-kennisplatformen/studio/blob/main/src/backend/endpoints/auth.py).
-How that identity could support role-based access to HAN graph information remains an open design question in [issue #17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17).
-A design-only proof of concept extending Studio's login to role-based information access is proposed; no role-filtering implementation is claimed here.
+The following remain open:
+
+- Marijn Siebel and Sander Maijers must decide whether any project-hours or billability journey belongs in the proof of concept, and whether the proposed hours-spent example is useful.
+- [Source research #6](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/6), [#7](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/7), and [#9](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/9) must establish usable fields, trusted enrichment, and demo-data limits.
+- [MCP architecture issue #17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17) must define identity propagation and authorization boundaries; detailed HR access rules cannot be validated with the available data.
+- The future users and interface of a management platform beyond the developer-only proof of concept are unknown.
