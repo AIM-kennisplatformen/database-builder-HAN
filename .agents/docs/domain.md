@@ -1,6 +1,6 @@
 # Domain docs
 
-Use one root `GLOSSARY.md` for shared domain terms and `docs/software-guidebook/adr/` for architecture decisions. Create the glossary and individual ADRs only when their content is established.
+Use one `docs/GLOSSARY.md` for shared domain terms and `docs/software-guidebook/adr/` for architecture decisions. Create the glossary and individual ADRs only when their content is established.
 
 For each new ADR, use `docs/software-guidebook/adr/TEMPLATE.md` as the format and save it in the same directory as `ADR-001-<slug>.md`, incrementing the highest existing number. This repository rule takes precedence over an installed skill's default ADR directory or format.
 
