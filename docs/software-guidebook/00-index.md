@@ -32,4 +32,4 @@ This guidebook follows Simon Brown's Software Guidebook chapter structure. It he
 
 ## Quick Links
 
-- [Repository README](../../README.md)
+- [README](https://github.com/AIM-kennisplatformen/database-builder-HAN#readme)
