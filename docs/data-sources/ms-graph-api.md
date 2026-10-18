@@ -11,11 +11,11 @@ The old extractor uses delegated authentication through `InteractiveBrowserCrede
 Its source file does not establish which scopes were granted to a particular token.
 All three calls use Microsoft Graph `v1.0` through the Python SDK.
 
-| Endpoint and purpose | Selected properties and behavior | Evidence and validation |
-| --- | --- | --- |
-| [Get group](https://learn.microsoft.com/en-us/graph/api/group-get?view=graph-rest-1.0), `GET /groups/{id}`: load the configured HAN employee group. | Selects `id`; the code also logs the returned group's `displayName` and `mail`. | Old extractor `get_han_employees`; code inspected, not retested here. |
+| Endpoint and purpose                                                                                                                                                                                                | Selected properties and behavior                                                                                                                                                                                      | Evidence and validation                                               |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| [Get group](https://learn.microsoft.com/en-us/graph/api/group-get?view=graph-rest-1.0), `GET /groups/{id}`: load the configured HAN employee group.                                                                 | Selects `id`; the code also logs the returned group's `displayName` and `mail`.                                                                                                                                       | Old extractor `get_han_employees`; code inspected, not retested here. |
 | [List group transitive members](https://learn.microsoft.com/en-us/graph/api/group-list-transitivemembers?view=graph-rest-1.0), `GET /groups/{id}/transitiveMembers/microsoft.graph.user`: enumerate employee users. | Selects `accountEnabled`, `id`, `userType`; filters `accountEnabled eq true and userType eq 'Member'`; requests `$count=true`, up to 999 users per page, and `ConsistencyLevel: eventual`; follows `@odata.nextLink`. | Old extractor `get_han_employees`; code inspected, not retested here. |
-| [Get user](https://learn.microsoft.com/en-us/graph/api/user-get?view=graph-rest-1.0), `GET /users/{id}`: load each member's profile. | Selects `givenName`, `id`, `interests`, `mail`, `responsibilities`, `schools`, `skills`, `surname`. | Old extractor `get_user_indepth`; code inspected, not retested here. |
+| [Get user](https://learn.microsoft.com/en-us/graph/api/user-get?view=graph-rest-1.0), `GET /users/{id}`: load each member's profile.                                                                                | Selects `givenName`, `id`, `interests`, `mail`, `responsibilities`, `schools`, `skills`, `surname`.                                                                                                                   | Old extractor `get_user_indepth`; code inspected, not retested here.  |
 
 The old extractor stores a colleague only when the profile has `givenName`, `surname`, and `mail` and at least one of `skills`, `interests`, `responsibilities`, or `schools` is nonempty.
 That rule can omit contactable colleagues with empty self-entered profile fields and is not a requirement for the new expert-discovery journey.
@@ -58,39 +58,39 @@ One Get user call per enumerated member also makes request volume grow with empl
 
 The current requests select these fields for the initial [expert-discovery journey](../software-guidebook/02-functional-overview.md):
 
-| Graph field | Use |
-| --- | --- |
-| `displayName` | Name shown in a colleague result. |
-| `givenName` | First name for identification and matching. |
-| `surname` | Family name for identification and matching. |
-| `mail` | Work email address shown in a colleague result. |
-| `id` | Internal identifier for joins, deduplication, and provenance. Never expose it to the end user. |
+| Graph field   | Use                                                                                            |
+| ------------- | ---------------------------------------------------------------------------------------------- |
+| `displayName` | Name shown in a colleague result.                                                              |
+| `givenName`   | First name for identification and matching.                                                    |
+| `surname`     | Family name for identification and matching.                                                   |
+| `mail`        | Work email address shown in a colleague result.                                                |
+| `id`          | Internal identifier for joins, deduplication, and provenance. Never expose it to the end user. |
 
 ## Selected self-entered fields with sparse reported coverage
 
 The current request selects these [Microsoft Graph user properties](https://learn.microsoft.com/en-us/graph/api/resources/user?view=graph-rest-1.0).
 The current token does not grant full profiles of other colleagues, and the project access check attributes observed nulls to that access limit:
 
-| Graph field | Possible use for finding expertise |
-| --- | --- |
-| `skills` | Directly recorded skills; distinguish them from inferred expertise. |
-| `responsibilities` | Work responsibilities that may indicate relevant experience. |
-| `schools` | Educational background that may help with some searches. |
-| `interests` | Stated interests that may suggest a topic connection. |
-| `aboutMe` | Free-text self-description that may mention expertise or work areas. |
-| `pastProjects` | Past project involvement that may support a topic connection. |
+| Graph field        | Possible use for finding expertise                                   |
+| ------------------ | -------------------------------------------------------------------- |
+| `skills`           | Directly recorded skills; distinguish them from inferred expertise.  |
+| `responsibilities` | Work responsibilities that may indicate relevant experience.         |
+| `schools`          | Educational background that may help with some searches.             |
+| `interests`        | Stated interests that may suggest a topic connection.                |
+| `aboutMe`          | Free-text self-description that may mention expertise or work areas. |
+| `pastProjects`     | Past project involvement that may support a topic connection.        |
 
 Empty values may mean that a colleague has not supplied usable data; they must not be treated as evidence that the colleague lacks expertise.
 The observed nulls reflect the current access limit, not evidence of an empty colleague profile.
 In the inspected response, `skills`, `responsibilities`, `schools`, `interests`, and `pastProjects` were empty, and `aboutMe` was null.
 The project supplied the following population counts for **4,712 active accounts**:
 
-| Field | Accounts with a value | Share of active accounts |
-| --- | ---: | ---: |
-| `interests` | 42 | 0.89% |
-| `responsibilities` | 44 | 0.93% |
-| `schools` | 45 | 0.96% |
-| `skills` | 74 | 1.57% |
+| Field              | Accounts with a value | Share of active accounts |
+| ------------------ | --------------------: | -----------------------: |
+| `interests`        |                    42 |                    0.89% |
+| `responsibilities` |                    44 |                    0.93% |
+| `schools`          |                    45 |                    0.96% |
+| `skills`           |                    74 |                    1.57% |
 
 The four counts sum to 205.
 Even if no accounts overlap across fields, at most 205 of 4,712 active accounts (4.35%) have a value in at least one of these fields.
@@ -102,12 +102,12 @@ If a populated field is used as an expertise connection, retain its field name a
 
 The current observed requests did not return usable values for these fields.
 
-| Wanted data | Graph user property to investigate | Value for this project |
-| --- | --- | --- |
-| Company | `companyName` | Expected to be the same for HAN colleagues, but useful as explicit organization context. |
-| Department | `department` | Particularly useful for finding people with relevant expertise and understanding a match. |
-| Job title | `jobTitle` | Particularly useful for finding people by function or role. |
-| Alias | `mailNickname` | Shown as "Alias" on the Microsoft profile card; also used in timetabling. |
+| Wanted data | Graph user property to investigate | Value for this project                                                                    |
+| ----------- | ---------------------------------- | ----------------------------------------------------------------------------------------- |
+| Company     | `companyName`                      | Expected to be the same for HAN colleagues, but useful as explicit organization context.  |
+| Department  | `department`                       | Particularly useful for finding people with relevant expertise and understanding a match. |
+| Job title   | `jobTitle`                         | Particularly useful for finding people by function or role.                               |
+| Alias       | `mailNickname`                     | Shown as "Alias" on the Microsoft profile card; also used in timetabling.                 |
 
 The inspected Get user response has `mailNickname` set to null because the current token lacks access, according to the project access check.
 [Microsoft describes `mailNickname` as the user's mail alias](https://learn.microsoft.com/en-us/graph/api/resources/user?view=graph-rest-1.0) and says it requires `$select` to retrieve.
@@ -119,12 +119,12 @@ Department and function are useful when available.
 The table maps the Graph-relevant candidate data points in [issue #5](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/5) to the three endpoints above.
 The issue #5 candidate list was not a final validation of every requirement, so optional context remains provisional.
 
-| Required or candidate data point | Best matching Graph property and endpoint | Coverage and evidence |
-| --- | --- | --- |
-| Colleague identity and contact for a result | `id`, `displayName`, `givenName`, `surname`, `mail` from Get user or transitive members. | **Partial, observed in the reported inspection.** Basic fields are covered by `User.ReadBasic.All`; population-wide completeness of name and work email is unmeasured. Keep `id` internal for joins and provenance. |
-| Recorded expertise, interests, and experience with a source-backed match reason | `skills`, `responsibilities`, `schools`, `interests` from Get user; `aboutMe` and `pastProjects` were added to the current Get user request. | **Partial at best.** At most 4.35% of active accounts have a value in any of the four measured fields, even with no overlap. The inspected `aboutMe` was null because of the reported access limit. Preserve the property name when a populated value supports an expertise connection. An empty value is not evidence that a colleague lacks expertise. |
-| Colleague affiliation and role for match context | `companyName`, `department`, `jobTitle` from Get user or transitive members; `mailNickname` is a possible alias for identity matching. | **Unavailable with the current token.** These fields are outside `User.ReadBasic.All`'s basic list, and the project access check attributes the observed nulls to insufficient access. Department, function, company, and alias have not all been confirmed as required for the initial journey. |
-| Project experience and links to expertise domains or themes | `pastProjects` may contain self-entered history in Get user; the three endpoints contain no verified structured project-to-person or theme link. | **Not covered directly.** The inspected `pastProjects` was empty. Source-backed project and topic links need evidence from another source or a documented derivation; a self-entered project name alone does not establish a verified relation. |
+| Required or candidate data point                                                | Best matching Graph property and endpoint                                                                                                        | Coverage and evidence                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Colleague identity and contact for a result                                     | `id`, `displayName`, `givenName`, `surname`, `mail` from Get user or transitive members.                                                         | **Partial, observed in the reported inspection.** Basic fields are covered by `User.ReadBasic.All`; population-wide completeness of name and work email is unmeasured. Keep `id` internal for joins and provenance.                                                                                                                                      |
+| Recorded expertise, interests, and experience with a source-backed match reason | `skills`, `responsibilities`, `schools`, `interests` from Get user; `aboutMe` and `pastProjects` were added to the current Get user request.     | **Partial at best.** At most 4.35% of active accounts have a value in any of the four measured fields, even with no overlap. The inspected `aboutMe` was null because of the reported access limit. Preserve the property name when a populated value supports an expertise connection. An empty value is not evidence that a colleague lacks expertise. |
+| Colleague affiliation and role for match context                                | `companyName`, `department`, `jobTitle` from Get user or transitive members; `mailNickname` is a possible alias for identity matching.           | **Unavailable with the current token.** These fields are outside `User.ReadBasic.All`'s basic list, and the project access check attributes the observed nulls to insufficient access. Department, function, company, and alias have not all been confirmed as required for the initial journey.                                                         |
+| Project experience and links to expertise domains or themes                     | `pastProjects` may contain self-entered history in Get user; the three endpoints contain no verified structured project-to-person or theme link. | **Not covered directly.** The inspected `pastProjects` was empty. Source-backed project and topic links need evidence from another source or a documented derivation; a self-entered project name alone does not establish a verified relation.                                                                                                          |
 
 Personal project hours, remaining allocation, capacity, and team billability from issue #5 are not mapped to these Graph endpoints because their candidate source is UBW FRIS and those journeys are not in the agreed initial scope.
 The current endpoint set provides no evidence that Graph supplies those measures.

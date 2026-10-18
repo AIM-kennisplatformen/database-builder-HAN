@@ -9,26 +9,26 @@ Maintain one chapter at a time for developers joining the team. Explain the syst
 
 ## Scope and mode
 
-An invocation must identify exactly one chapter from the table below, by number, title, or file name. If the request names no chapter or several chapters, ask the user to choose one before researching or editing. A request to create or update the entire guidebook is not a valid invocation. Creating a missing *selected* chapter is allowed; do not create the other chapters or the guidebook directory's index unless `00-index.md` is the selected chapter.
+An invocation must identify exactly one chapter from the table below, by number, title, or file name. If the request names no chapter or several chapters, ask the user to choose one before researching or editing. A request to create or update the entire guidebook is not a valid invocation. Creating a missing _selected_ chapter is allowed; do not create the other chapters or the guidebook directory's index unless `00-index.md` is the selected chapter.
 
 Use **interactive** mode unless the user specifies **suggestive**. In either mode, the only guidebook file you may write is the selected chapter. Read other chapters for context and report any related changes they may need, but leave them untouched. Do not make commits or change source code as part of this skill.
 
-| Chapter | Topic |
-| --- | --- |
-| `00-index.md` | Guidebook orientation and navigation |
-| `01-context.md` | System scope, people, and external systems |
-| `02-functional-overview.md` | Features and use cases |
-| `03-quality-attributes.md` | Quality goals and their evidence |
-| `04-constraints.md` | Constraints outside the team's control |
-| `05-principles.md` | Architecture and design principles |
-| `06-software-architecture.md` | C4 views and structural decisions |
-| `07-external-interfaces.md` | APIs, integrations, and protocols |
-| `08-code.md` | Code organization and conventions |
-| `09-data.md` | Data models and storage |
-| `10-infrastructure.md` | Environments and infrastructure |
-| `11-deployment.md` | Build and release process |
-| `12-operation-support.md` | Running and supporting the system |
-| `13-decision-log.md` | Architecture decisions |
+| Chapter                       | Topic                                      |
+| ----------------------------- | ------------------------------------------ |
+| `00-index.md`                 | Guidebook orientation and navigation       |
+| `01-context.md`               | System scope, people, and external systems |
+| `02-functional-overview.md`   | Features and use cases                     |
+| `03-quality-attributes.md`    | Quality goals and their evidence           |
+| `04-constraints.md`           | Constraints outside the team's control     |
+| `05-principles.md`            | Architecture and design principles         |
+| `06-software-architecture.md` | C4 views and structural decisions          |
+| `07-external-interfaces.md`   | APIs, integrations, and protocols          |
+| `08-code.md`                  | Code organization and conventions          |
+| `09-data.md`                  | Data models and storage                    |
+| `10-infrastructure.md`        | Environments and infrastructure            |
+| `11-deployment.md`            | Build and release process                  |
+| `12-operation-support.md`     | Running and supporting the system          |
+| `13-decision-log.md`          | Architecture decisions                     |
 
 Use the corresponding file in [references/sections/](references/sections/) for chapter-specific guidance, and [references/c4-mermaid.md](references/c4-mermaid.md) when a C4 diagram is useful. Templates are prompts, not evidence: omit placeholders and unsupported claims. Instructions in a template to update another chapter or file do not override the one-chapter boundary.
 

@@ -5,6 +5,7 @@
 ## Guidance
 
 ### What This Section Should Accomplish
+
 - Help developers understand the runtime topology
 - Enable operations to manage and troubleshoot the system
 - Document security boundaries and access controls
@@ -13,6 +14,7 @@
 ### Runtime Topology
 
 Document what runs where:
+
 - Which components run on which servers/containers
 - How many instances of each component
 - Geographic distribution if applicable
@@ -36,6 +38,7 @@ Document what runs where:
 ### Environment Parity
 
 Document differences between environments:
+
 - What's the same across dev/staging/production?
 - What's different and WHY?
 - Which differences have caused production bugs?
@@ -52,6 +55,7 @@ Document differences between environments:
 ### Local Development Setup
 
 Enable developers to run the system locally:
+
 - Docker Compose or similar orchestration
 - Which services run locally vs. connect to shared resources
 - How to stub/mock external services
@@ -60,18 +64,21 @@ Enable developers to run the system locally:
 ### Environment Variables
 
 Group variables by purpose and document clearly:
+
 - **Application config**: Feature flags, timeouts, limits
 - **Service connections**: Database URLs, API endpoints
 - **Secrets**: API keys, passwords (NEVER document values!)
 - **Environment-specific**: Values that change between environments
 
 Document:
+
 - Dependencies between variables
 - Which variables are secrets (mark clearly)
 - Example values for non-secrets
 - Where secrets are managed (Vault, AWS Secrets Manager, etc.)
 
 ### Anti-patterns to Avoid
+
 - ❌ Don't document secret values - ever
 - ❌ Don't assume readers know your cloud provider's UI
 - ❌ Don't skip local development setup
@@ -81,24 +88,24 @@ Document:
 
 ## Template
 
-```markdown
+````markdown
 # Infrastructure
 
 ## Environments Overview
 
-| Environment | Purpose | URL | Notes |
-|-------------|---------|-----|-------|
-| Local | Developer machines | localhost:3000 | [Docker Compose/direct] |
-| Development | Shared dev environment | [URL] | [if applicable] |
-| Staging | Pre-production testing | [URL] | [production-like?] |
-| Production | Live system | [URL] | [region/zones] |
+| Environment | Purpose                | URL            | Notes                   |
+| ----------- | ---------------------- | -------------- | ----------------------- |
+| Local       | Developer machines     | localhost:3000 | [Docker Compose/direct] |
+| Development | Shared dev environment | [URL]          | [if applicable]         |
+| Staging     | Pre-production testing | [URL]          | [production-like?]      |
+| Production  | Live system            | [URL]          | [region/zones]          |
 
 ### Environment Parity
 
-| Aspect | Local | Staging | Production |
-|--------|-------|---------|------------|
-| Database | [SQLite/Docker PostgreSQL] | [Managed PostgreSQL] | [Managed PostgreSQL] |
-| [Aspect] | [local approach] | [staging approach] | [production approach] |
+| Aspect   | Local                      | Staging              | Production            |
+| -------- | -------------------------- | -------------------- | --------------------- |
+| Database | [SQLite/Docker PostgreSQL] | [Managed PostgreSQL] | [Managed PostgreSQL]  |
+| [Aspect] | [local approach]           | [staging approach]   | [production approach] |
 
 **Known differences that matter**: [list any gotchas]
 
@@ -108,31 +115,34 @@ Document:
 
 ## Runtime Topology
 
-| Component | Runs On | Instances | Auto-scaling |
-|-----------|---------|-----------|--------------|
-| [Web app] | [ECS/K8s/VM] | [count] | [min-max or N/A] |
-| [API] | [ECS/K8s/VM] | [count] | [min-max or N/A] |
-| [Worker] | [ECS/K8s/VM] | [count] | [min-max or N/A] |
+| Component | Runs On      | Instances | Auto-scaling     |
+| --------- | ------------ | --------- | ---------------- |
+| [Web app] | [ECS/K8s/VM] | [count]   | [min-max or N/A] |
+| [API]     | [ECS/K8s/VM] | [count]   | [min-max or N/A] |
+| [Worker]  | [ECS/K8s/VM] | [count]   | [min-max or N/A] |
 
 ## Cloud Resources
 
-| Resource | Service | Purpose | Environment |
-|----------|---------|---------|-------------|
-| [Name] | [AWS/GCP/Azure service] | [What it does] | [All/Prod only] |
+| Resource | Service                 | Purpose        | Environment     |
+| -------- | ----------------------- | -------------- | --------------- |
+| [Name]   | [AWS/GCP/Azure service] | [What it does] | [All/Prod only] |
 
 ## Networking
 
 ### Network Architecture
+
 - **VPC/Network**: [setup description]
 - **Subnets**: [public/private arrangement]
 - **Security groups/Firewalls**: [key rules]
 
 ### Load Balancing
+
 - **Type**: [ALB/NLB/Cloud Load Balancer]
 - **Health checks**: [what's checked]
 - **SSL termination**: [where]
 
 ### CDN
+
 - **Provider**: [CloudFront/Cloudflare/etc.]
 - **What's cached**: [static assets, API responses?]
 - **Cache invalidation**: [approach]
@@ -153,46 +163,51 @@ Document:
 ## Local Development Setup
 
 ### Prerequisites
+
 - [Docker, Node.js version, etc.]
 
 ### Quick Start
+
 ```bash
 # [commands to start local environment]
 ```
+````
 
 ### Local Services
-| Service | Local Approach |
-|---------|---------------|
-| Database | [Docker container / SQLite] |
-| Cache | [Docker Redis / in-memory] |
+
+| Service        | Local Approach                      |
+| -------------- | ----------------------------------- |
+| Database       | [Docker container / SQLite]         |
+| Cache          | [Docker Redis / in-memory]          |
 | [External API] | [Mock server / sandbox environment] |
 
 ## Environment Variables
 
 ### Application Configuration
 
-| Variable | Purpose | Example | Env-specific? |
-|----------|---------|---------|---------------|
-| `LOG_LEVEL` | Logging verbosity | `info` | Yes |
-| `FEATURE_X_ENABLED` | Feature flag | `true` | Yes |
+| Variable            | Purpose           | Example | Env-specific? |
+| ------------------- | ----------------- | ------- | ------------- |
+| `LOG_LEVEL`         | Logging verbosity | `info`  | Yes           |
+| `FEATURE_X_ENABLED` | Feature flag      | `true`  | Yes           |
 
 ### Service Connections
 
-| Variable | Purpose | Example | Env-specific? |
-|----------|---------|---------|---------------|
-| `DATABASE_URL` | Database connection | `postgresql://localhost:5432/app` | Yes |
-| `REDIS_URL` | Cache connection | `redis://localhost:6379` | Yes |
+| Variable       | Purpose             | Example                           | Env-specific? |
+| -------------- | ------------------- | --------------------------------- | ------------- |
+| `DATABASE_URL` | Database connection | `postgresql://localhost:5432/app` | Yes           |
+| `REDIS_URL`    | Cache connection    | `redis://localhost:6379`          | Yes           |
 
 ### Secrets (⚠️ NEVER commit values)
 
-| Variable | Purpose | Managed In |
-|----------|---------|------------|
-| `API_SECRET_KEY` | [purpose] | [Vault/AWS Secrets Manager] |
+| Variable            | Purpose   | Managed In                  |
+| ------------------- | --------- | --------------------------- |
+| `API_SECRET_KEY`    | [purpose] | [Vault/AWS Secrets Manager] |
 | `DATABASE_PASSWORD` | [purpose] | [Vault/AWS Secrets Manager] |
 
 ### Variable Dependencies
 
 [Document any variables that depend on others or must be set together]
-```
 
+```
 **Auto-discover from**: docker-compose.yml, k8s manifests, terraform, cloudformation, env files, CI/CD configs
+```

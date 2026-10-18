@@ -5,6 +5,7 @@
 ## Guidance
 
 ### What This Guidebook Is For
+
 - **New joiners**: Get up to speed on the system's architecture and design
 - **Existing team members**: Reference information when making changes
 - **Everyone**: Understand the "big picture" that code alone cannot convey
@@ -12,30 +13,35 @@
 This guidebook does NOT replace code-level documentation (comments, API docs). It captures the architectural context and rationale that would otherwise exist only in people's heads.
 
 ### Writing Style
+
 - **Write for "the intelligent reader who isn't you"** - someone smart but unfamiliar with this codebase
 - Avoid jargon without explanation; define domain terms on first use
 - Balance technical depth with accessibility
 - Use diagrams liberally - "a picture is worth a thousand words"
 
 ### Keep It Lightweight
+
 Simon Brown warns against "overly long and detailed documents that nobody ever reads." Follow these guidelines:
+
 - Each section should be **10-20 pages maximum**
 - If a section grows too large, summarize and link to separate detailed docs
 - Prefer bullet points and tables over prose where appropriate
 - Include only information that helps readers understand the system
 
 ### Maintenance
+
 - Treat this guidebook as code: if you change the architecture, update the guidebook
 - Assign clear ownership for each section
 - Review periodically (e.g., quarterly or after major releases)
 - Mark sections with "Last reviewed: [DATE]" to track freshness
 
 ### How Different Readers Should Use This
-| Reader | Start With | Focus On |
-|--------|------------|----------|
-| New developer | Context → Functional Overview → Code | Understanding what the system does and how to work in it |
-| Architect/Tech Lead | Software Architecture → Principles → Decision Log | Design rationale and constraints |
-| Operations/SRE | Infrastructure → Deployment → Operation & Support | How to run and maintain the system |
+
+| Reader              | Start With                                        | Focus On                                                 |
+| ------------------- | ------------------------------------------------- | -------------------------------------------------------- |
+| New developer       | Context → Functional Overview → Code              | Understanding what the system does and how to work in it |
+| Architect/Tech Lead | Software Architecture → Principles → Decision Log | Design rationale and constraints                         |
+| Operations/SRE      | Infrastructure → Deployment → Operation & Support | How to run and maintain the system                       |
 
 ---
 
@@ -56,6 +62,7 @@ architecture documentation for onboarding new team members and preserving
 architectural knowledge.
 
 > **Writing Guidelines**
+>
 > - Target audience: An intelligent reader who isn't you
 > - Keep sections concise (10-20 pages max each)
 > - Summarize, don't duplicate - link to detailed docs where needed

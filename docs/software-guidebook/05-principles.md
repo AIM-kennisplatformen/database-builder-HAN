@@ -19,19 +19,19 @@ The services described here have not yet been implemented ([Context](01-context.
 
 ## Design Principles
 
-| Principle | Implication |
-| --- | --- |
-| Keep data sources independent | Let each source extract and retain its data without requiring other sources to succeed. Handle cross-source matching separately where possible ([Quality Attributes](03-quality-attributes.md), [issue #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16)). |
-| Keep knowledge traceable | Retain the source of each claim and when its data was obtained; distinguish that time from any source modification time. Make transformations and manual input inspectable ([Data](09-data.md), [Quality Attributes](03-quality-attributes.md)). |
-| Protect human decisions from silent automation | Flag new data that conflicts with manual input for review. Do not silently replace a human decision during extraction or refresh ([Functional Overview](02-functional-overview.md)). |
-| Make only claims the evidence supports | Keep the type and strength of a connection clear in models and results. A project association may support a skill claim, but does not itself establish a personal skill ([Glossary](../GLOSSARY.md), [Functional Overview](02-functional-overview.md)). |
+| Principle                                      | Implication                                                                                                                                                                                                                                                                           |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Keep data sources independent                  | Let each source extract and retain its data without requiring other sources to succeed. Handle cross-source matching separately where possible ([Quality Attributes](03-quality-attributes.md), [issue #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16)). |
+| Keep knowledge traceable                       | Retain the source of each claim and when its data was obtained; distinguish that time from any source modification time. Make transformations and manual input inspectable ([Data](09-data.md), [Quality Attributes](03-quality-attributes.md)).                                      |
+| Protect human decisions from silent automation | Flag new data that conflicts with manual input for review. Do not silently replace a human decision during extraction or refresh ([Functional Overview](02-functional-overview.md)).                                                                                                  |
+| Make only claims the evidence supports         | Keep the type and strength of a connection clear in models and results. A project association may support a skill claim, but does not itself establish a personal skill ([Glossary](../GLOSSARY.md), [Functional Overview](02-functional-overview.md)).                               |
 
 ## Coding Standards
 
-| Area | Standard | Enforced By |
-| --- | --- | --- |
-| Documentation | [Repository instructions](../../AGENTS.md) refer to a Markdown standard that is currently missing. | No standard is available to enforce. |
-| Source code | No implementation language or source-code style standard has been selected. | Not applicable; this repository contains no service implementation ([Context](01-context.md)). |
+| Area          | Standard                                                                                           | Enforced By                                                                                    |
+| ------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Documentation | [Repository instructions](../../AGENTS.md) refer to a Markdown standard that is currently missing. | No standard is available to enforce.                                                           |
+| Source code   | No implementation language or source-code style standard has been selected.                        | Not applicable; this repository contains no service implementation ([Context](01-context.md)). |
 
 ## Principles Summary
 

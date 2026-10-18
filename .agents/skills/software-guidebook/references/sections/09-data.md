@@ -5,6 +5,7 @@
 ## Guidance
 
 ### What This Section Should Accomplish
+
 - Help developers understand where data lives and why
 - Clarify data ownership (which component owns which data)
 - Document data flows and transformation points
@@ -14,36 +15,42 @@
 ### Types of Data Storage
 
 **Databases (relational and NoSQL)**
+
 - Document rationale for database choices
 - Key entities and relationships (don't reproduce full schema)
 - Non-obvious denormalization decisions
 - Indexing strategy for performance-critical queries
 
 **File Systems and Object Storage**
+
 - What types of files are stored (documents, exports, logs)
 - Directory structure and naming conventions
 - Retention and cleanup policies
 - Local vs. cloud storage decisions
 
 **Asset Management**
+
 - Where static assets live (images, fonts, icons)
 - Asset pipeline (how assets are processed, optimized)
 - CDN configuration if applicable
 - Versioning strategy for assets
 
 **Blob Storage (S3, Azure Blob, GCS)**
+
 - Bucket organization and naming
 - Access patterns (public, signed URLs, private)
 - Lifecycle policies (archival, deletion)
 - Cross-region replication if applicable
 
 **Multimedia Content**
+
 - Storage location for audio, video, images
 - Transcoding and processing pipelines
 - Streaming vs. download approaches
 - Thumbnail/preview generation
 
 **ML and Data Science Data**
+
 - Training data location and format
 - Model artifacts storage and versioning
 - Feature stores if applicable
@@ -51,6 +58,7 @@
 - Experiment tracking data
 
 **Caching Layers**
+
 - What is cached and where (Redis, Memcached, in-memory)
 - Cache invalidation strategies
 - TTL policies
@@ -84,18 +92,21 @@ Distinguish systems that supply data from stores owned by the documented system.
 ### Seed Data and Test Data
 
 **Seed data** (for development/staging environments):
+
 - What seed data exists and where it's stored
 - How to load seed data
 - How to reset to a clean state
 - Differences between environments
 
 **Test data**:
+
 - How test data is generated or sourced
 - Fixtures and factories
 - Data anonymization for production-like test data
 - Cleanup after tests
 
 ### Anti-patterns to Avoid
+
 - ❌ Don't reproduce full schema documentation - link to it
 - ❌ Don't skip data ownership clarity
 - ❌ Don't forget about caching strategies and invalidation
@@ -111,17 +122,17 @@ Distinguish systems that supply data from stores owned by the documented system.
 
 ## Data Stores Overview
 
-| Store | Type | Purpose | Owner |
-|-------|------|---------|-------|
+| Store  | Type                    | Purpose         | Owner          |
+| ------ | ----------------------- | --------------- | -------------- |
 | [Name] | PostgreSQL/MongoDB/etc. | [What's stored] | [Service/team] |
-| [Name] | S3/GCS/Azure Blob | [What's stored] | [Service/team] |
-| [Name] | Redis/Memcached | [What's cached] | [Service/team] |
-| [Name] | File system | [What's stored] | [Service/team] |
+| [Name] | S3/GCS/Azure Blob       | [What's stored] | [Service/team] |
+| [Name] | Redis/Memcached         | [What's cached] | [Service/team] |
+| [Name] | File system             | [What's stored] | [Service/team] |
 
 ## Data Sources Overview
 
-| Source | Type | Relevant Data | Authority/Owner | Status |
-|--------|------|---------------|-----------------|--------|
+| Source | Type                   | Relevant Data   | Authority/Owner      | Status                          |
+| ------ | ---------------------- | --------------- | -------------------- | ------------------------------- |
 | [Name] | API/database/file/etc. | [Data supplied] | [Owning system/team] | [Confirmed/under investigation] |
 
 ## Database Model
@@ -131,6 +142,7 @@ Distinguish systems that supply data from stores owned by the documented system.
 ### Key Entities
 
 #### [Entity Name]
+
 - **Purpose**: [what this represents]
 - **Key fields**: [important fields, not all]
 - **Relationships**: [connections to other entities]
@@ -139,6 +151,7 @@ Distinguish systems that supply data from stores owned by the documented system.
 ## File and Asset Storage
 
 ### [Storage Name, e.g., "User Uploads"]
+
 - **Location**: [path or bucket]
 - **File types**: [what's stored]
 - **Naming convention**: [pattern]
@@ -148,20 +161,22 @@ Distinguish systems that supply data from stores owned by the documented system.
 ## ML/Data Science Data
 
 ### Training Data
+
 - **Location**: [where stored]
 - **Format**: [file format, schema]
 - **Size**: [approximate]
 - **Update frequency**: [how often refreshed]
 
 ### Model Artifacts
+
 - **Location**: [where models are stored]
 - **Versioning**: [how versions are tracked]
 
 ## Caching
 
-| Cache | Technology | What's Cached | TTL | Invalidation |
-|-------|------------|---------------|-----|--------------|
-| [Name] | [Redis/etc.] | [Data type] | [Duration] | [Strategy] |
+| Cache  | Technology   | What's Cached | TTL        | Invalidation |
+| ------ | ------------ | ------------- | ---------- | ------------ |
+| [Name] | [Redis/etc.] | [Data type]   | [Duration] | [Strategy]   |
 
 ## Data Flows
 
@@ -174,10 +189,10 @@ Distinguish systems that supply data from stores owned by the documented system.
 
 ## Data Sensitivity
 
-| Data Type | Classification | Special Handling |
-|-----------|---------------|------------------|
-| [User emails] | PII | [Encrypted, access logged] |
-| [Payment info] | Financial/PCI | [Tokenized, not stored] |
+| Data Type      | Classification | Special Handling           |
+| -------------- | -------------- | -------------------------- |
+| [User emails]  | PII            | [Encrypted, access logged] |
+| [Payment info] | Financial/PCI  | [Tokenized, not stored]    |
 
 ## Seed Data
 

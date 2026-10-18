@@ -9,6 +9,7 @@
 This guidebook follows Simon Brown's Software Guidebook chapter structure. It helps developers joining the team understand the system's purpose, architecture, and design decisions, and gives existing team members a place to find that context when making changes. The chapters are currently planned and will be filled as repository evidence supports them.
 
 > **Writing Guidelines**
+>
 > - Write for a developer who is new to this codebase.
 > - Keep each chapter concise and link to detailed documentation where needed.
 > - Explain architectural choices and their reasons, citing code or issues for factual claims.

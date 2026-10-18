@@ -5,6 +5,7 @@
 ## Guidance
 
 ### What This Section Should Accomplish
+
 - Enable on-call engineers to respond to incidents effectively
 - Document tribal knowledge about system behavior
 - Provide clear escalation paths
@@ -13,12 +14,14 @@
 ### Monitoring Strategy
 
 **What to monitor:**
+
 - **Infrastructure metrics**: CPU, memory, disk, network
 - **Application metrics**: Request rate, error rate, latency (RED method)
 - **Business metrics**: Signups, transactions, conversions
 - **Dependencies**: External service health, database connections
 
 **Documentation should include:**
+
 - What each metric means and why it matters
 - Alert thresholds and why they were chosen
 - Who gets alerted and how
@@ -28,6 +31,7 @@
 ### Logging
 
 Document your logging strategy:
+
 - **What's logged at each level**: When to use error, warn, info, debug
 - **How to find logs**: Log aggregation tool, useful queries
 - **Log retention**: How long logs are kept
@@ -37,21 +41,25 @@ Document your logging strategy:
 ### Incident Response
 
 **On-call:**
+
 - Rotation schedule and how to swap
 - Escalation paths and timeframes
 - Contact methods (PagerDuty, phone, Slack)
 
 **Incident severity levels:**
+
 - Define what constitutes each severity
 - Expected response times
 - Who needs to be involved
 
 **Communication:**
+
 - Where to communicate during incidents (war room, Slack channel)
 - Status page and how to update it
 - Who communicates with customers
 
 **Post-incident:**
+
 - Blameless post-mortem process
 - Where post-mortems are stored
 - Follow-up action tracking
@@ -59,12 +67,14 @@ Document your logging strategy:
 ### Troubleshooting
 
 Document common issues with:
+
 - **Symptoms**: What alerts fire, what users report
 - **Diagnosis**: How to confirm the issue, what to check
 - **Resolution**: Step-by-step fix
 - **Prevention**: How to prevent recurrence
 
 Include:
+
 - Diagnostic commands and tools
 - Safe vs. dangerous operations (what NOT to do)
 - When to escalate vs. handle yourself
@@ -72,6 +82,7 @@ Include:
 ### Maintenance Tasks
 
 Document routine operational tasks:
+
 - Scheduled maintenance windows
 - Certificate renewals
 - Database maintenance (vacuum, reindex, backups verification)
@@ -79,6 +90,7 @@ Document routine operational tasks:
 - Security patching schedule
 
 ### Anti-patterns to Avoid
+
 - ❌ Don't assume operators know the system as well as developers
 - ❌ Don't skip documenting "obvious" issues (they're not obvious at 3am)
 - ❌ Don't forget escalation paths
@@ -95,35 +107,35 @@ Document routine operational tasks:
 
 ### Dashboards
 
-| Dashboard | Purpose | Link |
-|-----------|---------|------|
-| [Main overview] | [System health at a glance] | [URL] |
-| [Performance] | [Latency, throughput details] | [URL] |
-| [Business metrics] | [Key business KPIs] | [URL] |
+| Dashboard          | Purpose                       | Link  |
+| ------------------ | ----------------------------- | ----- |
+| [Main overview]    | [System health at a glance]   | [URL] |
+| [Performance]      | [Latency, throughput details] | [URL] |
+| [Business metrics] | [Key business KPIs]           | [URL] |
 
 ### Key Metrics
 
-| Metric | What It Means | Normal Range | Alert Threshold |
-|--------|---------------|--------------|-----------------|
-| [Request rate] | [Requests per second] | [X-Y] | [< Z or > W] |
-| [Error rate] | [5xx responses / total] | [< X%] | [> Y%] |
-| [P95 latency] | [95th percentile response time] | [< X ms] | [> Y ms] |
+| Metric         | What It Means                   | Normal Range | Alert Threshold |
+| -------------- | ------------------------------- | ------------ | --------------- |
+| [Request rate] | [Requests per second]           | [X-Y]        | [< Z or > W]    |
+| [Error rate]   | [5xx responses / total]         | [< X%]       | [> Y%]          |
+| [P95 latency]  | [95th percentile response time] | [< X ms]     | [> Y ms]        |
 
 ### SLIs/SLOs (if defined)
 
-| SLI | SLO Target | Current | Dashboard |
-|-----|------------|---------|-----------|
-| [Availability] | [99.9%] | [link to current] | [link] |
-| [Latency] | [p99 < 500ms] | [link to current] | [link] |
+| SLI            | SLO Target    | Current           | Dashboard |
+| -------------- | ------------- | ----------------- | --------- |
+| [Availability] | [99.9%]       | [link to current] | [link]    |
+| [Latency]      | [p99 < 500ms] | [link to current] | [link]    |
 
 ## Alerting
 
 ### Alert Routing
 
-| Alert | Severity | Notifies | Response Time |
-|-------|----------|----------|---------------|
-| [High error rate] | Critical | [On-call + team lead] | [15 min] |
-| [Elevated latency] | Warning | [On-call] | [1 hour] |
+| Alert              | Severity | Notifies              | Response Time |
+| ------------------ | -------- | --------------------- | ------------- |
+| [High error rate]  | Critical | [On-call + team lead] | [15 min]      |
+| [Elevated latency] | Warning  | [On-call]             | [1 hour]      |
 
 ### On-Call
 
@@ -135,25 +147,28 @@ Document routine operational tasks:
 
 ### Log Locations
 
-| Log Type | Location | Retention |
-|----------|----------|-----------|
+| Log Type         | Location                  | Retention |
+| ---------------- | ------------------------- | --------- |
 | Application logs | [Datadog/CloudWatch/etc.] | [30 days] |
-| Access logs | [Location] | [90 days] |
-| Audit logs | [Location] | [1 year] |
+| Access logs      | [Location]                | [90 days] |
+| Audit logs       | [Location]                | [1 year]  |
 
 ### Useful Log Queries
-
 ```
+
 # Find errors for a specific request
+
 [query example]
 
 # Trace a request across services
+
 [query example]
 
 # Find slow requests
-[query example]
-```
 
+[query example]
+
+````
 ### Log Levels
 
 | Level | When Used | Example |
@@ -227,39 +242,40 @@ Document routine operational tasks:
 
 # Check database connections
 [command]
-```
+````
 
 ### ⚠️ Dangerous Operations
 
-| Operation | Risk | Safe Alternative |
-|-----------|------|------------------|
-| [Direct database writes] | [Data corruption] | [Use admin tool] |
-| [Restarting all instances] | [Full outage] | [Rolling restart] |
+| Operation                  | Risk              | Safe Alternative  |
+| -------------------------- | ----------------- | ----------------- |
+| [Direct database writes]   | [Data corruption] | [Use admin tool]  |
+| [Restarting all instances] | [Full outage]     | [Rolling restart] |
 
 ## Runbooks
 
-| Runbook | When to Use | Link |
-|---------|-------------|------|
-| [Service restart] | [When service is unresponsive] | [Link] |
-| [Database failover] | [Primary database down] | [Link] |
-| [Scale up] | [High load] | [Link] |
+| Runbook             | When to Use                    | Link   |
+| ------------------- | ------------------------------ | ------ |
+| [Service restart]   | [When service is unresponsive] | [Link] |
+| [Database failover] | [Primary database down]        | [Link] |
+| [Scale up]          | [High load]                    | [Link] |
 
 ## Maintenance Tasks
 
-| Task | Frequency | Procedure | Last Run |
-|------|-----------|-----------|----------|
-| Certificate renewal | [Annual] | [Link or steps] | [Date] |
-| Database maintenance | [Weekly] | [Link or steps] | [Date] |
-| Security patching | [Monthly] | [Link or steps] | [Date] |
+| Task                 | Frequency | Procedure       | Last Run |
+| -------------------- | --------- | --------------- | -------- |
+| Certificate renewal  | [Annual]  | [Link or steps] | [Date]   |
+| Database maintenance | [Weekly]  | [Link or steps] | [Date]   |
+| Security patching    | [Monthly] | [Link or steps] | [Date]   |
 
 ## Support Contacts
 
-| Area | Primary Contact | Escalation |
-|------|-----------------|------------|
-| [Application] | [Team/Person] | [Manager] |
-| [Infrastructure] | [Team/Person] | [Manager] |
-| [Database] | [Team/Person] | [Manager] |
-| [Security] | [Team/Person] | [Manager] |
-```
+| Area             | Primary Contact | Escalation |
+| ---------------- | --------------- | ---------- |
+| [Application]    | [Team/Person]   | [Manager]  |
+| [Infrastructure] | [Team/Person]   | [Manager]  |
+| [Database]       | [Team/Person]   | [Manager]  |
+| [Security]       | [Team/Person]   | [Manager]  |
 
+```
 **Auto-discover from**: Monitoring configs, logging setup, incident docs, runbooks, on-call schedules, post-mortems
+```

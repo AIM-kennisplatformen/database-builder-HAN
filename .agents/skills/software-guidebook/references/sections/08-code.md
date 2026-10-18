@@ -5,6 +5,7 @@
 ## Guidance
 
 ### What This Section Should Accomplish
+
 - Help developers navigate the codebase quickly
 - Explain the "why" behind code organization choices
 - Document non-obvious patterns and conventions
@@ -13,21 +14,25 @@
 ### What to Include
 
 **High-level organization**
+
 - Don't document every folder - focus on the important structural decisions
 - Explain the logic behind the folder structure
 - Where does execution start? (entry points)
 
 **Key patterns and their locations**
+
 - Don't just name patterns - explain WHERE to find examples
 - Document any custom patterns unique to this codebase
 - Note deviations from standard patterns and why
 
 **Architectural seams**
+
 - Where are the boundaries between modules/layers?
 - How do modules communicate with each other?
 - What are the dependency rules? (e.g., "services can call repositories, not vice versa")
 
 **Navigation guidance**
+
 - Naming conventions that help find things
 - Key files to read first to understand the codebase
 - Dependency flow: what depends on what?
@@ -35,6 +40,7 @@
 ### Documenting Tricky Code
 
 Document anything a developer would find non-obvious:
+
 - Complex algorithms (explain the approach, not line-by-line)
 - Non-obvious design decisions embedded in code
 - "Magic" numbers or configuration values and what they mean
@@ -45,6 +51,7 @@ Document anything a developer would find non-obvious:
 If an explanation would exceed 3-4 paragraphs, create a separate document and link to it.
 
 ### What NOT to Include
+
 - ❌ Don't document obvious code
 - ❌ Don't duplicate what's already in code comments
 - ❌ Don't document every class - focus on architecturally significant ones
@@ -53,6 +60,7 @@ If an explanation would exceed 3-4 paragraphs, create a separate document and li
 ### Testing Strategy
 
 Document enough for a developer to:
+
 - Understand the test philosophy (what gets tested, how thoroughly)
 - Run tests locally
 - Write new tests that follow existing patterns
@@ -80,15 +88,16 @@ src/
 
 ## Entry Points
 
-| Entry Point | Purpose | File |
-|-------------|---------|------|
-| [Main app] | [What it starts] | [path] |
-| [CLI] | [What commands] | [path] |
-| [Worker] | [What it processes] | [path] |
+| Entry Point | Purpose             | File   |
+| ----------- | ------------------- | ------ |
+| [Main app]  | [What it starts]    | [path] |
+| [CLI]       | [What commands]     | [path] |
+| [Worker]    | [What it processes] | [path] |
 
 ## Key Patterns
 
 ### [Pattern Name]
+
 - **What it is**: [brief explanation]
 - **Where used**: [specific locations/files]
 - **Example**: [file:line reference]
@@ -98,24 +107,24 @@ src/
 
 [Explain how modules/layers are separated and the rules for dependencies]
 
-| Layer/Module | Can Depend On | Cannot Depend On |
-|--------------|---------------|------------------|
-| [Controllers] | [Services] | [Repositories directly] |
-| [Services] | [Repositories, other Services] | [Controllers] |
+| Layer/Module  | Can Depend On                  | Cannot Depend On        |
+| ------------- | ------------------------------ | ----------------------- |
+| [Controllers] | [Services]                     | [Repositories directly] |
+| [Services]    | [Repositories, other Services] | [Controllers]           |
 
 ## Important Modules
 
-| Module | Purpose | Start Reading Here |
-|--------|---------|-------------------|
+| Module | Purpose        | Start Reading Here             |
+| ------ | -------------- | ------------------------------ |
 | [Name] | [What it does] | [Key file to understand first] |
 
 ## Conventions
 
-| Area | Convention | Example |
-|------|------------|---------|
-| File naming | [pattern] | `user.service.ts` |
-| Function naming | [pattern] | `getUserById()` |
-| Error handling | [approach] | [brief description or link] |
+| Area            | Convention | Example                     |
+| --------------- | ---------- | --------------------------- |
+| File naming     | [pattern]  | `user.service.ts`           |
+| Function naming | [pattern]  | `getUserById()`             |
+| Error handling  | [approach] | [brief description or link] |
 
 ## Code Explanations
 
@@ -141,11 +150,11 @@ See also: [link to detailed doc if needed]
 
 ### Test Conventions
 
-| Convention | Description |
-|------------|-------------|
+| Convention  | Description                        |
+| ----------- | ---------------------------------- |
 | File naming | [e.g., `*.test.ts` or `*.spec.ts`] |
-| Test data | [how test data is managed] |
-| Mocking | [approach to mocks/stubs] |
+| Test data   | [how test data is managed]         |
+| Mocking     | [approach to mocks/stubs]          |
 
 ### Coverage
 

@@ -25,8 +25,8 @@ Architecture decisions are recorded in [ADRs](adr/). This chapter indexes the de
 
 ## Decisions Index
 
-| ID | Decision | Status | Date |
-| --- | --- | --- | --- |
+| ID                                | Decision         | Status   | Date       |
+| --------------------------------- | ---------------- | -------- | ---------- |
 | [ADR-001](adr/ADR-001-example.md) | Example decision | Accepted | YYYY-MM-DD |
 ```
 

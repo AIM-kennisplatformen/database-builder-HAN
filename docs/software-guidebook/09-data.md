@@ -16,13 +16,13 @@ No store has been implemented in this repository, and there are currently no dat
 The following sources are available or under consideration for the initial journey and candidate journeys.
 Their exact fields, coverage, and joining keys have not been verified.
 
-| Source | Possible contribution | Access and validation status |
-| --- | --- | --- |
-| Microsoft Graph | Colleague identity and work contact; potential expertise, affiliation, and role | Production access is available, but the current token does not provide all selected expertise and work-context fields. See the [access assessment][graph-assessment] for [issue #6][issue-6]. |
-| UBW FRIS | Project associations for expert discovery; hours, capacity, or billability only if a later scope decision includes them | Demo data only; usable fields remain under [issue #9][issue-9]. |
-| Enrichment source | Source-backed connections between people and topics, with possible supporting evidence | A trusted API, dataset, or approved manual import remains to be selected under [issue #7][issue-7]. |
-| HAN publication data | Publications and other possible evidence supporting expertise and experience | A specific publication source has not been selected; its use depends on suitable enrichment data. |
-| Domain or theme classification source | Expertise domains and societal themes that may connect people and projects | A specific vocabulary or source has not been selected. |
+| Source                                | Possible contribution                                                                                                   | Access and validation status                                                                                                                                                                  |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Microsoft Graph                       | Colleague identity and work contact; potential expertise, affiliation, and role                                         | Production access is available, but the current token does not provide all selected expertise and work-context fields. See the [access assessment][graph-assessment] for [issue #6][issue-6]. |
+| UBW FRIS                              | Project associations for expert discovery; hours, capacity, or billability only if a later scope decision includes them | Demo data only; usable fields remain under [issue #9][issue-9].                                                                                                                               |
+| Enrichment source                     | Source-backed connections between people and topics, with possible supporting evidence                                  | A trusted API, dataset, or approved manual import remains to be selected under [issue #7][issue-7].                                                                                           |
+| HAN publication data                  | Publications and other possible evidence supporting expertise and experience                                            | A specific publication source has not been selected; its use depends on suitable enrichment data.                                                                                             |
+| Domain or theme classification source | Expertise domains and societal themes that may connect people and projects                                              | A specific vocabulary or source has not been selected.                                                                                                                                        |
 
 [issue-6]: https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/6
 [issue-7]: https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/7
@@ -128,14 +128,14 @@ Represents the provenance needed to trace an imported data point to its origin.
 
 ### Key Relations
 
-| Relation | Participants | Initial status |
-| --- | --- | --- |
-| Organizational affiliation | Person and Organizational Unit | Useful when available for colleague context. |
-| Project participation | Person and Project | Possible source-backed reason for an expertise connection; source link and person's role need validation. |
-| Expertise connection | Person and Topic | Initial journey needs a connection type, match reason, and traceable source. |
-| Expertise support | Evidence Item, Person, and Topic | Richer evidence is desirable where suitable data is available. |
-| Project classification | Project and Topic | Possible support for an expertise connection; classification and source need validation. |
-| Provenance | Source Record and imported data | Initial journey needs every match to remain traceable to a source. |
+| Relation                   | Participants                     | Initial status                                                                                            |
+| -------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Organizational affiliation | Person and Organizational Unit   | Useful when available for colleague context.                                                              |
+| Project participation      | Person and Project               | Possible source-backed reason for an expertise connection; source link and person's role need validation. |
+| Expertise connection       | Person and Topic                 | Initial journey needs a connection type, match reason, and traceable source.                              |
+| Expertise support          | Evidence Item, Person, and Topic | Richer evidence is desirable where suitable data is available.                                            |
+| Project classification     | Project and Topic                | Possible support for an expertise connection; classification and source need validation.                  |
+| Provenance                 | Source Record and imported data  | Initial journey needs every match to remain traceable to a source.                                        |
 
 Team membership and management, capacity for a period, project hours for a period, and billability for a period are candidate relations for uncommitted journeys.
 
@@ -153,13 +153,13 @@ No source-to-model mappings or transformations currently exist in this repositor
 
 ## Data Sensitivity
 
-| Data type | Classification or known restriction |
-| --- | --- |
-| Person identity, work contact, and organizational affiliation | Personal organizational data; the initial expert-discovery journey is for authenticated HAN staff. |
-| Expertise connections and supporting evidence | Visibility depends on the source; source access and MCP authorization need validation. |
-| Capacity, project hours, and billability | Candidate HR-related data; no detailed viewing rules or initial data requirement have been agreed. |
-| Management relationships | Candidate personal organizational data if a later journey needs a management scope. |
-| Raw UBW FRIS records | Demo data only for this project; exposure and authorization rules need design before any HR-data journey. |
+| Data type                                                     | Classification or known restriction                                                                       |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Person identity, work contact, and organizational affiliation | Personal organizational data; the initial expert-discovery journey is for authenticated HAN staff.        |
+| Expertise connections and supporting evidence                 | Visibility depends on the source; source access and MCP authorization need validation.                    |
+| Capacity, project hours, and billability                      | Candidate HR-related data; no detailed viewing rules or initial data requirement have been agreed.        |
+| Management relationships                                      | Candidate personal organizational data if a later journey needs a management scope.                       |
+| Raw UBW FRIS records                                          | Demo data only for this project; exposure and authorization rules need design before any HR-data journey. |
 
 Production extracts, personal data, secrets, and confidential source records must not be committed to this repository.
 

@@ -5,6 +5,7 @@
 ## Guidance
 
 ### What This Section Should Accomplish
+
 - Define the contracts between your system and external parties
 - Help consumers understand how to integrate with your system
 - Help your team understand dependencies on external systems
@@ -13,6 +14,7 @@
 ### APIs You Provide
 
 **What to document:**
+
 - Base URL and versioning strategy (e.g., `/api/v1/`)
 - Authentication method (API keys, OAuth, JWT)
 - Link to detailed API documentation (OpenAPI/Swagger) - don't duplicate it here
@@ -24,6 +26,7 @@
 ### APIs You Consume
 
 **What to document:**
+
 - Why you depend on this service
 - What happens when it's unavailable (fallback behavior, circuit breakers)
 - Rate limits and quotas you must respect
@@ -35,6 +38,7 @@
 ### Asynchronous Interfaces (Events/Messages)
 
 **What to document:**
+
 - Message/event schemas (or link to schema registry)
 - Ordering guarantees (FIFO, at-least-once, exactly-once)
 - Idempotency requirements for consumers
@@ -44,12 +48,14 @@
 ### File-Based Interfaces
 
 If your system exchanges files with other systems:
+
 - File formats (CSV, JSON, XML, Parquet)
 - Location and naming conventions
 - Frequency of updates (real-time, hourly, daily)
 - How failures are handled (retry, notification)
 
 ### Anti-patterns to Avoid
+
 - ❌ Don't duplicate full API documentation - link to it
 - ❌ Don't forget to document failure modes and fallbacks
 - ❌ Don't skip authentication/authorization details
@@ -65,6 +71,7 @@ If your system exchanges files with other systems:
 ## APIs Provided
 
 ### [API Name]
+
 - **Type**: REST / GraphQL / gRPC
 - **Base URL**: [URL]
 - **Versioning**: [strategy, e.g., URL path, header]
@@ -74,13 +81,14 @@ If your system exchanges files with other systems:
 
 ## APIs Consumed
 
-| Service | Purpose | Auth Method | Rate Limits | Failure Handling |
-|---------|---------|-------------|-------------|------------------|
-| [Name] | [Why used] | [How authenticated] | [Limits] | [Timeout/retry/fallback] |
+| Service | Purpose    | Auth Method         | Rate Limits | Failure Handling         |
+| ------- | ---------- | ------------------- | ----------- | ------------------------ |
+| [Name]  | [Why used] | [How authenticated] | [Limits]    | [Timeout/retry/fallback] |
 
 ### [Critical Dependency Name]
 
 If a dependency is critical, document in more detail:
+
 - **Purpose**: [why we need it]
 - **Fallback behavior**: [what happens when unavailable]
 - **Timeout policy**: [how long we wait]
@@ -91,21 +99,21 @@ If a dependency is critical, document in more detail:
 
 ### Published Events
 
-| Event | Schema | Ordering | Consumers |
-|-------|--------|----------|-----------|
+| Event  | Schema           | Ordering     | Consumers     |
+| ------ | ---------------- | ------------ | ------------- |
 | [Name] | [Link to schema] | [Guarantees] | [Who listens] |
 
 ### Consumed Events
 
-| Event | Source | Handler | Idempotent? |
-|-------|--------|---------|-------------|
+| Event  | Source     | Handler         | Idempotent?    |
+| ------ | ---------- | --------------- | -------------- |
 | [Name] | [Producer] | [Code location] | [Yes/No - how] |
 
 ## File Interfaces
 
-| Interface | Format | Location | Frequency | Direction |
-|-----------|--------|----------|-----------|-----------|
-| [Name] | [CSV/JSON/etc.] | [Path/S3 bucket] | [Schedule] | Import/Export |
+| Interface | Format          | Location         | Frequency  | Direction     |
+| --------- | --------------- | ---------------- | ---------- | ------------- |
+| [Name]    | [CSV/JSON/etc.] | [Path/S3 bucket] | [Schedule] | Import/Export |
 ```
 
 **Auto-discover from**: OpenAPI specs, GraphQL schemas, message queue configs, webhook handlers, environment variables for external URLs

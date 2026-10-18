@@ -5,7 +5,9 @@
 ## Guidance
 
 ### The C4 Model Overview
+
 The C4 model provides four levels of abstraction:
+
 1. **System Context** (Level 1) - covered in the Context section
 2. **Container Diagram** (Level 2) - high-level technology choices
 3. **Component Diagram** (Level 3) - logical components within containers
@@ -17,6 +19,7 @@ The C4 model provides four levels of abstraction:
 A container is something that needs to be running for the system to work. Containers are typically **separately deployable processes** (or groups of processes in distributed systems like message queues or databases).
 
 Examples of containers:
+
 - Web application (React SPA, Angular app)
 - API server (Node.js Express, Python FastAPI)
 - Database (PostgreSQL, MongoDB)
@@ -25,6 +28,7 @@ Examples of containers:
 - Background worker (Celery worker, cron jobs)
 
 **What to show on a container diagram:**
+
 - Each container as a box with name AND technology (e.g., "API Server [Node.js/Express]")
 - Communication between containers with protocols (HTTP/REST, WebSocket, SQL, AMQP)
 - External systems the containers interact with
@@ -37,6 +41,7 @@ Examples of containers:
 **Important**: Components here are NOT "components" in the React, Angular, or any other framework sense. A C4 component is a **major structural building block** within a container - a logical grouping of related functionality with a well-defined interface.
 
 **Good component candidates:**
+
 - Controllers and API handlers
 - Business logic services
 - Data access layers / Repositories
@@ -46,6 +51,7 @@ Examples of containers:
 - Event handlers / message processors
 
 **Avoid showing:**
+
 - Utility classes and helpers
 - Simple data transfer objects (DTOs)
 - Configuration classes
@@ -54,6 +60,7 @@ Examples of containers:
 
 **Decision criteria for including a component:**
 Ask these questions:
+
 1. Does it have a well-defined interface? → If yes, include
 2. Is it a logical grouping of related functionality? → If yes, include
 3. Does showing it aid architectural understanding? → If yes, include
@@ -61,11 +68,13 @@ Ask these questions:
 5. Is it just an implementation detail? → If yes, exclude
 
 **When to create component diagrams:**
+
 - Only for containers that warrant deeper explanation
 - Focus on complex or critical containers
 - Skip simple containers (e.g., a static file server doesn't need one)
 
 ### Diagram Notation Guidelines
+
 - Use simple boxes and lines
 - Label relationships with verbs and protocols ("reads from [SQL]", "sends events to [AMQP]")
 - Include a key/legend if using colors or special notation
@@ -73,6 +82,7 @@ Ask these questions:
 - Use consistent shapes: boxes for containers/components, cylinders for databases, stick figures for users
 
 ### Anti-patterns to Avoid
+
 - ❌ Don't create diagrams too detailed to understand at a glance
 - ❌ Don't skip technologies on container diagrams - they're the point
 - ❌ Don't mix abstraction levels in one diagram
@@ -92,9 +102,9 @@ Ask these questions:
 
 ### Containers
 
-| Container | Kind | Technology | Purpose | Communicates With |
-|-----------|------|------------|---------|-------------------|
-| [Name] | [Process, Machine, Docker, Distributed system etc.] | [Tech stack] | [What it does] | [Other containers, protocols] |
+| Container | Kind                                                | Technology   | Purpose        | Communicates With             |
+| --------- | --------------------------------------------------- | ------------ | -------------- | ----------------------------- |
+| [Name]    | [Process, Machine, Docker, Distributed system etc.] | [Tech stack] | [What it does] | [Other containers, protocols] |
 
 ## Component Diagram: [Container Name]
 
@@ -104,9 +114,9 @@ Ask these questions:
 
 ### Components
 
-| Component | Kind | Responsibility | Key Interfaces |
-|-----------|------|---------------|----------------|
-| [Name] | [function, class, file, module, app (or framework concepts)] | [What it does] | [APIs/methods it exposes] |
+| Component | Kind                                                         | Responsibility | Key Interfaces            |
+| --------- | ------------------------------------------------------------ | -------------- | ------------------------- |
+| [Name]    | [function, class, file, module, app (or framework concepts)] | [What it does] | [APIs/methods it exposes] |
 
 ## Component Diagram: [Another Container Name]
 
@@ -114,8 +124,8 @@ Ask these questions:
 
 ## Key Architectural Decisions
 
-| Decision | Rationale | ADR |
-|----------|-----------|-----|
+| Decision                    | Rationale   | ADR                     |
+| --------------------------- | ----------- | ----------------------- |
 | [Technology/pattern choice] | [Brief why] | [Link to ADR if exists] |
 ```
 

@@ -20,11 +20,11 @@ Generate C4 diagrams using Mermaid's C4 syntax. These render in GitHub, VS Code,
 
 Each C4 diagram level serves a different audience. Design for your readers.
 
-| Level | Audience | What They Need |
-|-------|----------|----------------|
-| Context | Everyone (including non-technical) | System scope, who uses it, what it depends on |
-| Container | Developers and architects | Technology landscape, deployment units, data flow |
-| Component | Developers on specific containers | Internal structure, key abstractions, responsibilities |
+| Level     | Audience                           | What They Need                                         |
+| --------- | ---------------------------------- | ------------------------------------------------------ |
+| Context   | Everyone (including non-technical) | System scope, who uses it, what it depends on          |
+| Container | Developers and architects          | Technology landscape, deployment units, data flow      |
+| Component | Developers on specific containers  | Internal structure, key abstractions, responsibilities |
 
 **Key principle**: A diagram should be understandable by its intended audience without verbal explanation. If you need to explain it in person, the diagram is incomplete.
 
@@ -39,27 +39,31 @@ Always start C4 diagrams with:
 ```
 C4Context
 ```
+
 or
+
 ```
 C4Container
 ```
+
 or
+
 ```
 C4Component
 ```
 
 ### Element Types
 
-| Element | Syntax | Use For |
-|---------|--------|---------|
-| Person | `Person(id, "Name", "Description")` | Users, actors |
-| System | `System(id, "Name", "Description")` | Your system (Context level) |
-| System_Ext | `System_Ext(id, "Name", "Description")` | External systems |
-| Container | `Container(id, "Name", "Technology", "Description")` | Apps, databases, etc. |
-| Container_Ext | `Container_Ext(id, "Name", "Technology", "Description")` | External containers |
-| ContainerDb | `ContainerDb(id, "Name", "Technology", "Description")` | Databases |
-| ContainerQueue | `ContainerQueue(id, "Name", "Technology", "Description")` | Message queues |
-| Component | `Component(id, "Name", "Technology", "Description")` | Internal components |
+| Element        | Syntax                                                    | Use For                     |
+| -------------- | --------------------------------------------------------- | --------------------------- |
+| Person         | `Person(id, "Name", "Description")`                       | Users, actors               |
+| System         | `System(id, "Name", "Description")`                       | Your system (Context level) |
+| System_Ext     | `System_Ext(id, "Name", "Description")`                   | External systems            |
+| Container      | `Container(id, "Name", "Technology", "Description")`      | Apps, databases, etc.       |
+| Container_Ext  | `Container_Ext(id, "Name", "Technology", "Description")`  | External containers         |
+| ContainerDb    | `ContainerDb(id, "Name", "Technology", "Description")`    | Databases                   |
+| ContainerQueue | `ContainerQueue(id, "Name", "Technology", "Description")` | Message queues              |
+| Component      | `Component(id, "Name", "Technology", "Description")`      | Internal components         |
 
 ### Relationships
 
@@ -70,6 +74,7 @@ BiRel(a, b, "Label")  # Bidirectional
 ```
 
 **Relationship labels should describe what flows through them**, not just that a connection exists:
+
 - Bad: `Rel(api, db, "Uses")`
 - Good: `Rel(api, db, "Reads/writes customer orders", "SQL")`
 
@@ -100,6 +105,7 @@ Shows system scope, users, and external dependencies. This is the "big picture" 
 ### Purpose
 
 Answer these questions:
+
 - What is the system and what does it do?
 - Who uses it?
 - What external systems does it depend on?
@@ -160,6 +166,7 @@ Shows the high-level technology building blocks and how they communicate.
 ### Purpose
 
 Answer these questions:
+
 - What are the major technology components?
 - How do they communicate with each other?
 - Where does data live?
@@ -233,6 +240,7 @@ Shows the internal structure of a single container.
 ### Purpose
 
 Answer these questions:
+
 - What are the major abstractions inside this container?
 - How do they interact?
 - Where does each responsibility live?
@@ -305,12 +313,12 @@ The description field is critical for diagram clarity. Bad descriptions make dia
 
 ### By Element Type
 
-| Element | Description Should Include | Bad Example | Good Example |
-|---------|---------------------------|-------------|--------------|
-| Person | Role and goals | "User" | "Customer who browses and purchases products" |
-| System | Business capability provided | "The system" | "Allows customers to manage their finances" |
-| Container | Responsibility + key technology | "API" | "Handles authentication and user management" |
-| Component | Single responsibility | "Service class" | "Validates orders and calculates pricing" |
+| Element   | Description Should Include      | Bad Example     | Good Example                                  |
+| --------- | ------------------------------- | --------------- | --------------------------------------------- |
+| Person    | Role and goals                  | "User"          | "Customer who browses and purchases products" |
+| System    | Business capability provided    | "The system"    | "Allows customers to manage their finances"   |
+| Container | Responsibility + key technology | "API"           | "Handles authentication and user management"  |
+| Component | Single responsibility           | "Service class" | "Validates orders and calculates pricing"     |
 
 ### Tips
 
@@ -335,6 +343,7 @@ Every element needs a description. An element without context is ambiguous.
 ### Technology Overload
 
 Don't list every library. Focus on primary technologies that define the container.
+
 - Bad: "Node.js, Express, Lodash, Moment, Winston, Jest"
 - Good: "Node.js, Express"
 
@@ -359,6 +368,7 @@ A wrong diagram is worse than no diagram. If you can't maintain it, consider whe
 ## Styling
 
 CRITICAL: All diagrams MUST follow strict vertical orientation:
+
 - Use "graph TD" (top-down) directive for flow diagrams
 - NEVER use "graph LR" (left-right)
 - Maximum node width should be 3-4 words
