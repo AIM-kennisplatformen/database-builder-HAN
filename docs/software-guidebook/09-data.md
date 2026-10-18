@@ -8,11 +8,11 @@ No data store has been selected or implemented in this repository. There are cur
 
 ## Data Sources Overview
 
-The following sources have been identified by the requirements research. Their exact fields, coverage, and joining keys have not been verified.
+The following sources have been identified by the requirements research. Their coverage and joining keys have not been fully verified.
 
 | Source                                | Relevant data                                                                                     | Evidence and status                                                   |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| Microsoft Graph                       | Person identity, work contact, organizational affiliation, role, team, and management information | Candidate in [issue #5][issue-5]; investigated in [issue #6][issue-6] |
+| Microsoft Graph                       | Identity, work contact, potential expertise and work context                                      | [Access assessment][graph-assessment] for [issue #6][issue-6]        |
 | UBW FRIS                              | Project participation, capacity, allocated and recorded hours, remaining hours, and billability   | Candidate in [issue #5][issue-5]; investigated in [issue #9][issue-9] |
 | HAN publication data                  | Publications and other evidence supporting expertise and experience                               | A specific publication source has not been selected                   |
 | Domain or theme classification source | Expertise domains and societal themes used to relate people and projects                          | A specific vocabulary or source has not been selected                 |
@@ -20,6 +20,7 @@ The following sources have been identified by the requirements research. Their e
 [issue-5]: https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/5
 [issue-6]: https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/6
 [issue-9]: https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/9
+[graph-assessment]: ../data-sources/ms-graph-api.md
 
 ## Database Model
 

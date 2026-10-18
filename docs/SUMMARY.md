@@ -13,4 +13,6 @@
   - [Infrastructure](software-guidebook/10-infrastructure.md)
   - [Deployment](software-guidebook/11-deployment.md)
   - [Operation and support](software-guidebook/12-operation-support.md)
-  - [Decision log](software-guidebook/13-decision-log.md)
+- [Decision log](software-guidebook/13-decision-log.md)
+- [Data Sources](data-sources/index.md)
+  - [MS Graph API](data-sources/ms-graph-api.md)
