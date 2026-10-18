@@ -1,7 +1,7 @@
 [book]
-title = "HAN Software Guidebook"
-description = "A developer's guide to the database-builder-HAN system"
-src = "docs/software-guidebook"
+title = "database-builder-HAN Documentation"
+description = "Documentation for the database-builder-HAN system"
+src = "docs"
 language = "en"
 
 [build]
