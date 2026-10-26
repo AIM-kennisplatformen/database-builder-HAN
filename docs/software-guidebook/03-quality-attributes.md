@@ -1,6 +1,6 @@
 # Quality Attributes
 
-This chapter records quality goals for the initial expert-discovery demonstration, using the characteristic → subcharacteristic names described by [ISO 25000](https://iso25000.com/en/iso-25000-standards/iso-25010) for [ISO/IEC 25010:2023](https://www.iso.org/standard/78176.html).
+This chapter records quality goals for the initial expert-discovery demonstration, using the characteristic → subcharacteristic names described by [ISO 25010](https://iso25000.com/en/iso-25000-standards/iso-25010).
 The goals are requirements, not measured properties of the current system: this repository has no implementation yet ([Context](01-context.md)).
 They address the prioritized, observable scenarios requested in [issue #15](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/15).
 
@@ -18,10 +18,6 @@ The following qualities are most important for the initial demonstration, in pri
    Colleague information must not be returned when the request lacks a trustworthy authenticated HAN user identity.
 5. **Security → Authenticity.**
    The claimed identity of a HAN user must be verified before the request is treated as coming from that user.
-
-These priorities reflect the decisions for this demonstration.
-Marijn Siebel and Sander Maijers have not separately confirmed them.
-The [Functional Overview](02-functional-overview.md) defines the initial expert-discovery scope; HR-specific journeys remain uncommitted.
 
 ## Compatibility → Interoperability
 
@@ -61,7 +57,7 @@ The acceptable age of retained data and the recovery time after a failure have n
 | --------------------------- | ------------------------------------------------------------------------------------------ | ------------ | ------------------------------------------------------------------------------------------------ |
 | Disclosure without identity | Zero colleague results when a request lacks a trustworthy authenticated HAN user identity. | Not measured | MCP request check with identity absent; a request with accepted identity checks the normal path. |
 
-HR-specific confidentiality targets depend on a later decision to include an HR journey.
+Confidentiality targets for the unscheduled HR features remain undefined until their data and access rules are validated.
 
 ## Security → Authenticity
 
