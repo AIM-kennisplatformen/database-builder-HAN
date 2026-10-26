@@ -41,7 +41,7 @@ The precise exchange contract remains open under [issue #17](https://github.com/
 | Incorrect skill claims | No project association or conflicting claim in the check data is presented as a verified personal skill.           | Not measured | Checks with project associations and conflicting source claims. |
 | Correction outcome     | A corrected conflict changes the next result while the original attributed claims remain available for inspection. | Not measured | Management UI correction followed by an expert-discovery check. |
 
-The [glossary](../GLOSSARY.md) distinguishes an expertise connection from a verified personal skill.
+The [glossary](02-functional-overview.md#domain-glossary) distinguishes an expertise connection from a verified personal skill.
 The [Functional Overview](02-functional-overview.md) requires source-backed match explanations and a manual-correction journey.
 Checks with representative data will be needed before these targets can say anything about match quality beyond the test records.
 

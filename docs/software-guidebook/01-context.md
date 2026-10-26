@@ -88,9 +88,8 @@ Langfuse is a planned destination for MCP traces; its logging boundary is addres
 - **In scope**: A functional management API lets developers or designated operators resolve ambiguous or unmatched source links and correct accepted mappings. A developer-only UI proof of concept must show a correction reflected in a later expert-discovery query. [Issue #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16) will determine the first supported link types and precise operations.
 - **Out of scope**: Contacting or booking colleagues, extracting expertise from document text, staff-facing correction or feedback, and a production management UI. A staff member who notices a bad result needs a separate reporting route; none is planned yet.
 
-Project hours, capacity, and billability are confirmed information goals, but their inclusion in the initial proof of concept remains undecided.
-Simon has proposed demonstrating hours spent, but no HR-data proof of concept has been agreed.
-The scope and usefulness of any such journey remain to be decided with Marijn Siebel and Sander Maijers.
+Project hours, colleague capacity, and team billability are confirmed platform features that are in scope but unscheduled.
+An earlier proposal to demonstrate hours spent has no scheduled implementation, and no HR-data proof of concept has been agreed.
 The future users and interface of a management platform beyond the developer-only proof of concept are also unknown.
 
 [Source research #6](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/6), [#7](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/7), and [#9](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/9) must establish usable fields, trusted enrichment, and demo-data limits.

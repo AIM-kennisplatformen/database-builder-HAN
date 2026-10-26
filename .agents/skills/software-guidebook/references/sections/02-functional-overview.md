@@ -72,9 +72,9 @@ _The main dashboard showing [key elements]_
 
 ## Feature Summary
 
-| Feature | Description    | Status                    |
-| ------- | -------------- | ------------------------- |
-| [Name]  | [What it does] | Active/Planned/Deprecated |
+| Feature | Description    | Status                                |
+| ------- | -------------- | ------------------------------------- |
+| [Name]  | [What it does] | Active/Planned/Unscheduled/Deprecated |
 
 ## User Journeys
 

@@ -1,32 +1,45 @@
 # Functional Overview
 
-The initial functional scope centers on a locally run demonstration of colleague and project discovery through Studio.
+The initial demonstration centers on colleague and project discovery through a locally run Studio instance.
 A functional management API and developer-only UI proof of concept support manual correction of source links.
 The [Context chapter](01-context.md) shows the actors and system boundaries.
 These are planned capabilities; this repository does not yet implement them.
 
-## User Goals and Validation Status
+## Core Capabilities
 
-- **Find colleagues relevant to a topic — initial local-demo journey.**
-  Simon reports that a talk with Marijn Siebel confirmed this goal and its candidate data points.
-  Source coverage and match quality still require validation.
-- **Find HAN projects related to a topic and see what information is available — initial local-demo journey.**
-  A HAN staff member uses project results to judge whether a new project in that topic makes sense.
-  Simon reports that the talk with Marijn confirmed this goal, journey, and candidate data points.
-  Work that HAN employees can bill hours to is a provisional criterion for a project; other criteria remain undefined.
-  Available project data and source links still require validation under [source research issues #6](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/6), [#7](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/7), and [#9](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/9).
-- **Correct an ambiguous or wrong source link — operator journey in scope.**
-  Simon confirmed a functional management API and developer-only UI proof of concept.
-  [Pipeline issue #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16) must select the first supported link types and correction behavior.
-- **Review personal project hours — confirmed goal, uncommitted proof of concept.**
-  Real UBW FRIS access is unavailable for this project.
-  Simon proposes demonstrating hours spent; the HR scope remains undecided.
-  Remaining hours and weekly capacity cannot be assumed from hours spent.
-- **Check a colleague's capacity or review billability — confirmed goal, uncommitted journeys.**
-  Simon reports that the talk with Marijn confirmed these information goals and candidate data points.
-  Whether either belongs in this proof of concept remains undecided; data meaning and access remain unresolved.
+1. **Find colleagues by topic**
+   - Authenticated HAN staff can find contactable colleagues with a source-backed match reason and a clear connection type. Simon reports that a talk with Marijn Siebel confirmed this user goal and its candidate data points; source coverage and match quality still need validation.
+   - Key workflow: [Expert Discovery Journey](#expert-discovery-journey).
+2. **Find related HAN projects**
+   - Staff can inspect projects related to a topic to judge whether a new project in that area makes sense. Simon reports that the talk with Marijn confirmed this goal and its candidate data points. Work that HAN employees can bill hours to is a provisional criterion for a project; other criteria remain undefined. Available project data and source links still need validation under [source research issues #6](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/6), [#7](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/7), and [#9](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/9).
+   - Key workflow: [Project Discovery Journey](#project-discovery-journey).
+3. **Correct source links**
+   - A developer or designated operator can resolve ambiguous or wrong links through a functional management API and developer-only UI proof of concept, so later discovery results reflect the correction. [Pipeline issue #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16) must select the first supported link types and correction behavior.
+   - Key workflow: [Manual Mapping Journey](#manual-mapping-journey).
 
-## Expert Discovery Journey
+## Key Screens
+
+## Feature Summary
+
+| Feature                | Description                                                                          | Status      |
+| ---------------------- | ------------------------------------------------------------------------------------ | ----------- |
+| Expert discovery       | Find colleagues relevant to a topic, with contact details and source-backed reasons. | Planned     |
+| Project discovery      | Find related HAN projects and inspect their context.                                 | Planned     |
+| Manual mapping         | Correct source links and see the correction in a later result.                       | Planned     |
+| Personal project hours | Review hours spent and remaining allocation on projects.                             | Unscheduled |
+| Colleague capacity     | Check a colleague's available capacity.                                              | Unscheduled |
+| Team billability       | Review billability for a team.                                                       | Unscheduled |
+
+Simon reports that a talk with Marijn confirmed the three HR-related user goals and candidate data points; all three features remain unscheduled.
+An earlier proposal to demonstrate hours spent has no scheduled implementation.
+Real UBW FRIS access is unavailable for this project, and hours spent alone cannot establish remaining allocation or weekly capacity.
+Source meaning and access rules for these features remain unresolved; any later work would need to validate them.
+The project is not defining detailed rules for who may view another person's hours, capacity, or billability from unavailable real data.
+The MCP interaction must carry the requesting user's identity so that later permission or role-based controls can be applied; access policy and enforcement remain open in [issue #17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17).
+
+## User Journeys
+
+### Expert Discovery Journey
 
 1. An authenticated HAN staff member asks in a locally run Studio instance for colleagues relevant to a topic or work problem.
 2. Studio requests graph context through the HAN MCP server and conveys which authenticated user made the request.
@@ -46,7 +59,7 @@ Microsoft Graph has production access for this project, while UBW FRIS is availa
 The actual fields, coverage, source joins, and result quality require validation under [issues #6](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/6), [#7](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/7), and [#9](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/9).
 The MCP identity and authorization design remains open under [issue #17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17).
 
-## Project Discovery Journey
+### Project Discovery Journey
 
 1. An authenticated HAN staff member asks in Studio which projects exist related to a topic.
 2. Studio requests graph context through the HAN MCP server and conveys which authenticated staff member made the request.
@@ -55,7 +68,7 @@ The MCP identity and authorization design remains open under [issue #17](https:/
 
 Project eligibility beyond billable work, source coverage, and the available metadata remain to be defined and validated.
 
-## Manual Mapping Journey
+### Manual Mapping Journey
 
 1. A developer or designated operator inspects an ambiguous or unmatched link between a source record and a person, project, topic, or other graph entity.
 2. They use the management API, through a developer-only UI proof of concept, to choose or create the intended link or to correct a previously accepted mapping.
@@ -65,14 +78,9 @@ This API is not called by Studio and is not a staff-facing feedback path.
 A staff member who notices an irrelevant result would need to report it outside the initial product flow; no reporting mechanism is planned yet.
 The precise API operations and first supported link types remain for [pipeline issue #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16).
 
-## Confirmed Goals Awaiting Scope Decision
+## Domain Glossary
 
-The talk with Marijn confirmed the value of checking a colleague's capacity, reviewing personal project hours and remaining allocation, and reviewing team billability as user goals.
-The associated data points are candidates for source validation, and none of these HR-data journeys is committed to the initial demonstration.
-A possible narrower demonstration would show hours spent from permitted UBW FRIS demo data.
-The project cannot currently claim that UBW FRIS provides a person's weekly working hours or enough information to derive remaining allocation.
-The scope of any HR-data demonstration remains to be decided with Marijn Siebel and Sander Maijers.
-
-The project is not defining detailed rules for who may view another person's hours, capacity, or billability from the unavailable real data.
-The MCP interaction must carry the requesting user's identity so that later permission or role-based controls can be applied.
-Access policy and enforcement remain open in [issue #17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17).
+| Term                 | Definition                                                                                                                                                                                                                  |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Expertise connection | A sourced association between a colleague and a topic, such as a recorded skill or participation in a related project. A project association does not by itself establish that the colleague has a verified personal skill. |
+| Manual mapping       | A human decision that resolves an ambiguous or unmatched link between a source record and a person, project, topic, or other platform entity.                                                                               |
