@@ -1,29 +1,30 @@
 # Functional Overview
 
-The initial functional scope centers on a locally run demonstration of expert discovery through Studio.
+The initial functional scope centers on a locally run demonstration of colleague and project discovery through Studio.
 A functional management API and developer-only UI proof of concept support manual correction of source links.
 The [Context chapter](01-context.md) shows the actors and system boundaries.
 These are planned capabilities; this repository does not yet implement them.
 
 ## User Goals and Validation Status
 
-- **Find colleagues relevant to a topic — main local-demo journey.**
-  Simon reports that he and Marijn Siebel prioritized expert discovery at the start of this project.
-  Earlier candidate needs are recorded in [issue #5](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/5); source coverage and match quality still require validation.
-- **Find HAN projects related to a topic and see what information is available — newly defined journey.**
+- **Find colleagues relevant to a topic — initial local-demo journey.**
+  Simon reports that a talk with Marijn Siebel confirmed this goal and its candidate data points.
+  Source coverage and match quality still require validation.
+- **Find HAN projects related to a topic and see what information is available — initial local-demo journey.**
   A HAN staff member uses project results to judge whether a new project in that topic makes sense.
+  Simon reports that the talk with Marijn confirmed this goal, journey, and candidate data points.
   Work that HAN employees can bill hours to is a provisional criterion for a project; other criteria remain undefined.
-  Available project data and source links still require validation under [issue #5](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/5).
+  Available project data and source links still require validation under [source research issues #6](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/6), [#7](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/7), and [#9](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/9).
 - **Correct an ambiguous or wrong source link — operator journey in scope.**
   Simon confirmed a functional management API and developer-only UI proof of concept.
   [Pipeline issue #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16) must select the first supported link types and correction behavior.
-- **Review personal project hours — uncommitted candidate proof of concept.**
+- **Review personal project hours — confirmed goal, uncommitted proof of concept.**
   Real UBW FRIS access is unavailable for this project.
-  Simon proposes demonstrating hours spent but will review the HR scope with Marijn Siebel and Sander Maijers.
+  Simon proposes demonstrating hours spent; the HR scope remains undecided.
   Remaining hours and weekly capacity cannot be assumed from hours spent.
-- **Check a colleague's capacity or review billability — uncommitted candidate journeys.**
-  Earlier needs appear in [issue #5](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/5).
-  Marijn Siebel and Sander Maijers must decide whether either belongs in this proof of concept; data meaning and access remain unresolved.
+- **Check a colleague's capacity or review billability — confirmed goal, uncommitted journeys.**
+  Simon reports that the talk with Marijn confirmed these information goals and candidate data points.
+  Whether either belongs in this proof of concept remains undecided; data meaning and access remain unresolved.
 
 ## Expert Discovery Journey
 
@@ -64,13 +65,13 @@ This API is not called by Studio and is not a staff-facing feedback path.
 A staff member who notices an irrelevant result would need to report it outside the initial product flow; no reporting mechanism is planned yet.
 The precise API operations and first supported link types remain for [pipeline issue #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16).
 
-## Candidate Journeys Awaiting Scope Decision
+## Confirmed Goals Awaiting Scope Decision
 
-The earlier functional overview included checking a colleague's capacity, reviewing personal project hours and remaining allocation, and reviewing team billability.
-None is a committed initial journey.
+The talk with Marijn confirmed the value of checking a colleague's capacity, reviewing personal project hours and remaining allocation, and reviewing team billability as user goals.
+The associated data points are candidates for source validation, and none of these HR-data journeys is committed to the initial demonstration.
 A possible narrower demonstration would show hours spent from permitted UBW FRIS demo data.
 The project cannot currently claim that UBW FRIS provides a person's weekly working hours or enough information to derive remaining allocation.
-Simon will discuss the value and scope of any HR-data demonstration with Marijn Siebel and Sander Maijers.
+The scope of any HR-data demonstration remains to be decided with Marijn Siebel and Sander Maijers.
 
 The project is not defining detailed rules for who may view another person's hours, capacity, or billability from the unavailable real data.
 The MCP interaction must carry the requesting user's identity so that later permission or role-based controls can be applied.

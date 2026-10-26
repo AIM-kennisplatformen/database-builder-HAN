@@ -1,10 +1,11 @@
 # Data
 
 This chapter follows the scope and validation status in the [Functional Overview](02-functional-overview.md).
-Expert discovery and manual correction of source links are in the initial proof of concept.
-The data needed for those journeys still depends on source research; project hours, capacity, and billability remain candidate journeys awaiting a scope decision.
+Colleague discovery, project discovery, and manual correction of source links are in the initial proof of concept.
+Simon reports that a talk with Marijn Siebel confirmed the user goals, journeys, and candidate data points described here.
+The data needed for the initial journeys still depends on source research; project hours, capacity, and billability are confirmed goals whose inclusion in the proof of concept remains undecided.
 The entities below are a conceptual inventory, not an implemented or approved schema.
-The earlier candidate needs are recorded in [issue #5](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/5).
+[Issue #5](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/5) preserves the earlier temporary candidate matrix; this chapter records the current data needs.
 
 ## Data Stores Overview
 
@@ -13,16 +14,16 @@ No store has been implemented in this repository, and there are currently no dat
 
 ## Data Sources Overview
 
-The following sources are available or under consideration for the initial journey and candidate journeys.
+The following sources are available or under consideration for the initial journeys and later HR-data journeys.
 Their exact fields, coverage, and joining keys have not been verified.
 
-| Source                                | Possible contribution                                                                                                   | Access and validation status                                                                                                                                                                  |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Microsoft Graph                       | Colleague identity and work contact; potential expertise, affiliation, and role                                         | Production access is available, but the current token does not provide all selected expertise and work-context fields. See the [access assessment][graph-assessment] for [issue #6][issue-6]. |
-| UBW FRIS                              | Project associations for expert discovery; hours, capacity, or billability only if a later scope decision includes them | Demo data only; usable fields remain under [issue #9][issue-9].                                                                                                                               |
-| Enrichment source                     | Source-backed connections between people and topics, with possible supporting evidence                                  | A trusted API, dataset, or approved manual import remains to be selected under [issue #7][issue-7].                                                                                           |
-| HAN publication data                  | Publications and other possible evidence supporting expertise and experience                                            | A specific publication source has not been selected; its use depends on suitable enrichment data.                                                                                             |
-| Domain or theme classification source | Expertise domains and societal themes that may connect people and projects                                              | A specific vocabulary or source has not been selected.                                                                                                                                        |
+| Source                                | Possible contribution                                                                                                         | Access and validation status                                                                                                                                                                  |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Microsoft Graph                       | Colleague identity and work contact; potential expertise, affiliation, and role                                               | Production access is available, but the current token does not provide all selected expertise and work-context fields. See the [access assessment][graph-assessment] for [issue #6][issue-6]. |
+| UBW FRIS                              | Projects and project associations for discovery; hours, capacity, or billability only if a later scope decision includes them | Demo data only; usable fields remain under [issue #9][issue-9].                                                                                                                               |
+| Enrichment source                     | Source-backed connections between people and topics, with possible supporting evidence                                        | A trusted API, dataset, or approved manual import remains to be selected under [issue #7][issue-7].                                                                                           |
+| HAN publication data                  | Publications and other possible evidence supporting expertise and experience                                                  | A specific publication source has not been selected; its use depends on suitable enrichment data.                                                                                             |
+| Domain or theme classification source | Expertise domains and societal themes that may connect people and projects                                                    | A specific vocabulary or source has not been selected.                                                                                                                                        |
 
 [issue-6]: https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/6
 [issue-7]: https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/7
@@ -32,9 +33,9 @@ Their exact fields, coverage, and joining keys have not been verified.
 ## Database Model
 
 No database model has been implemented.
-The entities and relations below describe possible data for the initial journeys and earlier candidate needs without prescribing a TypeDB schema.
+The entities and relations below describe data needed for the initial journeys and candidate data for later HR-data journeys without prescribing a TypeDB schema.
 Capacity, project hours, and billability are not initial data requirements.
-The fields listed for those candidate entities require validation if their journeys are approved.
+The candidate fields listed for those entities still require source and business-rule validation if their journeys enter the proof of concept.
 
 ### Key Entities
 
@@ -65,18 +66,17 @@ Candidate for a later team-billability journey; its inclusion in the initial gra
 
 #### Project
 
-Represents a project that may support a person's connection to a topic.
+Represents a project that staff may find by topic and that may also support a person's connection to a topic.
 Capacity and hours are candidate extensions only.
 
-- **Key data points**: stable project identifier, name, description, status, start date, end date.
+- **Key data points**: stable project identifier, title, description, status, start date, end date.
 - **Initial relations where supported by source data**: participants, participant roles, organizational unit, and topics.
 - **Candidate relations**: allocated and recorded hours if an HR-data journey is approved.
 - **Lifecycle**: not documented.
 
 #### Topic
 
-Represents a named skill, expertise domain, subject, or societal theme used to find people.
-A separate project-exploration journey remains uncommitted.
+Represents a named skill, expertise domain, subject, or societal theme used to find people and projects.
 Examples include “Python,” “circular economy,” and “energy transition.”
 
 - **Key data points**: stable topic identifier, label, topic type, source.
@@ -128,18 +128,18 @@ Represents the provenance needed to trace an imported data point to its origin.
 
 ### Key Relations
 
-| Relation                   | Participants                     | Initial status                                                                                            |
-| -------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| Organizational affiliation | Person and Organizational Unit   | Useful when available for colleague context.                                                              |
-| Project participation      | Person and Project               | Possible source-backed reason for an expertise connection; source link and person's role need validation. |
-| Expertise connection       | Person and Topic                 | Initial journey needs a connection type, match reason, and traceable source.                              |
-| Expertise support          | Evidence Item, Person, and Topic | Richer evidence is desirable where suitable data is available.                                            |
-| Project classification     | Project and Topic                | Possible support for an expertise connection; classification and source need validation.                  |
-| Provenance                 | Source Record and imported data  | Initial journey needs every match to remain traceable to a source.                                        |
+| Relation                   | Participants                     | Initial status                                                                                                  |
+| -------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Organizational affiliation | Person and Organizational Unit   | Useful when available for colleague context.                                                                    |
+| Project participation      | Person and Project               | Possible source-backed reason for an expertise connection; source link and person's role need validation.       |
+| Expertise connection       | Person and Topic                 | Initial journey needs a connection type, match reason, and traceable source.                                    |
+| Expertise support          | Evidence Item, Person, and Topic | Richer evidence is desirable where suitable data is available.                                                  |
+| Project classification     | Project and Topic                | Initial project discovery needs a match reason and traceable source; classification and source need validation. |
+| Provenance                 | Source Record and imported data  | Initial discovery journeys need every match to remain traceable to a source.                                    |
 
 Team membership and management, capacity for a period, project hours for a period, and billability for a period are candidate relations for uncommitted journeys.
 
-Stable identifiers are needed for whichever people, organizations, projects, topics, and evidence sources are used in the initial journey.
+Stable identifiers are needed for whichever people, organizations, projects, topics, and evidence sources are used in the initial journeys.
 Candidate entities would need their own identifiers if brought into scope.
 The available identifiers and joining keys have not yet been established; names, titles, and labels alone do not provide stable identity.
 
@@ -148,6 +148,7 @@ The available identifiers and joining keys have not yet been established; names,
 No ingestion or retrieval flow has been implemented.
 
 The initial expert-discovery result must explain each colleague match and trace it to a source.
+The initial project-discovery result must show each project's title, short description, relevant dates, match reason, and traceable source.
 The management journey must allow a correction to an ambiguous, unmatched, or previously accepted link to appear in a later query.
 No source-to-model mappings or transformations currently exist in this repository.
 

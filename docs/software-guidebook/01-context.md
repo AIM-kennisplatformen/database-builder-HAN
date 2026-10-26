@@ -8,13 +8,13 @@ Studio, source systems, and Langfuse are outside it.
 This repository currently contains architecture documentation but no implementation of those services.
 [Issue #14](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/14) defines the context and functional-scope work.
 
-The primary user goal is to find HAN colleagues relevant to a topic.
+The initial user goals are to find HAN colleagues relevant to a topic and to find related HAN projects so staff can judge whether a new project in that topic makes sense.
 An expertise connection can be a recorded skill, project involvement, or another sourced association; the kind of connection must be clear in the result.
-The [Functional Overview](02-functional-overview.md) defines the journey and its validation status.
+The [Functional Overview](02-functional-overview.md) defines both journeys and their validation status.
 
 ## People and External Systems
 
-- **Authenticated HAN staff** use Studio for expert discovery.
+- **Authenticated HAN staff** use Studio to discover colleagues and projects by topic.
 - **Developers or designated operators** run the pipeline and resolve ambiguous or unmatched links through the management API.
   A developer-only UI demonstrates this work.
 - **Studio** provides the existing chat application and MCP client.
@@ -65,24 +65,29 @@ A colleague without enough information to contact them is excluded from staff-fa
 A ranked list is not required.
 Richer supporting evidence is desirable, but each match must remain traceable to a source and explainable.
 
+The same demonstration lets staff find HAN projects related to a topic and inspect each project's title, short description, relevant dates, match reason, and traceable source.
+Staff use those results to judge whether a new project in that topic makes sense.
+Project eligibility and the available source fields still need validation.
+
 The operator path includes a functional API for resolving ambiguous or unmatched source links and correcting accepted mappings.
 A developer-only UI proof of concept must demonstrate a correction that is reflected in a later expert-discovery query.
 The first supported link types and precise mapping operations belong to [issue #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16).
 
 Contacting or booking colleagues, extracting expertise from document text, a staff-facing correction or feedback feature, and a production management UI are outside this initial scope.
 A staff member would need a separate way to report a bad result; no reporting path is planned yet.
-Project hours, capacity, and billability are uncommitted candidate journeys pending discussion with Marijn Siebel and Sander Maijers.
+Project hours, capacity, and billability are confirmed information goals, but their inclusion in the initial proof of concept remains undecided.
 Simon has proposed demonstrating hours spent, but no HR-data proof of concept has been agreed.
 
 ## Stakeholder Feedback and Open Decisions
 
 Simon reports that he and Marijn Siebel prioritized expert discovery at the start of this project because access to real UBW FRIS data was unavailable.
+Simon reports that a later talk with Marijn confirmed the user goals, journeys, and candidate data points, including project discovery.
 This design interview established the local-demo boundary, minimum colleague result, management API and developer UI scope, and the separation between Studio, MCP access, and manual correction.
 These are scope decisions for the initial architecture, not claims that integrations have been built.
 
 The following remain open:
 
-- Marijn Siebel and Sander Maijers must decide whether any project-hours or billability journey belongs in the proof of concept, and whether the proposed hours-spent example is useful.
+- The initial scope of any project-hours, capacity, or billability journey and the usefulness of an hours-spent demonstration remain to be decided with Marijn Siebel and Sander Maijers.
 - [Source research #6](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/6), [#7](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/7), and [#9](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/9) must establish usable fields, trusted enrichment, and demo-data limits.
 - [MCP architecture issue #17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17) must define identity propagation and authorization boundaries; detailed HR access rules cannot be validated with the available data.
 - The future users and interface of a management platform beyond the developer-only proof of concept are unknown.
