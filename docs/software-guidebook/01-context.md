@@ -1,39 +1,26 @@
 # Context
 
-## System Purpose and Boundary
+## System Overview
 
 The HAN knowledge platform is a planned back end that brings selected source data into a TypeDB knowledge graph and makes graph context available to the existing Studio chat application through a Model Context Protocol (MCP) server.
-The data pipeline, TypeDB graph, MCP server, management API, and developer-only management UI proof of concept are inside this project's boundary.
-Studio, source systems, and Langfuse are outside it.
+It is intended to help authenticated HAN staff find colleagues and projects related to a topic, with an explainable, source-backed reason for each match.
+The data pipeline, TypeDB graph, MCP server, management API, and developer-only management UI proof of concept are inside this project's boundary; Studio, source systems, and Langfuse are outside it.
 This repository currently contains architecture documentation but no implementation of those services.
 [Issue #14](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/14) defines the context and functional-scope work.
 
-The initial user goals are to find HAN colleagues relevant to a topic and to find related HAN projects so staff can judge whether a new project in that topic makes sense.
-An expertise connection can be a recorded skill, project involvement, or another sourced association; the kind of connection must be clear in the result.
-The [Functional Overview](02-functional-overview.md) defines both journeys and their validation status.
+## Why This System Exists
 
-## People and External Systems
+- **Business drivers**: Simon reports that he and Marijn Siebel prioritized expert discovery when real UBW FRIS data proved unavailable. A later talk with Marijn confirmed the colleague- and project-discovery goals, journeys, and candidate data points.
+- **Problems solved**: Staff need to find HAN colleagues relevant to a topic and related HAN projects so they can judge whom to contact and whether a new project in that topic makes sense. A recorded skill, project involvement, or another sourced association can support an expertise connection, but the result must make the kind of connection clear.
+- **Value provided**: Staff can inspect contactable colleagues and relevant projects with match reasons and traceable sources. Developers or designated operators can correct source links so later results reflect the correction.
 
-- **Authenticated HAN staff** use Studio to discover colleagues and projects by topic.
-- **Developers or designated operators** run the pipeline and resolve ambiguous or unmatched links through the management API.
-  A developer-only UI demonstrates this work.
-- **Studio** provides the existing chat application and MCP client.
-  A local demo will connect it to the planned HAN MCP server.
-- **Microsoft Graph** provides production-access colleague data.
-  Useful fields and coverage remain under [research issue #6](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/6).
-- **UBW FRIS** supplies demo data only; real data access is unavailable for this project.
-  Its usable fields remain under [research issue #9](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/9).
-- **An enrichment source** remains to be selected under [research issue #7](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/7).
-  A trusted API, dataset, or approved manual import could be suitable.
-- **Langfuse** is a planned destination for MCP traces.
-  Its logging boundary is addressed by [issue #17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17).
-
-The future end user of a management platform is unknown.
-This project includes a functional management API and a developer-only UI proof of concept, not an end-user management application.
+The design interview established the local-demo boundary, minimum colleague result, management API and developer UI scope, and separation between Studio, MCP access, and manual correction.
+These are decisions for the initial architecture, not claims that integrations have been built.
+The [Functional Overview](02-functional-overview.md) defines the journeys and their validation status.
 
 ## System Context Diagram
 
-This diagram shows planned interactions and data movement, not implemented integrations.
+This C4 context diagram shows planned interactions and data movement, not implemented integrations.
 It shows the HAN knowledge platform as one system and Studio as a separate internal system.
 The pipeline, graph, MCP server, management API, and developer UI belong to a later container view.
 The exact pipeline and MCP component designs belong to [issues #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16) and [#17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17).
@@ -51,43 +38,60 @@ The exact pipeline and MCP component designs belong to [issues #16](https://gith
 
 </details>
 
+## Users and Personas
+
+| User type                        | Description                                  | How they use the system                                                                                                                           |
+| -------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Authenticated HAN staff          | People looking for expertise or related work | Ask in Studio for colleagues or projects related to a topic, then use the results to decide whom to contact or whether a new project makes sense. |
+| Developer or designated operator | People responsible for source links          | Run the pipeline and resolve ambiguous, unmatched, or incorrect links through the management API; a developer-only UI demonstrates this work.     |
+
+The future end user of a management platform is unknown.
+This project includes a functional management API and a developer-only UI proof of concept, not an end-user management application.
+
+## Stakeholders
+
+| Stakeholder                                  | Concern                                                                                                     |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| HAN staff (HR, project leaders, researchers) | Need easier access to internal knowledge, current projects, and expertise.                                  |
+| HAN Knowledge Platform data researchers      | Need a pipeline that lets them assess the reliability of information generated by the chat system.          |
+| Stijn Hoppenbrouwers (DKE lector)            | Needs insight into data quality and documentation of data missing because internal sources are unavailable. |
+| Marijn Siebel (platform project lead)        | Needs a working proof of concept with a renewed back end connected to the wider HAN Knowledge Platform.     |
+
+These concerns come from the stakeholder section of the local project plan, `plan_van_aanpak.docx` (§2.3), which is not tracked in this repository.
+
+## External Systems
+
+Directions describe data flow from the HAN knowledge platform's perspective.
+
+| System            | Direction | Purpose                                        |
+| ----------------- | --------- | ---------------------------------------------- |
+| Studio            | Both      | Sends discovery requests and receives context. |
+| Microsoft Graph   | Inbound   | Supplies colleague data.                       |
+| UBW FRIS          | Inbound   | Supplies demo data.                            |
+| Enrichment source | Inbound   | Supplies additional sourced connections.       |
+| Langfuse          | Outbound  | Receives planned MCP traces.                   |
+
 Studio already provides a chat application and configurable MCP client, as shown by its [README](https://github.com/AIM-kennisplatformen/studio/blob/main/README.md) and [agent configuration](https://github.com/AIM-kennisplatformen/studio/blob/main/src/backend/utility/chat_util.py).
 Studio authenticates users through [Authentik](https://github.com/AIM-kennisplatformen/studio/blob/main/src/backend/endpoints/auth.py).
-The local demo must convey the authenticated user's identity to the HAN MCP request.
-The format and trust mechanism for that identity, and the resulting authorization rules, remain design questions for [issue #17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17).
+For the local demo, it must convey the authenticated user's identity to the HAN MCP request; the identity format, trust mechanism, and authorization rules remain open under [issue #17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17).
 Studio does not access TypeDB or call the management API.
 
-## Initial Scope and Exclusions
+Microsoft Graph offers production-access colleague data, but useful fields and coverage remain under [research issue #6](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/6).
+UBW FRIS supplies demo data only because real data access is unavailable for this project; usable fields remain under [research issue #9](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/9).
+A trusted API, dataset, or approved manual import could serve as the enrichment source; selection remains under [research issue #7](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/7).
+Langfuse is a planned destination for MCP traces; its logging boundary is addressed by [issue #17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17).
 
-The main deliverable is a locally run Studio demonstration in which authenticated HAN staff ask for expertise and receive a list of relevant colleagues with names, work email addresses, source-backed match reasons, and the kind of connection behind each match.
-Department and function add substantial value where available.
-A colleague without enough information to contact them is excluded from staff-facing results.
-A ranked list is not required.
-Richer supporting evidence is desirable, but each match must remain traceable to a source and explainable.
+## Scope Boundaries
 
-The same demonstration lets staff find HAN projects related to a topic and inspect each project's title, short description, relevant dates, match reason, and traceable source.
-Staff use those results to judge whether a new project in that topic makes sense.
-Project eligibility and the available source fields still need validation.
+- **In scope**: A locally run Studio demonstration in which authenticated HAN staff find relevant colleagues. Each visible result needs a name, work email address, source-backed match reason, and the kind of connection behind the match. Department and function add value where available; richer evidence is desirable. A colleague without enough information to contact them is excluded. Results need not be ranked, but every match must remain explainable and traceable to a source.
+- **In scope**: The same demonstration lets staff find HAN projects related to a topic. Each result needs a title, short description, relevant dates, match reason, and traceable source so staff can judge whether a new project in that topic makes sense. Project eligibility and available source fields still need validation.
+- **In scope**: A functional management API lets developers or designated operators resolve ambiguous or unmatched source links and correct accepted mappings. A developer-only UI proof of concept must show a correction reflected in a later expert-discovery query. [Issue #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16) will determine the first supported link types and precise operations.
+- **Out of scope**: Contacting or booking colleagues, extracting expertise from document text, staff-facing correction or feedback, and a production management UI. A staff member who notices a bad result needs a separate reporting route; none is planned yet.
 
-The operator path includes a functional API for resolving ambiguous or unmatched source links and correcting accepted mappings.
-A developer-only UI proof of concept must demonstrate a correction that is reflected in a later expert-discovery query.
-The first supported link types and precise mapping operations belong to [issue #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16).
-
-Contacting or booking colleagues, extracting expertise from document text, a staff-facing correction or feedback feature, and a production management UI are outside this initial scope.
-A staff member would need a separate way to report a bad result; no reporting path is planned yet.
 Project hours, capacity, and billability are confirmed information goals, but their inclusion in the initial proof of concept remains undecided.
 Simon has proposed demonstrating hours spent, but no HR-data proof of concept has been agreed.
+The scope and usefulness of any such journey remain to be decided with Marijn Siebel and Sander Maijers.
+The future users and interface of a management platform beyond the developer-only proof of concept are also unknown.
 
-## Stakeholder Feedback and Open Decisions
-
-Simon reports that he and Marijn Siebel prioritized expert discovery at the start of this project because access to real UBW FRIS data was unavailable.
-Simon reports that a later talk with Marijn confirmed the user goals, journeys, and candidate data points, including project discovery.
-This design interview established the local-demo boundary, minimum colleague result, management API and developer UI scope, and the separation between Studio, MCP access, and manual correction.
-These are scope decisions for the initial architecture, not claims that integrations have been built.
-
-The following remain open:
-
-- The initial scope of any project-hours, capacity, or billability journey and the usefulness of an hours-spent demonstration remain to be decided with Marijn Siebel and Sander Maijers.
-- [Source research #6](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/6), [#7](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/7), and [#9](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/9) must establish usable fields, trusted enrichment, and demo-data limits.
-- [MCP architecture issue #17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17) must define identity propagation and authorization boundaries; detailed HR access rules cannot be validated with the available data.
-- The future users and interface of a management platform beyond the developer-only proof of concept are unknown.
+[Source research #6](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/6), [#7](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/7), and [#9](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/9) must establish usable fields, trusted enrichment, and demo-data limits.
+[MCP architecture issue #17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17) must define identity propagation and authorization boundaries; detailed HR access rules cannot be validated with the available data.
