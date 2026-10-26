@@ -17,19 +17,19 @@ This guidebook follows Simon Brown's Software Guidebook chapter structure. It he
 
 ## Sections
 
-1. [Context](01-context.md) (planned) - What is the system and who interacts with it?
-2. [Functional Overview](02-functional-overview.md) (planned) - What does it do?
-3. [Quality Attributes](03-quality-attributes.md) (planned) - What quality goals matter?
-4. [Constraints](04-constraints.md) (planned) - What boundaries shape the design?
-5. [Principles](05-principles.md) (planned) - What guides design decisions?
-6. [Software Architecture](06-software-architecture.md) (planned) - How is the system structured?
-7. [External Interfaces](07-external-interfaces.md) (planned) - What APIs and integrations does it expose or use?
-8. [Code](08-code.md) (planned) - How is the code organized?
-9. [Data](09-data.md) (planned) - What data does it manage and store?
-10. [Infrastructure](10-infrastructure.md) (planned) - What environments and infrastructure does it use?
-11. [Deployment](11-deployment.md) (planned) - How is it built and released?
-12. [Operation & Support](12-operation-support.md) (planned) - How is it run and supported?
-13. [Decision Log](13-decision-log.md) (planned) - What decisions shaped the architecture?
+1. [Context](01-context.md) - What is the system and who interacts with it?
+2. [Functional Overview](02-functional-overview.md) - What does it do?
+3. [Quality Attributes](03-quality-attributes.md) - What quality goals matter?
+4. [Constraints](04-constraints.md) - What boundaries shape the design?
+5. [Principles](05-principles.md) - What guides design decisions?
+6. [Software Architecture](06-software-architecture.md) - How is the system structured?
+7. [External Interfaces](07-external-interfaces.md) - What APIs and integrations does it expose or use?
+8. [Code](08-code.md) - How is the code organized?
+9. [Data](09-data.md) - What data does it manage and store?
+10. [Infrastructure](10-infrastructure.md) - What environments and infrastructure does it use?
+11. [Deployment](11-deployment.md) - How is it built and released?
+12. [Operation & Support](12-operation-support.md) - How is it run and supported?
+13. [Decision Log](13-decision-log.md) - What decisions shaped the architecture?
 
 ## Quick Links
 
