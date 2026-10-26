@@ -10,9 +10,10 @@ These are planned capabilities; this repository does not yet implement them.
 - **Find colleagues relevant to a topic — main local-demo journey.**
   Simon reports that he and Marijn Siebel prioritized expert discovery at the start of this project.
   Earlier candidate needs are recorded in [issue #5](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/5); source coverage and match quality still require validation.
-- **Discover related people and projects — useful context, separate journey uncommitted.**
-  [Issue #5](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/5) records the earlier need.
-  Confirm whether available source links make a separate exploration journey useful.
+- **Find HAN projects related to a topic and see what information is available — newly defined journey.**
+  A HAN staff member uses project results to judge whether a new project in that topic makes sense.
+  Work that HAN employees can bill hours to is a provisional criterion for a project; other criteria remain undefined.
+  Available project data and source links still require validation under [issue #5](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/5).
 - **Correct an ambiguous or wrong source link — operator journey in scope.**
   Simon confirmed a functional management API and developer-only UI proof of concept.
   [Pipeline issue #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16) must select the first supported link types and correction behavior.
@@ -43,6 +44,15 @@ This journey is a locally run demonstration, not a claim of production deploymen
 Microsoft Graph has production access for this project, while UBW FRIS is available only as demo data.
 The actual fields, coverage, source joins, and result quality require validation under [issues #6](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/6), [#7](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/7), and [#9](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/9).
 The MCP identity and authorization design remains open under [issue #17](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/17).
+
+## Project Discovery Journey
+
+1. An authenticated HAN staff member asks in Studio which projects exist related to a topic.
+2. Studio requests graph context through the HAN MCP server and conveys which authenticated staff member made the request.
+3. The response lists relevant projects. Each result has a title, a short description, important metadata such as a start date and, when applicable, an end date, a reason for the match, and a traceable source for the connection to the topic.
+4. The staff member uses the information to decide whether a new project in that topic makes sense.
+
+Project eligibility beyond billable work, source coverage, and the available metadata remain to be defined and validated.
 
 ## Manual Mapping Journey
 
