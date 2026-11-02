@@ -19,19 +19,19 @@ Its request and response contracts, transport, failure responses, and service gu
 
 ## APIs Consumed
 
-| Service             | Purpose                        | Auth method                                                            | Rate limits                       | Failure handling                     |
-| ------------------- | ------------------------------ | ---------------------------------------------------------------------- | --------------------------------- | ------------------------------------ |
-| Microsoft Graph API | Colleague identity and contact. | Delegated OAuth for current access; pipeline credential handling open. | Throttling; project quota unknown. | Policies open.                       |
+| Service             | Purpose                                     | Auth method                                                            | Rate limits | Failure handling |
+| ------------------- | ------------------------------------------- | ---------------------------------------------------------------------- | ----------- | ---------------- |
+| Microsoft Graph API | Colleague identity and contact information. | Delegated OAuth for current access; pipeline credential handling open. | Throttling. | Policies open.   |
 
 ### Microsoft Graph API
 
-- **Purpose**: The planned pipeline needs colleague identity and work contact data for discovery results. The [Graph source inventory](../data-sources/ms-graph-api.md) records the endpoints and current access limits.
+- **Purpose**: The planned pipeline needs colleague identity and work contact data for discovery results. The [Graph source inventory](../data-sources/ms-graph-api.md) records the endpoints, delegated scope status, and field validation gaps.
 - **Fallback behavior**: Not defined for unavailable Graph data. Pipeline and graph refresh behavior remain under [issue #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16).
 - **Timeout policy**: Not defined.
 - **Retry policy**: Not defined. A future extractor must handle HTTP `429` and honor `Retry-After`, as described in the [Graph source inventory](../data-sources/ms-graph-api.md).
 - **Circuit breaker**: Not defined.
 
-The [Graph source inventory](../data-sources/ms-graph-api.md) records these `v1.0` endpoints and the project's current delegated access.
+The [Graph source inventory](../data-sources/ms-graph-api.md) records these `v1.0` endpoints, the earlier inspected token, and the newly reported delegated `User.Read.All` grant.
 
 | Endpoint                                                                                                                                                  | Version | Delegated scopes needed for the project                                                             |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- | --------------------------------------------------------------------------------------------------- |
@@ -39,7 +39,7 @@ The [Graph source inventory](../data-sources/ms-graph-api.md) records these `v1.
 | [`GET /groups/{id}/transitiveMembers/microsoft.graph.user`](https://learn.microsoft.com/en-us/graph/api/group-list-transitivemembers?view=graph-rest-1.0) | `v1.0`  | `Group.Read.All` to list members; `User.ReadBasic.All` to read basic user properties.               |
 | [`GET /users/{id}`](https://learn.microsoft.com/en-us/graph/api/user-get?view=graph-rest-1.0)                                                             | `v1.0`  | `User.ReadBasic.All` for other colleagues' basic profiles; `User.Read.All` for their full profiles. |
 
-The current token has `Group.Read.All` and `User.ReadBasic.All`, but not `User.Read.All`; full profile fields for other colleagues therefore remain unavailable.
+The earlier inspected token had `Group.Read.All` and `User.ReadBasic.All`, but lacked `User.Read.All`. The project now reports access to delegated `User.Read.All`; a new token and its returned profile fields have not yet been verified.
 Extraction must follow `@odata.nextLink` to cover all pages; Graph may throttle requests, and the new pipeline's retry policy is still open.
 
 ## Events/Messages
