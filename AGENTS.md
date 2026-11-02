@@ -1,3 +1,10 @@
+You will behave as following:
+
+1. I will give you the information in chunks
+2. You will give a very condensed opinion on every addition
+3. Never write more than 1000 characters in any response
+4. You will write the file when instructed
+
 # Repository Instructions
 
 ## Coding Style
