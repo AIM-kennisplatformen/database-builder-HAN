@@ -1,0 +1,37 @@
+[project]
+name = "management-api"
+version = "0.1.0"
+description = "HAN management API and ingestion application"
+readme = "README.md"
+authors = [
+    { name = "Simon Dingemans", email = "simon.dingemans@gmail.com" }
+]
+requires-python = ">=3.15"
+dependencies = [
+    "alembic>=1.16,<2",
+    "azure-identity>=1,<2",
+    "python-dotenv>=1,<2",
+    "fastapi[standard]>=0.115,<1",
+    "httpx>=0.27,<1",
+    "msgraph-sdk>=1,<2",
+    "psycopg[binary]>=3.2,<4",
+    "sqlalchemy>=2,<3",
+    "uvicorn>=0.30,<1",
+]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "poethepoet>=0.37,<1",
+    "pytest>=9.2.0",
+    "ruff>=0.17.3",
+]
+
+[tool.poe.tasks]
+test = { cmd = "python tests/test_graph.py", env = { PYTHONPATH = "src" } }
+test-db = { cmd = "python tests/test_postgres.py", env = { PYTHONPATH = "src" } }
+migrate-up = "alembic -c alembic.ini upgrade head"
+migrate-down = "alembic -c alembic.ini downgrade -1"
+start = "uvicorn main:app --app-dir src --env-file ../.env --host 127.0.0.1 --port 8000 --reload"
