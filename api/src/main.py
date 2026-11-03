@@ -17,13 +17,13 @@ from users.service.ms_graph_api_user_service import (
     MsGraphApiUserService,
 )
 
-ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
+ALEMBIC_CONFIG = Path(__file__).resolve().parents[1] / "pyproject.toml"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config = load_config()
-    await to_thread(command.upgrade, Config(str(ALEMBIC_INI)), "head")
+    await to_thread(command.upgrade, Config(toml_file=str(ALEMBIC_CONFIG)), "head")
     auth = InteractiveBrowserAuth(
         config.graph_tenant_id, config.graph_client_id, config.graph_redirect_uri
     )
