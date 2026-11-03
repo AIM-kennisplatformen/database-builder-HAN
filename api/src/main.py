@@ -15,7 +15,6 @@ from users.repository.postgres_user_repository import PostgresUserRepository
 from users.service.ms_graph_api_user_service import (
     InteractiveBrowserAuth,
     MsGraphApiUserService,
-    MsGraphUserSource,
 )
 
 ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
@@ -35,10 +34,11 @@ async def lifespan(app: FastAPI):
             credentials=credential,
             scopes=list(config.graph_scopes),
         )
-        graph = MsGraphUserSource(client, group_id=config.group_id)
         app.state.auth_strategy = auth
         app.state.user_repository = repository
-        app.state.user_service = MsGraphApiUserService(graph, repository)
+        app.state.user_service = MsGraphApiUserService(
+            client, config.group_id, repository
+        )
         app.state.config = config
         yield
     finally:

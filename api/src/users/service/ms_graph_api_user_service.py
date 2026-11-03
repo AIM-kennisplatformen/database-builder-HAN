@@ -13,9 +13,6 @@ from httpx import Response
 from kiota_abstractions.base_request_configuration import RequestConfiguration
 from kiota_abstractions.native_response_handler import NativeResponseHandler
 from kiota_http.middleware.options import ResponseHandlerOption
-from msgraph.generated.groups.item.group_item_request_builder import (
-    GroupItemRequestBuilder,
-)
 from msgraph.generated.users.item.user_item_request_builder import (
     UserItemRequestBuilder,
 )
@@ -124,36 +121,39 @@ def _raw_response(value: object) -> Response:
     return value
 
 
-class MsGraphUserSource:
-    def __init__(self, client: GraphServiceClient, group_id: str) -> None:
+class MsGraphApiUserService:
+    def __init__(
+        self, client: GraphServiceClient, group_id: str, repository: UserRepository
+    ) -> None:
         self.client = client
         self.group_id = group_id
+        self.repository = repository
 
-    async def users(self, limit: int | None = None) -> AsyncIterator[User]:
-        async for snapshot in self.snapshots(limit):
-            yield user_from_snapshot(snapshot)
 
-    async def snapshots(
-        self, limit: int | None = None
-    ) -> AsyncIterator[GraphUserSnapshot]:
-        if limit is not None and limit < 1:
-            raise ValueError("limit must be positive")
-
-        group_query = GroupItemRequestBuilder.GroupItemRequestBuilderGetQueryParameters(
-            select=["id"]
+    async def _retrieve_detailed_user_snapshot(
+        self, member: dict[str, Any]
+    ) -> GraphUserSnapshot:
+        user_id = member.get("id")
+        if not user_id:
+            raise ValueError("Graph member has no id")
+        query = UserItemRequestBuilder.UserItemRequestBuilderGetQueryParameters(
+            select=list(FIELDS)
         )
-        group_response = _raw_response(
-            await self.client.groups.by_group_id(self.group_id).get(
-                request_configuration=_raw_config(group_query)
+        response = _raw_response(
+            await self.client.users.by_user_id(user_id).get(
+                request_configuration=_raw_config(query)
             )
         )
-        canonical_id = group_response.json().get("id")
-        if not canonical_id:
-            raise ValueError("Graph group has no id")
+        profile = response.json()
+        if profile.get("id") != user_id:
+            raise ValueError("Graph profile id differs from group member id")
+        return {
+            "id": user_id,
+            "response_body": profile,
+            "request_url": str(response.request.url),
+        }
 
-        members = self.client.groups.by_group_id(
-            canonical_id
-        ).transitive_members.graph_user
+    def _first_member_page_url(self, limit: int | None) -> str:
         query = urlencode(
             {
                 "$count": "true",
@@ -162,70 +162,53 @@ class MsGraphUserSource:
                 "$top": min(limit or 999, 999),
             }
         )
-        first_url = (
+        return (
             "https://graph.microsoft.com/v1.0/groups/"
-            f"{quote(canonical_id, safe='')}/transitiveMembers/microsoft.graph.user?{query}"
+            f"{quote(self.group_id, safe='')}/transitiveMembers/microsoft.graph.user?{query}"
         )
-        page = _raw_response(
-            await members.with_url(first_url).get(
-                request_configuration=_raw_config(advanced=True)
-            )
-        )
+
+    async def _retrieve_user_snapshots(
+        self, limit: int | None = None
+    ) -> AsyncIterator[GraphUserSnapshot]:
+        if limit is not None and limit < 1:
+            raise ValueError("limit must be positive")
+
+        members = self.client.groups.by_group_id(
+            self.group_id
+        ).transitive_members.graph_user
+        next_page_url: str | None = self._first_member_page_url(limit)
         seen_urls: set[str] = set()
         count = 0
-        while True:
+        while next_page_url:
+            page_url = next_page_url
+            next_page_url = None
+            if page_url in seen_urls:
+                raise ValueError("Graph repeated an @odata.nextLink")
+            seen_urls.add(page_url)
+            page = _raw_response(
+                await members.with_url(page_url).get(
+                    request_configuration=_raw_config(advanced=True)
+                )
+            )
             body = page.json()
             values = body.get("value")
             if not isinstance(values, list):
                 raise TypeError("Graph member page has no value list")
             for member in values:
-                user_id = member.get("id")
-                if not user_id:
-                    raise ValueError("Graph member has no id")
-                query = UserItemRequestBuilder.UserItemRequestBuilderGetQueryParameters(
-                    select=list(FIELDS)
-                )
-                profile_response = _raw_response(
-                    await self.client.users.by_user_id(user_id).get(
-                        request_configuration=_raw_config(query)
-                    )
-                )
-                profile = profile_response.json()
-                if profile.get("id") != user_id:
-                    raise ValueError("Graph profile id differs from group member id")
-                yield {
-                    "id": user_id,
-                    "response_body": profile,
-                    "request_url": str(profile_response.request.url),
-                }
+                yield await self._retrieve_detailed_user_snapshot(member)
                 count += 1
                 if limit is not None and count >= limit:
                     return
 
-            next_url = body.get("@odata.nextLink")
-            if not next_url:
-                return
-            next_url = _graph_url(next_url)
-            if next_url in seen_urls:
-                raise ValueError("Graph repeated an @odata.nextLink")
-            seen_urls.add(next_url)
-            page = _raw_response(
-                await members.with_url(next_url).get(
-                    request_configuration=_raw_config(advanced=True)
-                )
-            )
-
-
-class MsGraphApiUserService:
-    def __init__(self, graph: MsGraphUserSource, repository: UserRepository) -> None:
-        self.graph = graph
-        self.repository = repository
+            candidate_url = body.get("@odata.nextLink")
+            if candidate_url:
+                next_page_url = _graph_url(candidate_url)
 
     async def retrieve_users_from_external_source(
         self, limit: int | None = None
     ) -> int:
         count = 0
-        async for snapshot in self.graph.snapshots(limit):
+        async for snapshot in self._retrieve_user_snapshots(limit):
             await self.repository.save_graph_snapshot(snapshot)
             count += 1
         return count

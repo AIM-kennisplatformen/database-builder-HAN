@@ -22,6 +22,9 @@ dependencies = [
 [tool.uv]
 package = false
 
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
 [dependency-groups]
 dev = [
     "poethepoet>=0.37,<1",
@@ -30,8 +33,6 @@ dev = [
 ]
 
 [tool.poe.tasks]
-test = { cmd = "python tests/test_graph.py", env = { PYTHONPATH = "src" } }
-test-db = { cmd = "python tests/test_postgres.py", env = { PYTHONPATH = "src" } }
 migrate-up = "alembic -c alembic.ini upgrade head"
 migrate-down = "alembic -c alembic.ini downgrade -1"
 start = "uvicorn main:app --app-dir src --env-file ../.env --host 127.0.0.1 --port 8000 --reload"
