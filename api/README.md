@@ -33,6 +33,7 @@ Omit `limit` to retrieve every member returned by Graph.
 The refresh preserves prior source versions and existing manual overrides; it does not yet mark users absent when they disappear from Graph.
 The Graph employee group ID is read from `GROUP_ID` in the root `.env` file when the application starts.
 The authentication strategy uses interactive browser sign-in with the configured redirect URI and delegated scopes.
+Set `GRAPH_BROWSER_AUTO_SIGN_IN=true` to reuse an existing Microsoft sign-in in the browser when possible. This opens the browser without an account-selection prompt; Microsoft may still request sign-in, consent, or MFA. The option is off by default. For this option, `GRAPH_REDIRECT_URI` must use `http://localhost` with a port and match the app registration.
 `openid`, `profile`, and `offline_access` are omitted from configured scopes because MSAL adds them automatically.
 Set `POSTGRES_HOST` if PostgreSQL is not reachable at `127.0.0.1`.
 

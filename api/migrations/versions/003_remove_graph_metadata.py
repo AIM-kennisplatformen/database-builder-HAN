@@ -15,8 +15,8 @@ depends_on = None
 def upgrade() -> None:
     connection = op.get_bind()
     connection.exec_driver_sql(
-        "ALTER TABLE user_ms_graph_sources "
-        "DROP CONSTRAINT user_ms_graph_sources_presence_check"
+        """ALTER TABLE user_ms_graph_sources
+        "DROP CONSTRAINT user_ms_graph_sources_presence_check"""
     )
     connection.exec_driver_sql(
         """ALTER TABLE user_ms_graph_sources
@@ -37,8 +37,8 @@ def upgrade() -> None:
 def downgrade() -> None:
     connection = op.get_bind()
     connection.exec_driver_sql(
-        "ALTER TABLE user_ms_graph_sources "
-        "DROP CONSTRAINT user_ms_graph_sources_presence_check"
+        """ALTER TABLE user_ms_graph_sources
+        "DROP CONSTRAINT user_ms_graph_sources_presence_check"""
     )
     connection.exec_driver_sql(
         """ALTER TABLE user_ms_graph_sources

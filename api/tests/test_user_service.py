@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from httpx import Request, Response
 
-from services.ms_graph_api_user_service import (
+from services.user_service import (
     MsGraphApiUserService,
     user_from_graph_snapshot,
 )
@@ -52,18 +52,20 @@ def test_retrieves_users_across_pages() -> None:
         ["first", "second"],
     )
     repository = MagicMock()
-    repository.save_graph_snapshot = AsyncMock()
+    repository.save_ms_graph_user = AsyncMock()
     service = MsGraphApiUserService(client, "group", repository)
     saved = asyncio.run(service.retrieve_users_from_external_source())
 
     assert saved == 2
     assert [
-        call.args[0].id for call in repository.save_graph_snapshot.call_args_list
+        call.args[0].id for call in repository.save_ms_graph_user.call_args_list
     ] == [
         "first",
         "second",
     ]
-    assert all(len(call.args) == 1 for call in repository.save_graph_snapshot.call_args_list)
+    assert all(
+        len(call.args) == 1 for call in repository.save_ms_graph_user.call_args_list
+    )
     assert (
         client.groups.by_group_id.return_value.transitive_members.graph_user.with_url.call_count
         == 2
@@ -73,14 +75,16 @@ def test_retrieves_users_across_pages() -> None:
 def test_repeated_next_link_stops_pagination() -> None:
     client = _client([], [])
     members = client.groups.by_group_id.return_value.transitive_members.graph_user
-    members.with_url.return_value.get = AsyncMock(
-        side_effect=lambda **_: _response(
+
+    def repeated_page(**_kwargs: object) -> Response:
+        return _response(
             "https://graph.microsoft.com/v1.0/members",
             {"value": [], "@odata.nextLink": members.with_url.call_args.args[0]},
         )
-    )
+
+    members.with_url.return_value.get = AsyncMock(side_effect=repeated_page)
     repository = MagicMock()
-    repository.save_graph_snapshot = AsyncMock()
+    repository.save_ms_graph_user = AsyncMock()
     service = MsGraphApiUserService(client, "group", repository)
 
     with pytest.raises(ValueError, match="repeated an @odata.nextLink"):
@@ -100,13 +104,13 @@ def test_limit_stops_before_fetching_another_profile() -> None:
         ["first", "second"],
     )
     repository = MagicMock()
-    repository.save_graph_snapshot = AsyncMock()
+    repository.save_ms_graph_user = AsyncMock()
     service = MsGraphApiUserService(client, "group", repository)
     saved = asyncio.run(service.retrieve_users_from_external_source(limit=1))
 
     assert saved == 1
     assert client.users.by_user_id.call_count == 1
-    repository.save_graph_snapshot.assert_awaited_once()
+    repository.save_ms_graph_user.assert_awaited_once()
 
 
 @pytest.mark.parametrize(

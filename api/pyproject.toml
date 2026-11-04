@@ -14,6 +14,7 @@ dependencies = [
     "fastapi[standard]>=0.115,<1",
     "httpx>=0.27,<1",
     "msgraph-sdk>=1,<2",
+    "msal>=1,<2",
     "psycopg[binary]>=3.2,<4",
     "sqlalchemy>=2,<3",
     "uvicorn>=0.30,<1",
@@ -29,6 +30,18 @@ prepend_sys_path = ["%(here)s/src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+
+[tool.basedpyright]
+include = ["src", "tests"]
+venvPath = "."
+venv = ".venv"
+allowedUntypedLibraries = ["msal"]
+
+executionEnvironments = [
+  { root = "tests", extraPaths = ["src"], reportAny = false, reportExplicitAny = false, reportMissingTypeStubs = false, reportUnusedCallResult = false },
+  { root = "src" },
+  { root = "migrations", extraPaths = ["src"], reportUnusedCallResult = false }
+]
 
 [dependency-groups]
 dev = [

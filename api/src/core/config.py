@@ -26,6 +26,7 @@ class Config(BaseSettings):
     graph_scopes: Annotated[tuple[str, ...], NoDecode] = ()
     group_id: str = ""
     graph_redirect_uri: str = Field(default="", min_length=1, validate_default=True)
+    graph_browser_auto_sign_in: bool = False
 
     @field_validator("graph_scopes", mode="before")
     @classmethod

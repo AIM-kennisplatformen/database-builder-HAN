@@ -1,4 +1,4 @@
-"""Authenticate to Graph, retrieve users, and store their source snapshots."""
+"""Retrieve Graph users and store their source snapshots."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ from collections.abc import AsyncIterator
 from typing import TypedDict, cast
 from urllib.parse import quote, urlencode, urlparse
 
-from azure.identity import InteractiveBrowserCredential
 from httpx import Response
 from kiota_abstractions.base_request_configuration import RequestConfiguration
 from kiota_abstractions.native_response_handler import NativeResponseHandler
@@ -56,21 +55,6 @@ def user_from_graph_snapshot(snapshot: GraphUserSnapshot) -> User:
         interests=_optional_strings(profile, "interests"),
     )
     return user
-
-
-class InteractiveBrowserAuth:
-    def __init__(self, tenant_id: str, client_id: str, redirect_uri: str) -> None:
-        self.tenant_id: str = tenant_id
-        self.client_id: str = client_id
-        self.redirect_uri: str = redirect_uri
-
-    def create_credential(self) -> InteractiveBrowserCredential:
-        return InteractiveBrowserCredential(
-            tenant_id=self.tenant_id,
-            client_id=self.client_id,
-            redirect_uri=self.redirect_uri,
-            prompt="select_account",
-        )
 
 
 FIELDS = (
@@ -217,6 +201,6 @@ class MsGraphApiUserService:
     ) -> int:
         count = 0
         async for snapshot in self._retrieve_user_snapshots(limit):
-            await self.repository.save_graph_snapshot(user_from_graph_snapshot(snapshot))
+            await self.repository.save_ms_graph_user(user_from_graph_snapshot(snapshot))
             count += 1
         return count

@@ -34,7 +34,7 @@ class PostgresUserRepository:
             for row in await cursor.fetchall():
                 yield USER_ROW.validate_python(row)
 
-    async def save_graph_snapshot(self, user: User) -> None:
+    async def save_ms_graph_user(self, user: User) -> None:
         async with await self._connect() as connection:
             # Serialize refreshes for one Graph ID before inspecting its open range.
             _ = await connection.execute(

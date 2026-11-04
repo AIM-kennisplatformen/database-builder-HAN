@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Query
 from api.dependencies import get_user_repository, get_user_service
 from domain.repositories.user_repository import UserRepository
 from schemas.user import RefreshUsersResponse, UserResponse
-from services.ms_graph_api_user_service import MsGraphApiUserService
+from services.user_service import MsGraphApiUserService
 
 router = APIRouter(tags=["Users"])
 

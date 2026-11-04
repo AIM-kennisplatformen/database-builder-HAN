@@ -5,7 +5,7 @@ from typing import Protocol, cast
 from fastapi import FastAPI, Request
 
 from domain.repositories.user_repository import UserRepository
-from services.ms_graph_api_user_service import MsGraphApiUserService
+from services.user_service import MsGraphApiUserService
 
 
 class ApplicationState(Protocol):
