@@ -6,10 +6,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from httpx import Request, Response
 
-from services.ms_graph_api_user_service import MsGraphApiUserService
+from services.ms_graph_api_user_service import (
+    MsGraphApiUserService,
+    user_from_graph_snapshot,
+)
 
 
-def _response(url: str, body: dict) -> Response:
+def _response(url: str, body: dict[str, object]) -> Response:
     return Response(200, json=body, request=Request("GET", url))
 
 
@@ -60,12 +63,7 @@ def test_retrieves_users_across_pages() -> None:
         "first",
         "second",
     ]
-    assert repository.save_graph_snapshot.call_args_list[0].args[1] == {
-        "id": "first"
-    }
-    assert repository.save_graph_snapshot.call_args_list[0].args[2] == (
-        "https://graph.microsoft.com/v1.0/users/first"
-    )
+    assert all(len(call.args) == 1 for call in repository.save_graph_snapshot.call_args_list)
     assert (
         client.groups.by_group_id.return_value.transitive_members.graph_user.with_url.call_count
         == 2
@@ -109,3 +107,19 @@ def test_limit_stops_before_fetching_another_profile() -> None:
     assert saved == 1
     assert client.users.by_user_id.call_count == 1
     repository.save_graph_snapshot.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("profile", "field"),
+    [({"displayName": 123}, "displayName"), ({"skills": ["Python", 123]}, "skills")],
+)
+def test_rejects_invalid_graph_profile_fields(
+    profile: dict[str, object], field: str
+) -> None:
+    with pytest.raises(TypeError, match=field):
+        user_from_graph_snapshot(
+            {
+                "id": "first",
+                "response_body": profile,
+            }
+        )

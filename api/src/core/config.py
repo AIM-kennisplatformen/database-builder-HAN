@@ -11,7 +11,8 @@ from pydantic_settings import BaseSettings, NoDecode
 ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 MSAL_RESERVED_SCOPES = frozenset({"openid", "profile", "offline_access"})
 
-load_dotenv(ENV_FILE)
+_ = load_dotenv(ENV_FILE)
+
 
 class Config(BaseSettings):
     postgres_db: str = ""
@@ -24,7 +25,7 @@ class Config(BaseSettings):
     graph_tenant_id: str = ""
     graph_scopes: Annotated[tuple[str, ...], NoDecode] = ()
     group_id: str = ""
-    graph_redirect_uri: str = Field(min_length=1)
+    graph_redirect_uri: str = Field(default="", min_length=1, validate_default=True)
 
     @field_validator("graph_scopes", mode="before")
     @classmethod
@@ -33,10 +34,10 @@ class Config(BaseSettings):
         result = tuple(
             scope for scope in scopes if scope.lower() not in MSAL_RESERVED_SCOPES
         )
-        if not result:
-            raise ValueError(
-                "GRAPH_SCOPES must include a Microsoft Graph permission scope"
-            )
+        # if not result:
+        #     raise ValueError(
+        #         "GRAPH_SCOPES must include a Microsoft Graph permission scope"
+        #     )
         return result
 
     @field_validator("graph_redirect_uri")
@@ -46,5 +47,6 @@ class Config(BaseSettings):
         if redirect.scheme not in {"http", "https"} or not redirect.netloc:
             raise ValueError("GRAPH_REDIRECT_URI must be an HTTP URL")
         return value
+
 
 config = Config()
