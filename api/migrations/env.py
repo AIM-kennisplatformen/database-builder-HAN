@@ -5,18 +5,17 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
 from sqlalchemy.pool import NullPool
 
-from config import load_config
+from core.config import config
 
 
 def run_migrations_online() -> None:
-    settings = load_config()
     url = URL.create(
         "postgresql+psycopg",
-        username=settings.postgres_user,
-        password=settings.postgres_password,
-        host=settings.postgres_host,
-        port=settings.postgres_port,
-        database=settings.postgres_db,
+        username=config.postgres_user,
+        password=config.postgres_password,
+        host=config.postgres_host,
+        port=config.postgres_port,
+        database=config.postgres_db,
     )
     engine = create_engine(url, poolclass=NullPool)
     try:

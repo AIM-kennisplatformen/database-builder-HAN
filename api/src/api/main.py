@@ -9,20 +9,19 @@ from alembic.config import Config
 from fastapi import FastAPI
 from msgraph.graph_service_client import GraphServiceClient
 
-from config import load_config
-from users.controller.user_controller import router as ms_graph_users_router
-from users.repository.postgres_user_repository import PostgresUserRepository
-from users.service.ms_graph_api_user_service import (
+from api.users import router as users_router
+from core.config import config
+from db.postgres.user_repository import PostgresUserRepository
+from services.ms_graph_api_user_service import (
     InteractiveBrowserAuth,
     MsGraphApiUserService,
 )
 
-ALEMBIC_CONFIG = Path(__file__).resolve().parents[1] / "pyproject.toml"
+ALEMBIC_CONFIG = Path(__file__).resolve().parents[2] / "pyproject.toml"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    config = load_config()
     await to_thread(command.upgrade, Config(toml_file=str(ALEMBIC_CONFIG)), "head")
     auth = InteractiveBrowserAuth(
         config.graph_tenant_id, config.graph_client_id, config.graph_redirect_uri
@@ -46,4 +45,4 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="HAN management API", lifespan=lifespan)
-app.include_router(ms_graph_users_router)
+app.include_router(users_router)

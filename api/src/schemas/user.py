@@ -1,9 +1,11 @@
-"""User data returned by the management API."""
+"""User API response schemas."""
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
-class User(BaseModel):
+class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     display_name: str | None = None
     given_name: str | None = None
@@ -15,3 +17,7 @@ class User(BaseModel):
     skills: list[str] | None = None
     responsibilities: list[str] | None = None
     interests: list[str] | None = None
+
+
+class RefreshUsersResponse(BaseModel):
+    saved: int

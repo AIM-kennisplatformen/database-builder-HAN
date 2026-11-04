@@ -10,13 +10,14 @@ requires-python = ">=3.15"
 dependencies = [
     "alembic>=1.16,<2",
     "azure-identity>=1,<2",
-    "python-dotenv>=1,<2",
+    "pydantic-settings>=2,<3",
     "fastapi[standard]>=0.115,<1",
     "httpx>=0.27,<1",
     "msgraph-sdk>=1,<2",
     "psycopg[binary]>=3.2,<4",
     "sqlalchemy>=2,<3",
     "uvicorn>=0.30,<1",
+    "dotenv>=0.9.9",
 ]
 
 [tool.uv]
@@ -31,6 +32,7 @@ pythonpath = ["src"]
 
 [dependency-groups]
 dev = [
+    "basedpyright>=1.40.2",
     "poethepoet>=0.37,<1",
     "pytest>=9.2.0",
     "ruff>=0.17.3",
@@ -39,4 +41,4 @@ dev = [
 [tool.poe.tasks]
 migrate-up = "alembic -c pyproject.toml upgrade head"
 migrate-down = "alembic -c pyproject.toml downgrade -1"
-start = "uvicorn main:app --app-dir src --env-file ../.env --host 127.0.0.1 --port 8000 --reload"
+start = "uvicorn api.main:app --app-dir src --env-file ../.env --host 127.0.0.1 --port 8000 --reload"

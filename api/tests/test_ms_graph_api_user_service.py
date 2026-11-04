@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from httpx import Request, Response
 
-from users.service.ms_graph_api_user_service import MsGraphApiUserService
+from services.ms_graph_api_user_service import MsGraphApiUserService
 
 
 def _response(url: str, body: dict) -> Response:
@@ -55,11 +55,17 @@ def test_retrieves_users_across_pages() -> None:
 
     assert saved == 2
     assert [
-        call.args[0]["id"] for call in repository.save_graph_snapshot.call_args_list
+        call.args[0].id for call in repository.save_graph_snapshot.call_args_list
     ] == [
         "first",
         "second",
     ]
+    assert repository.save_graph_snapshot.call_args_list[0].args[1] == {
+        "id": "first"
+    }
+    assert repository.save_graph_snapshot.call_args_list[0].args[2] == (
+        "https://graph.microsoft.com/v1.0/users/first"
+    )
     assert (
         client.groups.by_group_id.return_value.transitive_members.graph_user.with_url.call_count
         == 2

@@ -2,21 +2,18 @@
 
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
+from typing import Any
 
 import psycopg
 from psycopg.types.json import Jsonb
 
-from config import AppConfig
-from database import connect
-from users.service.ms_graph_api_user_service import (
-    GraphUserSnapshot,
-    user_from_snapshot,
-)
-from users.user import User
+from core.config import Config
+from db.postgres.postgres import connect
+from domain.models.user import User
 
 
 class PostgresUserRepository:
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(self, config: Config) -> None:
         self.config = config
 
     async def _connect(self) -> psycopg.AsyncConnection:
@@ -34,10 +31,11 @@ class PostgresUserRepository:
                 (limit,),
             )
             for row in await cursor.fetchall():
-                yield User.model_validate(row)
+                yield User(**row)
 
-    async def save_graph_snapshot(self, snapshot: GraphUserSnapshot) -> None:
-        user = user_from_snapshot(snapshot)
+    async def save_graph_snapshot(
+        self, user: User, response_body: dict[str, Any], request_url: str
+    ) -> None:
         async with await self._connect() as connection:
             # Serialize refreshes for one Graph ID before inspecting its open range.
             await connection.execute(
@@ -90,7 +88,7 @@ class PostgresUserRepository:
                     user.skills,
                     user.responsibilities,
                     user.interests,
-                    Jsonb(snapshot["response_body"]),
-                    snapshot["request_url"],
+                    Jsonb(response_body),
+                    request_url,
                 ),
             )

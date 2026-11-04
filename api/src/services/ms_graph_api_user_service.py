@@ -8,7 +8,6 @@ from urllib.parse import quote, urlencode, urlparse
 
 from azure.core.credentials import TokenCredential
 from azure.identity import InteractiveBrowserCredential
-from fastapi import Request
 from httpx import Response
 from kiota_abstractions.base_request_configuration import RequestConfiguration
 from kiota_abstractions.native_response_handler import NativeResponseHandler
@@ -18,20 +17,40 @@ from msgraph.generated.users.item.user_item_request_builder import (
 )
 from msgraph.graph_service_client import GraphServiceClient
 
-from users.repository.user_repository import UserRepository
-from users.user import User
+from domain.models.user import User
+from domain.repositories.user_repository import UserRepository
 
 
-class GraphAuthStrategy(Protocol):
+class GraphUserSnapshot(TypedDict):
+    id: str
+    response_body: dict[str, Any]
+    request_url: str
+
+
+def user_from_graph_snapshot(snapshot: GraphUserSnapshot) -> User:
+    profile = snapshot["response_body"]
+    user = User(
+        id=snapshot["id"],
+        display_name=profile.get("displayName"),
+        given_name=profile.get("givenName"),
+        surname=profile.get("surname"),
+        mail=profile.get("mail"),
+        company_name=profile.get("companyName"),
+        department=profile.get("department"),
+        job_title=profile.get("jobTitle"),
+        skills=profile.get("skills"),
+        responsibilities=profile.get("responsibilities"),
+        interests=profile.get("interests"),
+    )
+    return user
+
+
+class GraphAuthStrategy(TokenCredential, Protocol):
     """Create a credential for one Graph client lifetime."""
 
     def create_credential(self) -> ClosableTokenCredential: ...
 
-
-class ClosableTokenCredential(TokenCredential, Protocol):
-    """A Graph credential whose resources can be released at shutdown."""
-
-    def close(self) -> None: ...
+    def close_credential(self, credential: ClosableTokenCredential) -> None: ...
 
 
 class InteractiveBrowserAuth:
@@ -49,10 +68,6 @@ class InteractiveBrowserAuth:
         )
 
 
-def get_auth_strategy(request: Request) -> GraphAuthStrategy:
-    return request.app.state.auth_strategy
-
-
 FIELDS = (
     "id",
     "displayName",
@@ -66,29 +81,6 @@ FIELDS = (
     "responsibilities",
     "interests",
 )
-
-
-class GraphUserSnapshot(TypedDict):
-    id: str
-    response_body: dict[str, Any]
-    request_url: str
-
-
-def user_from_snapshot(snapshot: GraphUserSnapshot) -> User:
-    profile = snapshot["response_body"]
-    return User(
-        id=snapshot["id"],
-        display_name=profile.get("displayName"),
-        given_name=profile.get("givenName"),
-        surname=profile.get("surname"),
-        mail=profile.get("mail"),
-        company_name=profile.get("companyName"),
-        department=profile.get("department"),
-        job_title=profile.get("jobTitle"),
-        skills=profile.get("skills"),
-        responsibilities=profile.get("responsibilities"),
-        interests=profile.get("interests"),
-    )
 
 
 def _raw_config(
@@ -128,7 +120,6 @@ class MsGraphApiUserService:
         self.client = client
         self.group_id = group_id
         self.repository = repository
-
 
     async def _retrieve_detailed_user_snapshot(
         self, member: dict[str, Any]
@@ -209,6 +200,10 @@ class MsGraphApiUserService:
     ) -> int:
         count = 0
         async for snapshot in self._retrieve_user_snapshots(limit):
-            await self.repository.save_graph_snapshot(snapshot)
+            await self.repository.save_graph_snapshot(
+                user_from_graph_snapshot(snapshot),
+                snapshot["response_body"],
+                snapshot["request_url"],
+            )
             count += 1
         return count
