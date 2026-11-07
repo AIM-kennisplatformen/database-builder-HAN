@@ -7,7 +7,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
 
-from api.schemas.team import TeamFileResponse, TeamFilesQuery, TeamResponse, TeamsQuery
+from api.schemas.team import (
+    TeamErrorResponse,
+    TeamFileResponse,
+    TeamFilesQuery,
+    TeamResponse,
+    TeamsQuery,
+)
 from dependencies import get_team_service
 from services.team_service import TeamService, TeamServiceError, TeamServiceErrorCode
 
@@ -41,6 +47,30 @@ ERROR_RESPONSES: dict[TeamServiceErrorCode, tuple[int, str]] = {
     TeamServiceErrorCode.NOT_A_FILE: (400, "Selected item is not a file"),
 }
 
+TEAM_ERROR_RESPONSES: dict[int | str, dict[str, object]] = {
+    400: {
+        "model": TeamErrorResponse,
+        "description": "Invalid identifier or file selection.",
+    },
+    401: {
+        "model": TeamErrorResponse,
+        "description": "Graph sign-in is unavailable or expired.",
+    },
+    403: {
+        "model": TeamErrorResponse,
+        "description": "Graph access or Team membership denied.",
+    },
+    404: {"model": TeamErrorResponse, "description": "Graph resource not found."},
+    429: {
+        "model": TeamErrorResponse,
+        "description": "Graph throttled the request; see Retry-After.",
+    },
+    502: {
+        "model": TeamErrorResponse,
+        "description": "Graph request or response failed.",
+    },
+}
+
 
 def handle_team_service_error(_request: Request, exception: Exception) -> JSONResponse:
     if not isinstance(exception, TeamServiceError):
@@ -54,7 +84,15 @@ def handle_team_service_error(_request: Request, exception: Exception) -> JSONRe
     return JSONResponse(status_code=status, content={"detail": detail}, headers=headers)
 
 
-@router.api_route("/teams", methods=["QUERY"], response_model=list[TeamResponse])
+# TODO: Move to HTTP QUERY when FastAPI's OpenAPI docs support it.
+@router.get(
+    "/teams",
+    response_model=list[TeamResponse],
+    summary="List joined Teams",
+    description="Search Teams directly joined by the account signed in through the shared Graph credential. Send a JSON body; use `{}` for all joined Teams.",
+    response_description="Matching Teams.",
+    responses=TEAM_ERROR_RESPONSES,
+)
 async def list_joined_teams(
     body: TeamsQuery,
     service: Annotated[TeamService, Depends(get_team_service)],
@@ -63,8 +101,14 @@ async def list_joined_teams(
     return [TeamResponse(id=team.id, display_name=team.display_name) for team in teams]
 
 
-@router.api_route(
-    "/teams/{team_id}/files", methods=["QUERY"], response_model=list[TeamFileResponse]
+# TODO: Move to HTTP QUERY when FastAPI's OpenAPI docs support it.
+@router.get(
+    "/teams/{team_id}/files",
+    response_model=list[TeamFileResponse],
+    summary="List Team files",
+    description="Search files in a directly joined Team's group document libraries. Send a JSON body; filters combine with AND and apply before the limit. Use `{}` for defaults.",
+    response_description="Matching files and folders.",
+    responses=TEAM_ERROR_RESPONSES,
 )
 async def list_team_files(
     team_id: str,
@@ -89,7 +133,24 @@ async def list_team_files(
     ]
 
 
-@router.get("/teams/{team_id}/files/{drive_id}/{item_id}/download")
+@router.get(
+    "/teams/{team_id}/files/{drive_id}/{item_id}/download",
+    response_model=None,
+    response_class=Response,
+    summary="Download a Team file",
+    description="Download a file from a directly joined Team. The response uses the file's MIME type when known and sets an attachment filename.",
+    response_description="File bytes.",
+    responses={
+        **TEAM_ERROR_RESPONSES,
+        200: {
+            "content": {
+                "application/octet-stream": {
+                    "schema": {"type": "string", "format": "binary"}
+                }
+            }
+        },
+    },
+)
 async def download_team_file(
     team_id: str,
     drive_id: str,

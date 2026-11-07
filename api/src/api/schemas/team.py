@@ -4,14 +4,25 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class TeamsQuery(BaseModel):
-    name: str | None = None
+    name: str | None = Field(
+        default=None, description="Case-insensitive substring of the Team name."
+    )
 
 
 class TeamFilesQuery(BaseModel):
-    path: str | None = None
-    name: str | None = None
-    recursive: bool = False
-    limit: int = Field(default=100, ge=1, le=500)
+    path: str | None = Field(
+        default=None,
+        description="Case-insensitive path prefix relative to a document library root.",
+    )
+    name: str | None = Field(
+        default=None, description="Case-insensitive substring of the file name."
+    )
+    recursive: bool = Field(
+        default=False, description="Include files in nested folders."
+    )
+    limit: int = Field(
+        default=100, ge=1, le=500, description="Maximum number of matching files."
+    )
 
     @field_validator("path")
     @classmethod
@@ -42,3 +53,7 @@ class TeamFileResponse(BaseModel):
     type: str
     size: int | None = None
     web_url: str | None = None
+
+
+class TeamErrorResponse(BaseModel):
+    detail: str

@@ -12,7 +12,7 @@ from msgraph.graph_service_client import GraphServiceClient
 
 from api.routes.teams import handle_team_service_error
 from api.routes.teams import router as teams_router
-from api.users import router as users_router
+from api.routes.users import router as users_router
 from core.config import config
 from db.postgres.user_repository import PostgresUserRepository
 from services.team_service import TeamService, TeamServiceError

@@ -246,14 +246,14 @@ def test_rejects_external_pagination_url() -> None:
     assert error.value.code == TeamServiceErrorCode.INVALID_GRAPH_RESPONSE
 
 
-def test_query_routes_accept_body_filters() -> None:
+def test_get_routes_accept_body_filters() -> None:
     methods = {
         route.path: route.methods
         for route in router.routes
         if isinstance(route, APIRoute)
     }
-    assert methods["/teams"] == {"QUERY"}
-    assert methods["/teams/{team_id}/files"] == {"QUERY"}
+    assert methods["/teams"] == {"GET"}
+    assert methods["/teams/{team_id}/files"] == {"GET"}
 
     class StubService:
         team_name: str | None = None
@@ -321,7 +321,7 @@ def test_query_routes_accept_body_filters() -> None:
     )
 
 
-def test_query_http_method_parses_json_body() -> None:
+def test_get_http_method_parses_json_body() -> None:
     app = FastAPI()
     app.include_router(router)
     stub = MagicMock()
@@ -333,13 +333,13 @@ def test_query_http_method_parses_json_body() -> None:
 
     app.dependency_overrides[get_team_service] = override_team_service
 
-    async def verify_query_responses() -> None:
+    async def verify_get_responses() -> None:
         async with httpx.AsyncClient(
             transport=ASGITransport(app), base_url="http://test"
         ) as client:
-            teams = await client.request("QUERY", "/teams", json={"name": "research"})
+            teams = await client.request("GET", "/teams", json={"name": "research"})
             files = await client.request(
-                "QUERY",
+                "GET",
                 f"/teams/{TEAM}/files",
                 json={
                     "path": "Reports",
@@ -348,12 +348,12 @@ def test_query_http_method_parses_json_body() -> None:
                     "recursive": True,
                 },
             )
-            wrong_method = await client.get("/teams")
+            wrong_method = await client.request("QUERY", "/teams", json={})
         assert teams.status_code == 200
         assert files.status_code == 200
         assert wrong_method.status_code == 405
 
-    asyncio.run(verify_query_responses())
+    asyncio.run(verify_get_responses())
     stub.list_joined_teams.assert_awaited_once_with(name="research")
     stub.list_team_files.assert_awaited_once_with(
         TEAM, 2, True, path="Reports", name="budget"

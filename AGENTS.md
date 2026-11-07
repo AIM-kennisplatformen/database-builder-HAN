@@ -7,10 +7,6 @@ You will behave as following:
 
 # Repository Instructions
 
-## Coding Style
-
-Follow the repository's [Markdown instructions](docs/standards/markdown.md) when creating or editing markdown files.
-
 ## Domain docs
 
 Use the [Functional Overview glossary](docs/software-guidebook/02-functional-overview.md#domain-glossary) for shared domain terms and `docs/software-guidebook/adr/` for architecture decisions.

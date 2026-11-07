@@ -4,6 +4,8 @@ The application retrieves HAN employee profiles through the Microsoft Graph Pyth
 `GET /users` reads the current effective values, including manual overrides, using source-independent snake-case fields.
 Each saved Graph version keeps its raw profile and request URL; the start of `valid_at` records when that version was stored.
 
+After starting the API, open `http://127.0.0.1:8001/docs` for interactive OpenAPI documentation or `http://127.0.0.1:8001/openapi.json` for the schema. The Teams listing operations use HTTP `GET` with JSON request bodies. Downloads return file bytes with a content type based on the file.
+
 Start PostgreSQL from the repository root:
 
 ```bash
@@ -56,12 +58,12 @@ uv run poe test-db
 The Teams routes use the application's shared interactive browser credential. No bearer token is needed on HTTP requests. All requests act as the account signed in through that credential; direct Team membership and file access checks apply to that account. Configure `GRAPH_SCOPES` with delegated Microsoft Graph `GroupMember.Read.All`, `Group.Read.All`, and `Files.Read.All` permissions and grant consent in the public client app registration. When `GRAPH_SCOPES` is empty, token acquisition uses `https://graph.microsoft.com/.default`. The signed-in account also needs SharePoint access.
 
 ```bash
-curl -X QUERY -H 'Content-Type: application/json' -d '{"name":"research"}' http://127.0.0.1:8001/teams
-curl -X QUERY -H 'Content-Type: application/json' -d '{"path":"General/Reports","name":"budget","recursive":true,"limit":100}' http://127.0.0.1:8001/teams/TEAM_ID/files
+curl -X GET -H 'Content-Type: application/json' -d '{"name":"research"}' http://127.0.0.1:8001/teams
+curl -X GET -H 'Content-Type: application/json' -d '{"path":"General/Reports","name":"budget","recursive":true,"limit":100}' http://127.0.0.1:8001/teams/TEAM_ID/files
 curl -OJ http://127.0.0.1:8001/teams/TEAM_ID/files/DRIVE_ID/ITEM_ID/download
 ```
 
-`QUERY /teams` takes a JSON body with optional `name` and returns directly joined Teams as objects with `id` and `display_name`. The name filter matches any case-insensitive substring. `QUERY /teams/{team_id}/files` takes a JSON body with optional `path` and `name`, plus `recursive` (default `false`) and `limit` (default 100, maximum 500). Filters combine with AND and apply before the limit. The path filter matches the start of the library-relative item path, ignoring case; partial folder or file names are allowed. Use `recursive: true` to search nested folders. The name filter selects files whose names contain the case-insensitive substring. Send `{}` to use defaults.
+`GET /teams` takes a JSON body with optional `name` and returns directly joined Teams as objects with `id` and `display_name`. The name filter matches any case-insensitive substring. `GET /teams/{team_id}/files` takes a JSON body with optional `path` and `name`, plus `recursive` (default `false`) and `limit` (default 100, maximum 500). Filters combine with AND and apply before the limit. The path filter matches the start of the library-relative item path, ignoring case; partial folder or file names are allowed. Use `recursive: true` to search nested folders. The name filter selects files whose names contain the case-insensitive substring. Send `{}` to use defaults.
 
 File results contain `library`, `drive_id`, `item_id`, `name`, `path` (relative to the library root), `type` (`file` or `folder`), and nullable `size` and `web_url`. The service follows Graph pages. The GET download route returns file bytes with a safe attachment filename. The SDK buffers each download in memory. Both Team routes require direct membership; downloads also check drive and item ownership.
 
