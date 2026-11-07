@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from api.dependencies import get_user_repository, get_user_service
+from dependencies import get_user_repository, get_user_service
 from domain.repositories.user_repository import UserRepository
 from schemas.user import RefreshUsersResponse, UserResponse
 from services.user_service import MsGraphApiUserService

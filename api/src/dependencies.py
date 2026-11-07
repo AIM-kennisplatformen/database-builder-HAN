@@ -5,12 +5,14 @@ from typing import Protocol, cast
 from fastapi import FastAPI, Request
 
 from domain.repositories.user_repository import UserRepository
+from services.team_service import TeamService
 from services.user_service import MsGraphApiUserService
 
 
 class ApplicationState(Protocol):
     user_repository: UserRepository
     user_service: MsGraphApiUserService
+    team_service: TeamService
 
 
 def _state(request: Request) -> ApplicationState:
@@ -23,3 +25,7 @@ def get_user_repository(request: Request) -> UserRepository:
 
 def get_user_service(request: Request) -> MsGraphApiUserService:
     return _state(request).user_service
+
+
+def get_team_service(request: Request) -> TeamService:
+    return _state(request).team_service

@@ -42,4 +42,4 @@ The required database adapters have different roles: `db/postgres/` handles Post
 
 ## Microsoft Graph integration
 
-The management API uses `msgraph-sdk` to make Microsoft Graph API calls and `azure-identity` to obtain delegated credentials. In [application setup](../../api/src/api/main.py), an Azure Identity `InteractiveBrowserCredential` is passed to the SDK's `GraphServiceClient`. This keeps credential acquisition in Azure Identity while the [Graph user service](../../api/src/services/user_service.py) uses the SDK for requests and pagination.
+The management API uses `msgraph-sdk` to make Microsoft Graph API calls and `azure-identity` to obtain delegated credentials. In [application setup](../../api/src/main.py), an Azure Identity `InteractiveBrowserCredential` is passed to the SDK's `GraphServiceClient`. This keeps credential acquisition in Azure Identity while the [Graph user service](../../api/src/services/user_service.py) uses the SDK for requests and pagination.
