@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import TypedDict, cast
+from typing import ClassVar, cast
 from urllib.parse import quote, urlencode, urlparse
 
 from httpx import Response
@@ -11,50 +11,55 @@ from kiota_abstractions.base_request_configuration import RequestConfiguration
 from kiota_abstractions.native_response_handler import NativeResponseHandler
 from kiota_http.middleware.options import ResponseHandlerOption
 from msgraph.graph_service_client import GraphServiceClient
+from pydantic import BaseModel, ConfigDict, Field
 
 from domain.models.user import User
 from domain.repositories.user_repository import UserRepository
 
 
-class GraphUserSnapshot(TypedDict):
-    id: str
-    response_body: dict[str, object]
+class GraphMember(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(strict=True)
+
+    id: str = Field(min_length=1)
 
 
-def _optional_string(profile: dict[str, object], field: str) -> str | None:
-    value = profile.get(field)
-    if value is not None and not isinstance(value, str):
-        raise TypeError(f"Graph profile field {field} must be a string")
-    return value
+class GraphMemberPage(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(strict=True)
+
+    value: list[GraphMember]
+    next_link: str | None = Field(default=None, alias="@odata.nextLink")
 
 
-def _optional_strings(profile: dict[str, object], field: str) -> list[str] | None:
-    value = profile.get(field)
-    if value is None:
-        return None
-    if not isinstance(value, list) or not all(
-        isinstance(item, str) for item in cast(list[object], value)
-    ):
-        raise TypeError(f"Graph profile field {field} must be a string list")
-    return cast(list[str], value)
+class GraphUserProfile(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(strict=True)
+
+    id: str = Field(min_length=1)
+    display_name: str | None = Field(default=None, alias="displayName")
+    given_name: str | None = Field(default=None, alias="givenName")
+    surname: str | None = None
+    mail: str | None = None
+    company_name: str | None = Field(default=None, alias="companyName")
+    department: str | None = None
+    job_title: str | None = Field(default=None, alias="jobTitle")
+    skills: list[str] | None = None
+    responsibilities: list[str] | None = None
+    interests: list[str] | None = None
 
 
-def user_from_graph_snapshot(snapshot: GraphUserSnapshot) -> User:
-    profile = snapshot["response_body"]
-    user = User(
-        id=snapshot["id"],
-        display_name=_optional_string(profile, "displayName"),
-        given_name=_optional_string(profile, "givenName"),
-        surname=_optional_string(profile, "surname"),
-        mail=_optional_string(profile, "mail"),
-        company_name=_optional_string(profile, "companyName"),
-        department=_optional_string(profile, "department"),
-        job_title=_optional_string(profile, "jobTitle"),
-        skills=_optional_strings(profile, "skills"),
-        responsibilities=_optional_strings(profile, "responsibilities"),
-        interests=_optional_strings(profile, "interests"),
+def user_from_graph_snapshot(profile: GraphUserProfile) -> User:
+    return User(
+        id=profile.id,
+        display_name=profile.display_name,
+        given_name=profile.given_name,
+        surname=profile.surname,
+        mail=profile.mail,
+        company_name=profile.company_name,
+        department=profile.department,
+        job_title=profile.job_title,
+        skills=profile.skills,
+        responsibilities=profile.responsibilities,
+        interests=profile.interests,
     )
-    return user
 
 
 FIELDS = (
@@ -72,18 +77,6 @@ FIELDS = (
 )
 
 
-def _raw_config[QueryParameters](
-    query_parameters: QueryParameters, *, advanced: bool = False
-) -> RequestConfiguration[QueryParameters]:
-    config = RequestConfiguration(
-        query_parameters=query_parameters,
-        options=[ResponseHandlerOption(NativeResponseHandler())],
-    )
-    if advanced:
-        config.headers.add("ConsistencyLevel", "eventual")
-    return config
-
-
 def _graph_url(url: str) -> str:
     parsed = urlparse(url)
     if (
@@ -95,22 +88,6 @@ def _graph_url(url: str) -> str:
     return url
 
 
-def _raw_response(value: object) -> Response:
-    """Validate the HTTP response returned by the native response handler."""
-    if not isinstance(value, Response):
-        raise TypeError("Graph did not return a native HTTP response")
-    return value
-
-
-def _json_object(value: object) -> dict[str, object]:
-    if not isinstance(value, dict):
-        raise TypeError("Graph did not return a JSON object")
-    mapping = cast(dict[object, object], value)
-    if not all(isinstance(key, str) for key in mapping):
-        raise TypeError("Graph did not return a JSON object")
-    return cast(dict[str, object], cast(object, mapping))
-
-
 class MsGraphApiUserService:
     def __init__(
         self, client: GraphServiceClient, group_id: str, repository: UserRepository
@@ -120,25 +97,27 @@ class MsGraphApiUserService:
         self.repository: UserRepository = repository
 
     async def _retrieve_detailed_user_snapshot(
-        self, member: dict[str, object]
-    ) -> GraphUserSnapshot:
-        user_id = member.get("id")
-        if not isinstance(user_id, str) or not user_id:
-            raise ValueError("Graph member has no id")
-        user_request = self.client.users.by_user_id(user_id)
+        self, member: GraphMember
+    ) -> GraphUserProfile:
+        user_request = self.client.users.by_user_id(member.id)
         query = user_request.UserItemRequestBuilderGetQueryParameters(
             select=list(FIELDS)
         )
-        response = _raw_response(
-            await user_request.get(request_configuration=_raw_config(query))
+        response = cast(
+            Response | None,
+            await user_request.get(
+                request_configuration=RequestConfiguration(
+                    query_parameters=query,
+                    options=[ResponseHandlerOption(NativeResponseHandler())],
+                )
+            ),
         )
-        profile = _json_object(cast(object, response.json()))
-        if profile.get("id") != user_id:
+        if response is None:
+            raise ValueError("Graph returned no user profile")
+        profile = GraphUserProfile.model_validate_json(response.content)
+        if profile.id != member.id:
             raise ValueError("Graph profile id differs from group member id")
-        return {
-            "id": user_id,
-            "response_body": profile,
-        }
+        return profile
 
     def _first_member_page_url(self, limit: int | None) -> str:
         query = urlencode(
@@ -156,7 +135,7 @@ class MsGraphApiUserService:
 
     async def _retrieve_user_snapshots(
         self, limit: int | None = None
-    ) -> AsyncIterator[GraphUserSnapshot]:
+    ) -> AsyncIterator[GraphUserProfile]:
         if limit is not None and limit < 1:
             raise ValueError("limit must be positive")
 
@@ -172,31 +151,28 @@ class MsGraphApiUserService:
             if page_url in seen_urls:
                 raise ValueError("Graph repeated an @odata.nextLink")
             seen_urls.add(page_url)
-            page = _raw_response(
-                await members.with_url(page_url).get(
-                    request_configuration=_raw_config(
-                        members.GraphUserRequestBuilderGetQueryParameters(),
-                        advanced=True,
-                    )
-                )
+            config = RequestConfiguration(
+                query_parameters=members.GraphUserRequestBuilderGetQueryParameters(),
+                options=[ResponseHandlerOption(NativeResponseHandler())],
             )
-            body = _json_object(cast(object, page.json()))
-            values = body.get("value")
-            if not isinstance(values, list):
-                raise TypeError("Graph member page has no value list")
-            for member in cast(list[object], values):
-                yield await self._retrieve_detailed_user_snapshot(_json_object(member))
+            config.headers.add("ConsistencyLevel", "eventual")
+            page = cast(
+                Response | None,
+                await members.with_url(page_url).get(request_configuration=config),
+            )
+            if page is None:
+                raise ValueError("Graph returned no member page")
+            body = GraphMemberPage.model_validate_json(page.content)
+            for member in body.value:
+                yield await self._retrieve_detailed_user_snapshot(member)
                 count += 1
                 if limit is not None and count >= limit:
                     return
 
-            candidate_url = body.get("@odata.nextLink")
-            if candidate_url is not None and not isinstance(candidate_url, str):
-                raise TypeError("Graph nextLink must be a string")
-            if candidate_url:
-                next_page_url = _graph_url(candidate_url)
+            if body.next_link:
+                next_page_url = _graph_url(body.next_link)
 
-    async def retrieve_users_from_external_source(
+    async def retrieve_han_employees_from_ms_graph(
         self, limit: int | None = None
     ) -> int:
         count = 0

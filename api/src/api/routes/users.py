@@ -41,5 +41,5 @@ async def refresh_users(
     ] = None,
 ) -> RefreshUsersResponse:
     return RefreshUsersResponse(
-        saved=await service.retrieve_users_from_external_source(limit)
+        saved=await service.retrieve_han_employees_from_ms_graph(limit)
     )

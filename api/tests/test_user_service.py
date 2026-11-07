@@ -5,8 +5,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import Request, Response
+from pydantic import ValidationError
 
 from services.user_service import (
+    GraphUserProfile,
     MsGraphApiUserService,
     user_from_graph_snapshot,
 )
@@ -54,7 +56,7 @@ def test_retrieves_users_across_pages() -> None:
     repository = MagicMock()
     repository.save_ms_graph_user = AsyncMock()
     service = MsGraphApiUserService(client, "group", repository)
-    saved = asyncio.run(service.retrieve_users_from_external_source())
+    saved = asyncio.run(service.retrieve_han_employees_from_ms_graph())
 
     assert saved == 2
     assert [
@@ -88,7 +90,7 @@ def test_repeated_next_link_stops_pagination() -> None:
     service = MsGraphApiUserService(client, "group", repository)
 
     with pytest.raises(ValueError, match="repeated an @odata.nextLink"):
-        asyncio.run(service.retrieve_users_from_external_source())
+        asyncio.run(service.retrieve_han_employees_from_ms_graph())
 
     assert members.with_url.call_count == 1
 
@@ -106,7 +108,7 @@ def test_limit_stops_before_fetching_another_profile() -> None:
     repository = MagicMock()
     repository.save_ms_graph_user = AsyncMock()
     service = MsGraphApiUserService(client, "group", repository)
-    saved = asyncio.run(service.retrieve_users_from_external_source(limit=1))
+    saved = asyncio.run(service.retrieve_han_employees_from_ms_graph(limit=1))
 
     assert saved == 1
     assert client.users.by_user_id.call_count == 1
@@ -120,10 +122,63 @@ def test_limit_stops_before_fetching_another_profile() -> None:
 def test_rejects_invalid_graph_profile_fields(
     profile: dict[str, object], field: str
 ) -> None:
-    with pytest.raises(TypeError, match=field):
-        user_from_graph_snapshot(
-            {
-                "id": "first",
-                "response_body": profile,
-            }
+    client = _client(
+        [
+            _response(
+                "https://graph.microsoft.com/v1.0/members", {"value": [{"id": "first"}]}
+            )
+        ],
+        [],
+    )
+    client.users.by_user_id.return_value.get = AsyncMock(
+        return_value=_response(
+            "https://graph.microsoft.com/v1.0/users/first", {"id": "first", **profile}
         )
+    )
+    repository = MagicMock()
+    repository.save_ms_graph_user = AsyncMock()
+
+    with pytest.raises(ValidationError, match=field):
+        asyncio.run(
+            MsGraphApiUserService(
+                client, "group", repository
+            ).retrieve_han_employees_from_ms_graph()
+        )
+
+    repository.save_ms_graph_user.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"value": "invalid"},
+        {"value": [{"id": 123}]},
+        {"value": [], "@odata.nextLink": 123},
+    ],
+)
+def test_rejects_invalid_graph_member_pages(body: dict[str, object]) -> None:
+    client = _client([_response("https://graph.microsoft.com/v1.0/members", body)], [])
+    repository = MagicMock()
+    repository.save_ms_graph_user = AsyncMock()
+
+    with pytest.raises(ValidationError):
+        asyncio.run(
+            MsGraphApiUserService(
+                client, "group", repository
+            ).retrieve_han_employees_from_ms_graph()
+        )
+
+    repository.save_ms_graph_user.assert_not_awaited()
+
+
+def test_profile_maps_graph_fields_to_user() -> None:
+    profile = GraphUserProfile.model_validate(
+        {"id": "first", "displayName": "First User", "skills": ["Python"]}
+    )
+
+    user = user_from_graph_snapshot(profile)
+
+    assert user.id == "first"
+    assert user.display_name == "First User"
+    assert user.skills == ["Python"]
