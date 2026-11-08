@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted; revised 2026-11-08
 
 ## Date
 
@@ -11,6 +11,7 @@ Accepted
 ## Decision Drivers
 
 - Operators need to request source refreshes, and some refreshes must run automatically ([ADR-002](ADR-002-application-structure.md)).
+- The employee-sync API must await the complete Microsoft Graph refresh and may stream progress with SSE.
 - A failed refresh must preserve previously valid data and be visible to an operator ([Quality Attributes](../03-quality-attributes.md)).
 - Ingestion needs retained source records and refresh state in PostgreSQL ([ADR-004](ADR-004-data-storage.md)).
 - The initial demonstration runs locally on an existing virtual machine with limited implementation and operational capacity ([ADR-001](ADR-001-runtime-and-deployment-target.md)).
@@ -23,75 +24,69 @@ Source access methods, update frequency, and acceptable data age are not yet est
 No ingestion flow, scheduler, worker, or event interface has been implemented ([Data](../09-data.md), [External Interfaces](../07-external-interfaces.md)).
 
 The [pipeline design issue](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16) still needs to define partial-data handling, retryable failures, and the TypeDB write boundary.
-This decision therefore addresses how refresh work starts and runs, without specifying source-specific extraction or graph update rules.
+This decision addresses where refresh work runs and how it starts, without specifying source-specific extraction or graph update rules.
 
 ## Options Considered
 
-### On-Demand Batch Jobs Only
+### All Refreshes in the API Process
 
-The management API starts a refresh when an operator requests it.
+The management API runs every operator-requested refresh to completion; automatic refreshes require a scheduler to invoke the same logic.
 
 Pros:
 
-- Few moving parts for the local demonstration.
-- Suitable for a newly supplied data dump.
+- The employee-sync request can await its result and optionally stream progress directly.
+- Few moving parts for operator-requested work.
 
 Cons:
 
-- Does not provide the automatic refreshes planned in [ADR-002](ADR-002-application-structure.md).
-- Long-running work in the API process could affect API responsiveness.
+- Long refreshes consume API process resources and can affect responsiveness.
+- Work in a disconnected request needs an explicit cancellation or continuation policy.
 
-### Scheduled Worker with On-Demand Requests
+### All Refreshes in a Worker
 
-A separate worker process belonging to the management and ingestion application runs refresh jobs requested by an operator or created by a schedule.
-PostgreSQL retains job state and source records; the worker applies successful results to TypeDB.
+The API records requested jobs in PostgreSQL; a separate worker processes both requested and scheduled jobs.
 
 Pros:
 
-- One ingestion path handles both requested and automatic refreshes.
-- A separate worker process can keep long-running refreshes away from the API server process.
+- Long-running extraction stays outside the API process.
 - Retained job state can support failure inspection and later retry design.
 
 Cons:
 
-- Requires worker lifecycle, scheduling, and coordination with PostgreSQL and TypeDB.
-- Source-specific intervals and failure behavior remain to be designed.
+- An awaited HTTP request needs to observe a separate job until completion, adding coordination and progress delivery.
 
-### Event-Driven Ingestion
+### API-Run Employee Sync with Shared Use Cases
 
-Source events or a message broker trigger processing when data changes.
+The employee-sync HTTP route awaits an asynchronous use case in the API process. Scheduled refreshes run in a separate worker process, which invokes the same use cases through their ports.
 
 Pros:
 
-- Could reduce delay between a source change and graph update if a selected source offers a suitable event interface.
+- The route can return a final result or stream progress while the sync runs.
+- HTTP and scheduled entry points reuse ingestion rules and port implementations.
 
 Cons:
 
-- No consumed event interface or broker has been defined for this project.
-- Event delivery, duplicate handling, and recovery would add design and operational work before source capabilities are known.
+- API responsiveness and request lifetime need attention during long employee syncs.
+- Different entry points require coordination if they can refresh the same source concurrently.
 
 ## Decision
 
-Run ingestion in a separate worker process within the management and ingestion application boundary established by [ADR-002](ADR-002-application-structure.md).
-Use scheduled jobs for automatic refreshes and the same job path for on-demand refresh requests.
-The management API records requested work in PostgreSQL, and the scheduler records automatic work there as well.
-The worker processes those jobs using the same ingestion logic and records progress and outcomes in PostgreSQL.
-Source records are retained there as specified by [ADR-004](ADR-004-data-storage.md); modeled entities, relations, and provenance are written to TypeDB.
+Use the API-run employee-sync path with shared use cases. The asynchronous `sync_employees` route awaits the complete refresh in the management API process. It may translate use-case progress into SSE messages. Domain use cases and ports remain independent of HTTP and SSE. Automatic refreshes run in a scheduled worker within the same management and ingestion application boundary; the worker invokes those use cases without going through the API route.
 
-Define the schedule, job concurrency, retry policy, and recovery behavior after source access and the pipeline failure design are validated under [issue #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16).
-Do not assume source events are available.
+PostgreSQL retains source records and refresh state as specified by [ADR-004](ADR-004-data-storage.md); modeled entities, relations, and provenance are written to TypeDB. Progress and outcome recording must remain available for operator inspection, including when the HTTP connection closes. Define the schedule, concurrency controls, retry and cancellation policies, and recovery behavior after source access and failure handling are validated under [issue #16](https://github.com/AIM-kennisplatformen/database-builder-HAN/issues/16).
 
 ## Consequences
 
 **Positive:**
 
-- Requested and automatic refreshes share one processing path.
-- The separate worker process keeps slow extraction out of the management API server process.
-- PostgreSQL can retain job outcomes for operator inspection.
+- An operator can await the employee refresh outcome from one HTTP request, with optional live progress.
+- Scheduled and requested refreshes can reuse the same core workflow without coupling it to HTTP.
+- Source records and refresh outcomes can be inspected after the request.
 
 **Negative:**
 
-- A worker and scheduler need to be operated alongside the management API.
+- A slow employee refresh occupies an API request and may affect API responsiveness.
+- Request timeouts, disconnects, and overlapping scheduled refreshes require explicit handling.
 - PostgreSQL and TypeDB updates require explicit failure and recovery handling.
 
 **Open:**
@@ -99,6 +94,7 @@ Do not assume source events are available.
 - Confirm which sources support automatic refresh and define their acceptable age and schedule.
 - Define how jobs resume or retry after failure without replacing previously valid graph data.
 - Define how operator corrections remain effective during later refreshes ([Principles](../05-principles.md)).
+- Decide whether a disconnected employee-sync request continues or cancels, and how its final outcome is retrieved.
 
 ## Related Decisions
 
