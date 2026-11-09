@@ -6,7 +6,7 @@ from msgraph.graph_service_client import GraphServiceClient
 from psycopg.conninfo import make_conninfo
 from psycopg_pool import AsyncConnectionPool
 
-from api.employees.employee_sync_route import router as employees_router
+from api.routes.employees.router import router as employees_router
 from config import config
 from infrastructure.sources.ms_graph_employee_source import (
     MsGraphEmployeeSource,

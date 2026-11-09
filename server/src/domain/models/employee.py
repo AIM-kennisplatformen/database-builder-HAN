@@ -3,12 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-@dataclass
+@dataclass(frozen=True)
 class SyncEmployeesRequest:
     limit: int | None = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class SyncEmployeesProgress:
     total: int
     available: int
@@ -21,7 +21,7 @@ class SyncEmployeesProgress:
         return self.created + self.updated + self.unchanged
 
 
-@dataclass
+@dataclass(frozen=True)
 class Employee:
     id: str
     display_name: str | None = None
@@ -32,14 +32,14 @@ class Employee:
     self_reported_details: EmployeeSelfReportedDetails | None = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class EmploymentDetails:
     company_name: str | None = None
     department: str | None = None
     job_title: str | None = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class EmployeeSelfReportedDetails:
     skills: list[str] | None = None
     responsibilities: list[str] | None = None

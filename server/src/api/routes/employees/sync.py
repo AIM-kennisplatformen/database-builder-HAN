@@ -3,6 +3,7 @@ from enum import StrEnum
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
+from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
 
 from dependencies import get_employee_source, get_employee_store
@@ -17,7 +18,7 @@ from domain.ports.persistence.employee_store import EmployeeStore
 from domain.ports.sources.employee_source import EmployeeSource
 from domain.use_cases.employee_sync import sync_employees
 
-router = APIRouter(tags=["Employees"], prefix="/api/v1")
+router = APIRouter()
 
 
 class EmployeeSyncRequestBody(BaseModel):
@@ -42,20 +43,27 @@ class EmployeeSyncProgressEvent(BaseModel):
     detail: str | None = None
 
 
+def _sse_event(progress: EmployeeSyncProgressEvent) -> ServerSentEvent:
+    return ServerSentEvent(
+        event=progress.status.value,
+        data=progress.model_dump(exclude_none=True),
+    )
+
+
 @router.post(
-    path="/employees/sync",
-    response_model_exclude_none=True,
+    path="/sync",
+    response_class=EventSourceResponse,
     summary="Sync employees from external source",
     description=(
-        "Stream JSON Lines progress records after each employee is saved, followed "
-        "by a complete or error record. The total respects the requested limit."
+        "Stream Server-Sent Events after each employee is saved, followed by "
+        "a complete or error event. The total respects the requested limit."
     ),
 )
 async def sync_employees_endpoint(
     request: EmployeeSyncRequestBody,
     source: Annotated[EmployeeSource, Depends(get_employee_source)],
     store: Annotated[EmployeeStore, Depends(get_employee_store)],
-) -> AsyncIterator[EmployeeSyncProgressEvent]:
+) -> AsyncIterator[ServerSentEvent]:
     processed = 0
     total: int | None = None
     available = 0
@@ -74,14 +82,16 @@ async def sync_employees_endpoint(
             updated = update.updated
             unchanged = update.unchanged
 
-            yield EmployeeSyncProgressEvent(
-                status=EmployeeSyncProgressStatus.PROGRESS,
-                processed=update.processed,
-                total=update.total,
-                available=update.available,
-                created=update.created,
-                updated=update.updated,
-                unchanged=update.unchanged,
+            yield _sse_event(
+                EmployeeSyncProgressEvent(
+                    status=EmployeeSyncProgressStatus.PROGRESS,
+                    processed=update.processed,
+                    total=update.total,
+                    available=update.available,
+                    created=update.created,
+                    updated=update.updated,
+                    unchanged=update.unchanged,
+                )
             )
     except (
         InvalidLimit,
@@ -95,36 +105,42 @@ async def sync_employees_endpoint(
             SourceUnavailable: 501,
             StoreUnavailable: 503,
         }[type(exc)]
-        yield EmployeeSyncProgressEvent(
-            status=EmployeeSyncProgressStatus.ERROR,
-            processed=processed,
-            total=total,
-            available=available,
-            created=created,
-            updated=updated,
-            unchanged=unchanged,
-            error_status=status,
-            detail=str(exc),
+        yield _sse_event(
+            EmployeeSyncProgressEvent(
+                status=EmployeeSyncProgressStatus.ERROR,
+                processed=processed,
+                total=total,
+                available=available,
+                created=created,
+                updated=updated,
+                unchanged=unchanged,
+                error_status=status,
+                detail=str(exc),
+            )
         )
-    except Exception:  # noqa: BLE001 - terminate the JSONL stream on unexpected failures
-        yield EmployeeSyncProgressEvent(
-            status=EmployeeSyncProgressStatus.ERROR,
-            processed=processed,
-            total=total,
-            available=available,
-            created=created,
-            updated=updated,
-            unchanged=unchanged,
-            error_status=500,
-            detail="Employee sync failed",
+    except Exception:  # noqa: BLE001 - terminate the SSE stream on unexpected failures
+        yield _sse_event(
+            EmployeeSyncProgressEvent(
+                status=EmployeeSyncProgressStatus.ERROR,
+                processed=processed,
+                total=total,
+                available=available,
+                created=created,
+                updated=updated,
+                unchanged=unchanged,
+                error_status=500,
+                detail="Employee sync failed",
+            )
         )
     else:
-        yield EmployeeSyncProgressEvent(
-            status=EmployeeSyncProgressStatus.COMPLETE,
-            processed=processed,
-            total=total,
-            available=available,
-            created=created,
-            updated=updated,
-            unchanged=unchanged,
+        yield _sse_event(
+            EmployeeSyncProgressEvent(
+                status=EmployeeSyncProgressStatus.COMPLETE,
+                processed=processed,
+                total=total,
+                available=available,
+                created=created,
+                updated=updated,
+                unchanged=unchanged,
+            )
         )
