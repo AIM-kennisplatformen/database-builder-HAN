@@ -3,9 +3,8 @@
 from datetime import datetime
 from typing import cast, override
 
-from psycopg import AsyncConnection
+from psycopg_pool import AsyncConnectionPool
 
-from config import config
 from domain.models.employee import Employee
 from domain.ports.persistence.employee_store import EmployeeStore
 
@@ -28,17 +27,14 @@ def _values(employee: Employee) -> tuple[object, ...]:
 
 
 class PostgresEmployeeStore(EmployeeStore):
+    def __init__(self, pool: AsyncConnectionPool) -> None:
+        self._pool: AsyncConnectionPool = pool
+
     @override
     async def save_employee(self, employee: Employee) -> None:
         values = _values(employee)
         async with (
-            await AsyncConnection.connect(
-                dbname=config.postgres_db,
-                user=config.postgres_user,
-                password=config.postgres_password,
-                host=config.postgres_host,
-                port=config.postgres_port,
-            ) as connection,
+            self._pool.connection() as connection,
             connection.transaction(),
             connection.cursor() as cursor,
         ):
