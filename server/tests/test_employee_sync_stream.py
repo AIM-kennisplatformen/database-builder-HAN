@@ -10,6 +10,7 @@ from httpx import ASGITransport, AsyncClient
 from api.employees.employee_sync_route import router
 from dependencies import get_employee_source, get_employee_store
 from domain.models.employee import Employee
+from domain.ports.persistence.employee_store import SaveEmployeeOutcome
 
 
 class Source:
@@ -29,8 +30,9 @@ class Store:
     def __init__(self) -> None:
         self.saved: list[Employee] = []
 
-    async def save_employee(self, employee: Employee) -> None:
+    async def save_employee(self, employee: Employee) -> SaveEmployeeOutcome:
         self.saved.append(employee)
+        return SaveEmployeeOutcome.CREATED
 
 
 def test_sync_streams_progress_and_completion_as_json_lines() -> None:
@@ -62,8 +64,24 @@ def test_sync_streams_progress_and_completion_as_json_lines() -> None:
     content_type, events = asyncio.run(request())
     assert content_type == "application/jsonl"
     assert events == [
-        {"status": "progress", "processed": 1, "total": 1, "available": 2},
-        {"status": "complete", "processed": 1, "total": 1, "available": 2},
+        {
+            "status": "progress",
+            "processed": 1,
+            "total": 1,
+            "available": 2,
+            "created": 1,
+            "updated": 0,
+            "unchanged": 0,
+        },
+        {
+            "status": "complete",
+            "processed": 1,
+            "total": 1,
+            "available": 2,
+            "created": 1,
+            "updated": 0,
+            "unchanged": 0,
+        },
     ]
     assert store.saved == [Employee(id="one")]
 
@@ -96,6 +114,9 @@ def test_sync_streams_error_record_when_source_is_empty() -> None:
             "status": "error",
             "processed": 0,
             "available": 0,
+            "created": 0,
+            "updated": 0,
+            "unchanged": 0,
             "error_status": 404,
             "detail": "Employee sync found no employees",
         }

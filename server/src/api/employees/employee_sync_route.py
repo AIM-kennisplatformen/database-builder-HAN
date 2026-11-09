@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
-from typing import Annotated, Literal
+from enum import StrEnum
+from typing import Annotated
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -23,11 +24,20 @@ class EmployeeSyncRequestBody(BaseModel):
     limit: int | None = Field(default=None, gt=0)
 
 
+class EmployeeSyncProgressStatus(StrEnum):
+    PROGRESS = "progress"
+    COMPLETE = "complete"
+    ERROR = "error"
+
+
 class EmployeeSyncProgressEvent(BaseModel):
-    status: Literal["progress", "complete", "error"]
+    status: EmployeeSyncProgressStatus
     processed: int
     total: int | None = None
     available: int
+    created: int
+    updated: int
+    unchanged: int
     error_status: int | None = None
     detail: str | None = None
 
@@ -49,6 +59,9 @@ async def sync_employees_endpoint(
     processed = 0
     total: int | None = None
     available = 0
+    created = 0
+    updated = 0
+    unchanged = 0
 
     try:
         async for update in sync_employees(
@@ -57,11 +70,18 @@ async def sync_employees_endpoint(
             processed = update.processed
             total = update.total
             available = update.available
+            created = update.created
+            updated = update.updated
+            unchanged = update.unchanged
+
             yield EmployeeSyncProgressEvent(
-                status="progress",
-                processed=processed,
-                total=total,
-                available=available,
+                status=EmployeeSyncProgressStatus.PROGRESS,
+                processed=update.processed,
+                total=update.total,
+                available=update.available,
+                created=update.created,
+                updated=update.updated,
+                unchanged=update.unchanged,
             )
     except (
         InvalidLimit,
@@ -76,26 +96,35 @@ async def sync_employees_endpoint(
             StoreUnavailable: 503,
         }[type(exc)]
         yield EmployeeSyncProgressEvent(
-            status="error",
+            status=EmployeeSyncProgressStatus.ERROR,
             processed=processed,
             total=total,
             available=available,
+            created=created,
+            updated=updated,
+            unchanged=unchanged,
             error_status=status,
             detail=str(exc),
         )
     except Exception:  # noqa: BLE001 - terminate the JSONL stream on unexpected failures
         yield EmployeeSyncProgressEvent(
-            status="error",
+            status=EmployeeSyncProgressStatus.ERROR,
             processed=processed,
             total=total,
             available=available,
+            created=created,
+            updated=updated,
+            unchanged=unchanged,
             error_status=500,
             detail="Employee sync failed",
         )
     else:
         yield EmployeeSyncProgressEvent(
-            status="complete",
+            status=EmployeeSyncProgressStatus.COMPLETE,
             processed=processed,
             total=total,
             available=available,
+            created=created,
+            updated=updated,
+            unchanged=unchanged,
         )

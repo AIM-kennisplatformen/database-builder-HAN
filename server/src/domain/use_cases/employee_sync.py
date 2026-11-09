@@ -7,8 +7,27 @@ from domain.exceptions.employee_sync_errors import (
     StoreUnavailable,
 )
 from domain.models.employee import Employee, SyncEmployeesProgress, SyncEmployeesRequest
-from domain.ports.persistence.employee_store import EmployeeStore
+from domain.ports.persistence.employee_store import EmployeeStore, SaveEmployeeOutcome
 from domain.ports.sources.employee_source import EmployeeSource
+
+
+async def _stream_employee_source(
+    source: EmployeeSource, limit: int | None
+) -> AsyncIterator[tuple[Employee, int, int]]:
+    try:
+        async for employee, total, available in source.stream_employees(limit):
+            yield employee, total, available
+    except Exception as exc:
+        raise SourceUnavailable("Employee source is unavailable") from exc
+
+
+async def _save_employee(
+    store: EmployeeStore, employee: Employee
+) -> SaveEmployeeOutcome:
+    try:
+        return await store.save_employee(employee)
+    except Exception as exc:
+        raise StoreUnavailable("Employee store is unavailable") from exc
 
 
 async def sync_employees(
@@ -17,23 +36,25 @@ async def sync_employees(
     if req.limit is not None and req.limit <= 0:
         raise InvalidLimit("Employee sync limit must be positive")
 
-    employees: list[Employee] = []
-    total = 0
-    available = 0
-    try:
-        async for employee, total, available in source.stream_employees(req.limit):
-            employees.append(employee)
-    except Exception as exc:
-        raise SourceUnavailable("Employee source is unavailable") from exc
+    created = 0
+    updated = 0
+    unchanged = 0
 
-    if not employees:
+    async for employee, total, available in _stream_employee_source(source, req.limit):
+        match await _save_employee(store, employee):
+            case SaveEmployeeOutcome.CREATED:
+                created += 1
+            case SaveEmployeeOutcome.UPDATED:
+                updated += 1
+            case SaveEmployeeOutcome.UNCHANGED:
+                unchanged += 1
+        yield SyncEmployeesProgress(
+            total=total,
+            available=available,
+            created=created,
+            updated=updated,
+            unchanged=unchanged,
+        )
+
+    if created + updated + unchanged == 0:
         raise NoEmployeesFound("Employee sync found no employees")
-
-    try:
-        for processed, employee in enumerate(employees, 1):
-            await store.save_employee(employee)
-            yield SyncEmployeesProgress(
-                processed=processed, total=total, available=available
-            )
-    except Exception as exc:
-        raise StoreUnavailable("Employee store is unavailable") from exc

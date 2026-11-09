@@ -10,9 +10,15 @@ class SyncEmployeesRequest:
 
 @dataclass
 class SyncEmployeesProgress:
-    processed: int
     total: int
     available: int
+    created: int
+    updated: int
+    unchanged: int
+
+    @property
+    def processed(self) -> int:
+        return self.created + self.updated + self.unchanged
 
 
 @dataclass
