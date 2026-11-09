@@ -59,4 +59,4 @@ fmt = "ruff format"
 typecheck = "basedpyright"
 check = ["lint", "fmt", "typecheck"]
 
-start = "uvicorn main:app --app-dir src --env-file ../.env --host 127.0.0.1 --port 8003 --reload"
+start = "uvicorn main:app --app-dir src --env-file ../.env --host 127.0.0.1 --port 8001 --reload"

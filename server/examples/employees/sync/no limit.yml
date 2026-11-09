@@ -1,0 +1,27 @@
+info:
+  name: no limit
+  type: http
+  seq: 2
+
+http:
+  method: POST
+  url: http://127.0.0.1:8001/api/v1/employees/sync
+  headers:
+    - name: Content-Type
+      value: application/json
+    - name: Accept
+      value: text/event-stream
+  body:
+    type: json
+    data: |-
+      {
+        "limit": null
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false
