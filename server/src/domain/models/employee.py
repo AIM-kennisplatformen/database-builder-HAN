@@ -4,12 +4,12 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class SyncEmployeesRequest:
+class EmployeesSyncRequest:
     limit: int | None = None
 
 
 @dataclass(frozen=True)
-class SyncEmployeesProgress:
+class EmployeesSyncProgress:
     total: int
     available: int
     created: int

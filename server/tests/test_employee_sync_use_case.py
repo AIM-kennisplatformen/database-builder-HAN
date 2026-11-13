@@ -3,8 +3,8 @@
 import asyncio
 from collections.abc import AsyncIterator
 
-from domain.models.employee import Employee, SyncEmployeesRequest
-from domain.ports.persistence.employee_store import SaveEmployeeOutcome
+from domain.models.employee import Employee, EmployeesSyncRequest
+from domain.ports.persistence.employee_store import WriteEmployeeOutcome
 from domain.use_cases.employee_sync import sync_employees
 
 
@@ -21,12 +21,12 @@ def test_sync_saves_and_reports_before_fetching_next_profile() -> None:
                 yield Employee(id=member_id), 2, 2
 
     class Store:
-        async def save_employee(self, employee: Employee) -> SaveEmployeeOutcome:
+        async def write_employee(self, employee: Employee) -> WriteEmployeeOutcome:
             events.append(f"saved:{employee.id}")
-            return SaveEmployeeOutcome.CREATED
+            return WriteEmployeeOutcome.CREATED
 
     async def run() -> None:
-        async for update in sync_employees(SyncEmployeesRequest(), Source(), Store()):
+        async for update in sync_employees(EmployeesSyncRequest(), Source(), Store()):
             events.append(f"progress:{update.processed}")
 
     asyncio.run(run())

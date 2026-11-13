@@ -10,7 +10,7 @@ from httpx import ASGITransport, AsyncClient, Response
 from api.routes.employees.router import router
 from dependencies import get_employee_source, get_employee_store
 from domain.models.employee import Employee
-from domain.ports.persistence.employee_store import SaveEmployeeOutcome
+from domain.ports.persistence.employee_store import WriteEmployeeOutcome
 
 
 class Source:
@@ -30,9 +30,9 @@ class Store:
     def __init__(self) -> None:
         self.saved: list[Employee] = []
 
-    async def save_employee(self, employee: Employee) -> SaveEmployeeOutcome:
+    async def write_employee(self, employee: Employee) -> WriteEmployeeOutcome:
         self.saved.append(employee)
-        return SaveEmployeeOutcome.CREATED
+        return WriteEmployeeOutcome.CREATED
 
 
 def parse_sse(response: Response) -> list[tuple[str, dict[str, object]]]:

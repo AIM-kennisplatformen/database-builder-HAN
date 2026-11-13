@@ -6,7 +6,10 @@ from typing import cast, override
 from psycopg_pool import AsyncConnectionPool
 
 from domain.models.employee import Employee
-from domain.ports.persistence.employee_store import EmployeeStore, SaveEmployeeOutcome
+from domain.ports.persistence.employee_store import (
+    EmployeeWriter,
+    WriteEmployeeOutcome,
+)
 
 
 def _values(employee: Employee) -> tuple[object, ...]:
@@ -26,12 +29,12 @@ def _values(employee: Employee) -> tuple[object, ...]:
     )
 
 
-class PostgresEmployeeStore(EmployeeStore):
+class EmployeePostgresWriter(EmployeeWriter):
     def __init__(self, pool: AsyncConnectionPool) -> None:
         self._pool: AsyncConnectionPool = pool
 
     @override
-    async def save_employee(self, employee: Employee) -> SaveEmployeeOutcome:
+    async def write_employee(self, employee: Employee) -> WriteEmployeeOutcome:
         values = _values(employee)
         async with (
             self._pool.connection() as connection,
@@ -55,7 +58,7 @@ class PostgresEmployeeStore(EmployeeStore):
             )
             current = await cursor.fetchone()
             if current == (True, *values):
-                return SaveEmployeeOutcome.UNCHANGED
+                return WriteEmployeeOutcome.UNCHANGED
 
             _ = await cursor.execute(
                 """
@@ -100,7 +103,7 @@ class PostgresEmployeeStore(EmployeeStore):
                 (employee.id, at, *values),
             )
             return (
-                SaveEmployeeOutcome.CREATED
+                WriteEmployeeOutcome.CREATED
                 if current is None
-                else SaveEmployeeOutcome.UPDATED
+                else WriteEmployeeOutcome.UPDATED
             )

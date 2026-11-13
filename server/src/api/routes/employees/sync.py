@@ -13,26 +13,26 @@ from domain.exceptions.employee_sync_errors import (
     SourceUnavailable,
     StoreUnavailable,
 )
-from domain.models.employee import SyncEmployeesRequest
-from domain.ports.persistence.employee_store import EmployeeStore
+from domain.models.employee import EmployeesSyncRequest
+from domain.ports.persistence.employee_store import EmployeeWriter
 from domain.ports.sources.employee_source import EmployeeSource
 from domain.use_cases.employee_sync import sync_employees
 
 router = APIRouter()
 
 
-class EmployeeSyncRequestBody(BaseModel):
+class EmployeesSyncRequestBody(BaseModel):
     limit: int | None = Field(default=None, gt=0)
 
 
-class EmployeeSyncProgressStatus(StrEnum):
+class EmployeesSyncProgressStatus(StrEnum):
     PROGRESS = "progress"
     COMPLETE = "complete"
     ERROR = "error"
 
 
-class EmployeeSyncProgressEvent(BaseModel):
-    status: EmployeeSyncProgressStatus
+class EmployeesSyncProgressEvent(BaseModel):
+    status: EmployeesSyncProgressStatus
     processed: int
     total: int | None = None
     available: int
@@ -43,7 +43,7 @@ class EmployeeSyncProgressEvent(BaseModel):
     detail: str | None = None
 
 
-def _sse_event(progress: EmployeeSyncProgressEvent) -> ServerSentEvent:
+def _sse_event(progress: EmployeesSyncProgressEvent) -> ServerSentEvent:
     return ServerSentEvent(
         event=progress.status.value,
         data=progress.model_dump(exclude_none=True),
@@ -60,9 +60,9 @@ def _sse_event(progress: EmployeeSyncProgressEvent) -> ServerSentEvent:
     ),
 )
 async def sync_employees_endpoint(
-    request: EmployeeSyncRequestBody,
+    request: EmployeesSyncRequestBody,
     source: Annotated[EmployeeSource, Depends(get_employee_source)],
-    store: Annotated[EmployeeStore, Depends(get_employee_store)],
+    store: Annotated[EmployeeWriter, Depends(get_employee_store)],
 ) -> AsyncIterator[ServerSentEvent]:
     processed = 0
     total: int | None = None
@@ -73,7 +73,7 @@ async def sync_employees_endpoint(
 
     try:
         async for update in sync_employees(
-            SyncEmployeesRequest(request.limit), source, store
+            EmployeesSyncRequest(request.limit), source, store
         ):
             processed = update.processed
             total = update.total
@@ -83,8 +83,8 @@ async def sync_employees_endpoint(
             unchanged = update.unchanged
 
             yield _sse_event(
-                EmployeeSyncProgressEvent(
-                    status=EmployeeSyncProgressStatus.PROGRESS,
+                EmployeesSyncProgressEvent(
+                    status=EmployeesSyncProgressStatus.PROGRESS,
                     processed=update.processed,
                     total=update.total,
                     available=update.available,
@@ -106,8 +106,8 @@ async def sync_employees_endpoint(
             StoreUnavailable: 503,
         }[type(exc)]
         yield _sse_event(
-            EmployeeSyncProgressEvent(
-                status=EmployeeSyncProgressStatus.ERROR,
+            EmployeesSyncProgressEvent(
+                status=EmployeesSyncProgressStatus.ERROR,
                 processed=processed,
                 total=total,
                 available=available,
@@ -120,8 +120,8 @@ async def sync_employees_endpoint(
         )
     except Exception:  # noqa: BLE001 - terminate the SSE stream on unexpected failures
         yield _sse_event(
-            EmployeeSyncProgressEvent(
-                status=EmployeeSyncProgressStatus.ERROR,
+            EmployeesSyncProgressEvent(
+                status=EmployeesSyncProgressStatus.ERROR,
                 processed=processed,
                 total=total,
                 available=available,
@@ -134,8 +134,8 @@ async def sync_employees_endpoint(
         )
     else:
         yield _sse_event(
-            EmployeeSyncProgressEvent(
-                status=EmployeeSyncProgressStatus.COMPLETE,
+            EmployeesSyncProgressEvent(
+                status=EmployeesSyncProgressStatus.COMPLETE,
                 processed=processed,
                 total=total,
                 available=available,

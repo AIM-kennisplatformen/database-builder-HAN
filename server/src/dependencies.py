@@ -4,9 +4,9 @@ from fastapi import Depends
 from fastapi.requests import Request
 from psycopg_pool import AsyncConnectionPool
 
-from domain.ports.persistence.employee_store import EmployeeStore
+from domain.ports.persistence.employee_store import EmployeeWriter
 from domain.ports.sources.employee_source import EmployeeSource
-from infrastructure.persistence.postgres_employee_store import PostgresEmployeeStore
+from infrastructure.persistence.employee_postgres_writer import EmployeePostgresWriter
 
 
 class ApplicationState(Protocol):
@@ -28,5 +28,5 @@ def get_postgres_pool(request: Request) -> AsyncConnectionPool:
 
 def get_employee_store(
     pool: Annotated[AsyncConnectionPool, Depends(get_postgres_pool)],
-) -> EmployeeStore:
-    return PostgresEmployeeStore(pool)
+) -> EmployeeWriter:
+    return EmployeePostgresWriter(pool)
