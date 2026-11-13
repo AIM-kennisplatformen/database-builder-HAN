@@ -15,6 +15,7 @@ _ = load_dotenv(ENV_FILE)
 
 
 class Config(BaseSettings):
+    debug: bool = False
     stream_progress_interval_seconds: float = Field(default=0.25, ge=0)
     postgres_db: str = ""
     postgres_user: str = ""
@@ -36,10 +37,6 @@ class Config(BaseSettings):
         result = tuple(
             scope for scope in scopes if scope.lower() not in MSAL_RESERVED_SCOPES
         )
-        # if not result:
-        #     raise ValueError(
-        #         "GRAPH_SCOPES must include a Microsoft Graph permission scope"
-        #     )
         return result
 
     @field_validator("graph_redirect_uri")

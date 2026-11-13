@@ -2,11 +2,13 @@ from contextlib import asynccontextmanager
 
 from azure.identity import InteractiveBrowserCredential
 from fastapi.applications import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from msgraph.graph_service_client import GraphServiceClient
 from psycopg.conninfo import make_conninfo
 from psycopg_pool import AsyncConnectionPool
 
 from api.routes.employees.router import router as employees_router
+from api.routes.ubwfris.snapshots.router import router as ubwfris_snapshots_router
 from config import config
 from infrastructure.sources.ms_graph_employee_source import (
     MsGraphEmployeeSource,
@@ -41,4 +43,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="HAN API", version="1.0.0", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.include_router(employees_router)
+app.include_router(ubwfris_snapshots_router)
