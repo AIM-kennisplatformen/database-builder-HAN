@@ -19,3 +19,7 @@ extensions:
     ignore:
       - node_modules
       - .git
+    presets:
+      request:
+        type: http
+        url: "{{base_url}}/{{api_version}}/"

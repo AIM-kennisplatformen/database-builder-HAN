@@ -1,0 +1,24 @@
+info:
+  name: rha025a_6200
+  type: http
+  seq: 2
+
+http:
+  method: POST
+  url: "{{base_url}}/{{api_version}}/ubwfris/snapshots/rha"
+  body:
+    type: multipart-form
+    data:
+      - name: file
+        type: file
+        value:
+          - path/to/rha025a_6200.xlsx
+        contentType: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false

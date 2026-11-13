@@ -1,0 +1,10 @@
+info:
+  name: v1
+  type: folder
+  seq: 1
+
+request:
+  auth: inherit
+  variables:
+    - name: api_version
+      value: api/v1
