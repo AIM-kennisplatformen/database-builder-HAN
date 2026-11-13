@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
 
+from api.progress import ProgressEventLimiter
+from config import config
 from dependencies import get_employee_source, get_employee_store
 from domain.exceptions.employee_sync_errors import (
     InvalidLimit,
@@ -55,7 +57,7 @@ def _sse_event(progress: EmployeesSyncProgressEvent) -> ServerSentEvent:
     response_class=EventSourceResponse,
     summary="Sync employees from external source",
     description=(
-        "Stream Server-Sent Events after each employee is saved, followed by "
+        "Stream rate-limited progress events as employees are saved, followed by "
         "a complete or error event. The total respects the requested limit."
     ),
 )
@@ -70,6 +72,7 @@ async def sync_employees_endpoint(
     created = 0
     updated = 0
     unchanged = 0
+    progress_limiter = ProgressEventLimiter(config.stream_progress_interval_seconds)
 
     try:
         async for update in sync_employees(
@@ -81,6 +84,9 @@ async def sync_employees_endpoint(
             created = update.created
             updated = update.updated
             unchanged = update.unchanged
+
+            if not progress_limiter.should_emit():
+                continue
 
             yield _sse_event(
                 EmployeesSyncProgressEvent(

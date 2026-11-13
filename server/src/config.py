@@ -15,6 +15,7 @@ _ = load_dotenv(ENV_FILE)
 
 
 class Config(BaseSettings):
+    stream_progress_interval_seconds: float = Field(default=0.25, ge=0)
     postgres_db: str = ""
     postgres_user: str = ""
     postgres_password: str = ""

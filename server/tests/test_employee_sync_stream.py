@@ -3,20 +3,26 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from typing import cast, override
 
+import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Response
 
 from api.routes.employees.router import router
+from api.routes.employees.sync import EmployeesSyncRequestBody, sync_employees_endpoint
+from config import config
 from dependencies import get_employee_source, get_employee_store
 from domain.models.employee import Employee
-from domain.ports.persistence.employee_store import WriteEmployeeOutcome
+from domain.ports.persistence.employee_store import EmployeeWriter, WriteEmployeeOutcome
+from domain.ports.sources.employee_source import EmployeeSource
 
 
-class Source:
+class Source(EmployeeSource):
     def __init__(self, employees: list[Employee]) -> None:
         self.employees: list[Employee] = employees
 
+    @override
     async def stream_employees(
         self, limit: int | None
     ) -> AsyncIterator[tuple[Employee, int, int]]:
@@ -26,10 +32,11 @@ class Source:
             yield employee, total, available
 
 
-class Store:
+class Store(EmployeeWriter):
     def __init__(self) -> None:
         self.saved: list[Employee] = []
 
+    @override
     async def write_employee(self, employee: Employee) -> WriteEmployeeOutcome:
         self.saved.append(employee)
         return WriteEmployeeOutcome.CREATED
@@ -138,3 +145,28 @@ def test_sync_streams_error_record_when_source_is_empty() -> None:
             },
         )
     ]
+
+
+def test_sync_limits_progress_but_completes_with_final_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config, "stream_progress_interval_seconds", 60)
+    store = Store()
+    employees = [Employee(id="one"), Employee(id="two"), Employee(id="three")]
+
+    async def request() -> list[tuple[str, dict[str, object]]]:
+        events: list[tuple[str, dict[str, object]]] = []
+        async for event in sync_employees_endpoint(
+            EmployeesSyncRequestBody(), Source(employees), store
+        ):
+            assert event.event is not None
+            assert isinstance(event.data, dict)
+            events.append((event.event, cast(dict[str, object], event.data)))
+        return events
+
+    events = asyncio.run(request())
+    assert [name for name, _ in events] == ["progress", "complete"]
+    assert events[0][1]["processed"] == 1
+    assert events[1][1]["processed"] == 3
+    assert events[1][1]["created"] == 3
+    assert store.saved == employees
