@@ -46,6 +46,10 @@ The dependency rules are:
 
 PostgreSQL retains source records and refresh state, while TypeDB stores modeled graph data ([ADR-004](adr/ADR-004-data-storage.md)). The target also reserves a Qdrant adapter for document RAG. These technologies belong behind persistence ports. Microsoft Graph access belongs behind a service port. The first port and adapter contracts will be defined as those workflows are implemented.
 
+## Conventions
+
+Prefer guard clauses when they reduce nesting. Leave a blank line after each guard clause before the main flow continues.
+
 ## Current Microsoft Graph integration
 
 The current prototype has not yet been rearranged into this target structure. In [application setup](../../api/src/main.py), Azure Identity's `InteractiveBrowserCredential` is passed to the `msgraph-sdk` `GraphServiceClient`. The [Graph user service](../../api/src/services/user_service.py) currently makes requests and handles pagination. Moving that interaction into an infrastructure adapter is part of the planned restructure.
