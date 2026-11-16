@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 
 from domain.exceptions.employee_sync_errors import (
     InvalidLimit,
@@ -6,9 +7,27 @@ from domain.exceptions.employee_sync_errors import (
     SourceUnavailable,
     StoreUnavailable,
 )
-from domain.models.employee import Employee, EmployeesSyncProgress, EmployeesSyncRequest
+from domain.models.employee import Employee
 from domain.ports.persistence.employee_store import EmployeeWriter, WriteEmployeeOutcome
 from domain.ports.sources.employee_source import EmployeeSource
+
+
+@dataclass(frozen=True)
+class EmployeesSyncRequest:
+    limit: int | None = None
+
+
+@dataclass(frozen=True)
+class EmployeesSyncProgress:
+    total: int
+    available: int
+    created: int
+    updated: int
+    unchanged: int
+
+    @property
+    def processed(self) -> int:
+        return self.created + self.updated + self.unchanged
 
 
 async def _stream_employee_source(

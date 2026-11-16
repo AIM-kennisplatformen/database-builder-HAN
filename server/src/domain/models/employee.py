@@ -4,24 +4,6 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class EmployeesSyncRequest:
-    limit: int | None = None
-
-
-@dataclass(frozen=True)
-class EmployeesSyncProgress:
-    total: int
-    available: int
-    created: int
-    updated: int
-    unchanged: int
-
-    @property
-    def processed(self) -> int:
-        return self.created + self.updated + self.unchanged
-
-
-@dataclass(frozen=True)
 class Employee:
     id: str
     display_name: str | None = None
