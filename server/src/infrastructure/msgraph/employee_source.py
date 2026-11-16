@@ -16,7 +16,7 @@ from domain.models.employee import (
     EmployeeSelfReportedDetails,
     EmploymentDetails,
 )
-from domain.ports.sources.employee_source import EmployeeSource
+from domain.ports.sources.employee_source import EmployeeSource, EmployeeStreamItem
 from infrastructure.msgraph.base import validate_graph_url
 
 
@@ -125,7 +125,7 @@ class MsGraphEmployeeSource(EmployeeSource):
     @override
     async def stream_employees(
         self, limit: int | None
-    ) -> AsyncIterator[tuple[Employee, int, int]]:
+    ) -> AsyncIterator[EmployeeStreamItem]:
         if limit is not None and limit < 1:
             raise ValueError("limit must be positive")
 
@@ -166,7 +166,7 @@ class MsGraphEmployeeSource(EmployeeSource):
             for member in page.value:
                 employee = await self._fetch_profile(member.id)
                 processed += 1
-                yield employee, total, available
+                yield EmployeeStreamItem(employee, total, available)
                 if limit is not None and processed >= limit:
                     return
 

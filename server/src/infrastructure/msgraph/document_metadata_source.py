@@ -17,7 +17,10 @@ from domain.models.documents.document import (
     FileHashes,
     FileMetadata,
 )
-from domain.ports.sources.document_metadata_source import DocumentMetadataSource
+from domain.ports.sources.document_metadata_source import (
+    DocumentMetadataItem,
+    DocumentMetadataSource,
+)
 from infrastructure.msgraph.base import raise_for_graph_error, validate_graph_url
 
 
@@ -76,7 +79,7 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource):
     @override
     async def stream_metadata(
         self, drive_id: str, extensions: list[str], limit: int | None
-    ) -> AsyncIterator[tuple[Document, int, int]]:
+    ) -> AsyncIterator[DocumentMetadataItem]:
         if limit is not None and limit < 1:
             raise ValueError("limit must be positive")
 
@@ -117,7 +120,9 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource):
                 if item.name.rpartition(".")[2].lower() not in extensions:
                     continue
                 processed += 1
-                yield self._document(drive_id, item), processed, processed
+                yield DocumentMetadataItem(
+                    self._document(drive_id, item), processed, processed
+                )
                 if limit is not None and processed >= limit:
                     return
 

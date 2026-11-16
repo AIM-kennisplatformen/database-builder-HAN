@@ -22,7 +22,10 @@ from domain.models.documents.document import (
     DocumentMetadata,
     FileMetadata,
 )
-from domain.ports.sources.document_metadata_source import DocumentMetadataSource
+from domain.ports.sources.document_metadata_source import (
+    DocumentMetadataItem,
+    DocumentMetadataSource,
+)
 from infrastructure.msgraph.document_metadata_source import (
     SharePointDocumentMetadataSource,
 )
@@ -76,14 +79,14 @@ def test_stream_metadata_follows_pages_and_maps_matching_files() -> None:
 
     items = asyncio.run(collect())
 
-    assert [document.id.id for document, _, _ in items] == [
+    assert [item.document.id.id for item in items] == [
         ("drive", "first"),
         ("drive", "second"),
     ]
-    assert items[0][0].file_metadata.content_version.version == "version-1"
-    assert items[0][0].file_metadata.hashes.sha1 == "abc"
-    assert items[0][1:] == (1, 1)
-    assert items[1][1:] == (2, 2)
+    assert items[0].document.file_metadata.content_version.version == "version-1"
+    assert items[0].document.file_metadata.hashes.sha1 == "abc"
+    assert (items[0].total, items[0].available) == (1, 1)
+    assert (items[1].total, items[1].available) == (2, 2)
     assert delta.with_url.call_count == 2
 
 
@@ -149,9 +152,9 @@ def test_metadata_endpoint_streams_progress_and_completion() -> None:
     class OneDocumentSource:
         async def stream_metadata(
             self, drive_id: str, extensions: list[str], limit: int | None
-        ) -> AsyncIterator[tuple[Document, int, int]]:
+        ) -> AsyncIterator[DocumentMetadataItem]:
             assert (drive_id, extensions, limit) == ("drive", ["pdf"], 10)
-            yield (
+            yield DocumentMetadataItem(
                 Document(
                     _id=DocumentId("drive", "item"),
                     file_metadata=FileMetadata(

@@ -6,7 +6,10 @@ from domain.exceptions.metadata_inventory_errors import (
     SourceUnavailable,
 )
 from domain.models.documents.document import Document
-from domain.ports.sources.document_metadata_source import DocumentMetadataSource
+from domain.ports.sources.document_metadata_source import (
+    DocumentMetadataItem,
+    DocumentMetadataSource,
+)
 
 
 @dataclass(frozen=True)
@@ -41,12 +44,10 @@ async def _stream_document_metadata_source(
     drive_id: str,
     extensions: list[str],
     limit: int | None,
-) -> AsyncIterator[tuple[Document, int, int]]:
+) -> AsyncIterator[DocumentMetadataItem]:
     try:
-        async for document, total, available in source.stream_metadata(
-            drive_id, extensions, limit
-        ):
-            yield document, total, available
+        async for item in source.stream_metadata(drive_id, extensions, limit):
+            yield item
     except MetadataSourceError:
         raise
     except Exception as exc:
@@ -57,7 +58,7 @@ async def inventory_metadata(
     req: InventoryMetadataRequest,
     source: DocumentMetadataSource,
 ) -> AsyncIterator[InventoryMetadataProgress]:
-    async for document, _total, _available in _stream_document_metadata_source(
+    async for item in _stream_document_metadata_source(
         source, req.drive_id, req.extensions, req.limit
     ):
-        yield InventoryMetadataProgress(document=document)
+        yield InventoryMetadataProgress(document=item.document)

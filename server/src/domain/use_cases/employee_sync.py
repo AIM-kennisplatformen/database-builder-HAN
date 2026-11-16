@@ -9,7 +9,7 @@ from domain.exceptions.employee_sync_errors import (
 )
 from domain.models.employee import Employee
 from domain.ports.persistence.employee_store import EmployeeWriter, WriteEmployeeOutcome
-from domain.ports.sources.employee_source import EmployeeSource
+from domain.ports.sources.employee_source import EmployeeSource, EmployeeStreamItem
 
 
 @dataclass(frozen=True)
@@ -32,10 +32,10 @@ class EmployeesSyncProgress:
 
 async def _stream_employee_source(
     source: EmployeeSource, limit: int | None
-) -> AsyncIterator[tuple[Employee, int, int]]:
+) -> AsyncIterator[EmployeeStreamItem]:
     try:
-        async for employee, total, available in source.stream_employees(limit):
-            yield employee, total, available
+        async for item in source.stream_employees(limit):
+            yield item
     except Exception as exc:
         raise SourceUnavailable("Employee source is unavailable") from exc
 
@@ -59,8 +59,8 @@ async def sync_employees(
     updated = 0
     unchanged = 0
 
-    async for employee, total, available in _stream_employee_source(source, req.limit):
-        match await _write_employee(store, employee):
+    async for item in _stream_employee_source(source, req.limit):
+        match await _write_employee(store, item.employee):
             case WriteEmployeeOutcome.CREATED:
                 created += 1
             case WriteEmployeeOutcome.UPDATED:
@@ -68,8 +68,8 @@ async def sync_employees(
             case WriteEmployeeOutcome.UNCHANGED:
                 unchanged += 1
         yield EmployeesSyncProgress(
-            total=total,
-            available=available,
+            total=item.total,
+            available=item.available,
             created=created,
             updated=updated,
             unchanged=unchanged,

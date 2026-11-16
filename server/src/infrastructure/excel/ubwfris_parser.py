@@ -16,14 +16,14 @@ from domain.models.ubwfris import (
     RhaRow,
     UbwfrisWorkbook,
 )
-from domain.ports.sources.ubwfris_parser import UbwfrisParser
+from domain.ports.sources.ubwfris_parser import ParsedUbwfrisRow, UbwfrisParser
 
 
 class UbwfrisIbExcelParser(UbwfrisParser[IbRow]):
     @override
     def stream_ubwfris_rows(
         self, workbook: UbwfrisWorkbook[IbRow]
-    ) -> AsyncIterator[tuple[IbRow | None, int, int]]:
+    ) -> AsyncIterator[ParsedUbwfrisRow[IbRow]]:
         headers = (
             "Project",
             "Project (T)",
@@ -36,7 +36,7 @@ class UbwfrisIbExcelParser(UbwfrisParser[IbRow]):
             "Kpl",
         )
 
-        async def rows() -> AsyncIterator[tuple[IbRow | None, int, int]]:
+        async def rows() -> AsyncIterator[ParsedUbwfrisRow[IbRow]]:
             try:
                 source = load_workbook(
                     BytesIO(workbook.file),
@@ -122,9 +122,9 @@ class UbwfrisIbExcelParser(UbwfrisParser[IbRow]):
                             cost_center=str(cells[8]).strip(),
                         )
                     except IndexError, InvalidOperation, TypeError, ValueError:
-                        yield None, row_number, total_rows
+                        yield ParsedUbwfrisRow(None, row_number, total_rows)
                         continue
-                    yield row, row_number, total_rows
+                    yield ParsedUbwfrisRow(row, row_number, total_rows)
             finally:
                 source.close()
 
@@ -135,7 +135,7 @@ class UbwfrisRhaExcelParser(UbwfrisParser[RhaRow]):
     @override
     def stream_ubwfris_rows(
         self, workbook: UbwfrisWorkbook[RhaRow]
-    ) -> AsyncIterator[tuple[RhaRow | None, int, int]]:
+    ) -> AsyncIterator[ParsedUbwfrisRow[RhaRow]]:
         headers = (
             "Medewerker Nummer",
             "Naam Medewerker",
@@ -160,7 +160,7 @@ class UbwfrisRhaExcelParser(UbwfrisParser[RhaRow]):
             Callable[[int | float, datetime], object], from_excel
         )
 
-        async def rows() -> AsyncIterator[tuple[RhaRow | None, int, int]]:
+        async def rows() -> AsyncIterator[ParsedUbwfrisRow[RhaRow]]:
             try:
                 source = load_workbook(
                     BytesIO(workbook.file),
@@ -292,9 +292,9 @@ class UbwfrisRhaExcelParser(UbwfrisParser[RhaRow]):
                             employment_cost_center=required_text(cells[17]),
                         )
                     except IndexError, InvalidOperation, TypeError, ValueError:
-                        yield None, row_number, total_rows
+                        yield ParsedUbwfrisRow(None, row_number, total_rows)
                         continue
-                    yield row, row_number, total_rows
+                    yield ParsedUbwfrisRow(row, row_number, total_rows)
             finally:
                 source.close()
 

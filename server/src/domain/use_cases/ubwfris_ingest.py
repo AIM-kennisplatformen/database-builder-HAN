@@ -21,16 +21,16 @@ from domain.models.ubwfris import (
     UbwfrisWorkbook,
 )
 from domain.ports.persistence.ubwfris_store import UbwfrisWriter
-from domain.ports.sources.ubwfris_parser import UbwfrisParser
+from domain.ports.sources.ubwfris_parser import ParsedUbwfrisRow, UbwfrisParser
 
 
 async def _stream_ubwfris_parser[T: UbwfrisRow](
     parser: UbwfrisParser[T],
     workbook: UbwfrisWorkbook[T],
-) -> AsyncIterator[tuple[T | None, int, int]]:
+) -> AsyncIterator[ParsedUbwfrisRow[T]]:
     try:
-        async for row, row_number, total_rows in parser.stream_ubwfris_rows(workbook):
-            yield row, row_number, total_rows
+        async for item in parser.stream_ubwfris_rows(workbook):
+            yield item
     except InvalidWorkbook:
         raise
     except Exception as exc:
@@ -184,9 +184,10 @@ async def ingest_ubwfris_workbook[T: UbwfrisRow](
     await _begin_snapshot(writer, snapshot_id)
     completed = False
     try:
-        async for row, row_number, total_rows in _stream_ubwfris_parser(
-            parser, req.workbook
-        ):
+        async for item in _stream_ubwfris_parser(parser, req.workbook):
+            row = item.row
+            row_number = item.row_number
+            total_rows = item.total_rows
             if row is None:
                 invalid_row_numbers.append(row_number)
             else:
