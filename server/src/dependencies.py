@@ -12,14 +12,14 @@ from domain.ports.sources.document_metadata_source import DocumentMetadataSource
 from domain.ports.sources.employee_source import EmployeeSource
 from domain.ports.sources.group_drive_source import GroupDriveSource
 from domain.ports.sources.ubwfris_parser import UbwfrisParser
-from infrastructure.persistence.employee_postgres_writer import EmployeePostgresWriter
-from infrastructure.persistence.ubwfris_postgres_writer import (
-    PostgresIbWriter,
-    PostgresRhaWriter,
-)
-from infrastructure.sources.ubwfris_excel_parser import (
+from infrastructure.excel.ubwfris_parser import (
     UbwfrisIbExcelParser,
     UbwfrisRhaExcelParser,
+)
+from infrastructure.postgres.employee_writer import EmployeePostgresWriter
+from infrastructure.postgres.ubwfris_writer import (
+    PostgresIbWriter,
+    PostgresRhaWriter,
 )
 
 

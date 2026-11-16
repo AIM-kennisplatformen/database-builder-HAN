@@ -1,15 +1,14 @@
 from collections.abc import AsyncIterator
 from typing import cast, override
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 from httpx import Response
 from kiota_abstractions.base_request_configuration import RequestConfiguration
 from kiota_abstractions.native_response_handler import NativeResponseHandler
 from kiota_http.middleware.options import ResponseHandlerOption
 from msgraph.graph_service_client import GraphServiceClient
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
-from domain.exceptions.metadata_inventory_errors import MetadataSourceError
 from domain.models.documents.content_version import ContentVersion
 from domain.models.documents.document import (
     Document,
@@ -19,6 +18,7 @@ from domain.models.documents.document import (
     FileMetadata,
 )
 from domain.ports.sources.document_metadata_source import DocumentMetadataSource
+from infrastructure.msgraph.base import raise_for_graph_error, validate_graph_url
 
 
 class GraphFileHashes(BaseModel):
@@ -46,15 +46,6 @@ class GraphDeltaPage(BaseModel):
     value: list[GraphDriveItem]
     next_link: str | None = Field(default=None, alias="@odata.nextLink")
     delta_link: str | None = Field(default=None, alias="@odata.deltaLink")
-
-
-class GraphError(BaseModel):
-    code: str | None = None
-    message: str | None = None
-
-
-class GraphErrorResponse(BaseModel):
-    error: GraphError
 
 
 class SharePointDocumentMetadataSource(DocumentMetadataSource):
@@ -105,13 +96,7 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource):
             if next_url in seen_urls:
                 raise ValueError("Graph repeated an @odata.nextLink")
             seen_urls.add(next_url)
-            parsed = urlparse(next_url)
-            if (
-                parsed.scheme != "https"
-                or parsed.netloc != "graph.microsoft.com"
-                or not parsed.path.startswith("/v1.0/")
-            ):
-                raise ValueError("Graph returned a link outside the v1.0 API")
+            validate_graph_url(next_url)
 
             response = cast(
                 Response | None,
@@ -123,16 +108,7 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource):
             )
             if response is None:
                 raise ValueError("Graph returned no drive item page")
-            if response.is_error:
-                try:
-                    graph_error = GraphErrorResponse.model_validate_json(
-                        response.content
-                    ).error
-                except ValidationError:
-                    detail = "Graph rejected the drive metadata request"
-                else:
-                    detail = graph_error.message or graph_error.code or "Graph error"
-                raise MetadataSourceError(response.status_code, detail)
+            raise_for_graph_error(response, "Graph rejected the drive metadata request")
 
             page = GraphDeltaPage.model_validate_json(response.content)
             for item in page.value:

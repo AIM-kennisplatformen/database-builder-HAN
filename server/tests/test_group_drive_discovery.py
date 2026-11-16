@@ -14,7 +14,7 @@ from dependencies import (
 )
 from domain.ports.sources.group_drive_source import GroupDriveSource, UserGroup
 from domain.use_cases.group_drive_discovery import get_user_group_drives
-from infrastructure.sources.ms_graph_group_drive_source import MsGraphGroupDriveSource
+from infrastructure.msgraph.group_drive_source import MsGraphGroupDriveSource
 
 
 class FakeGroupDriveSource:

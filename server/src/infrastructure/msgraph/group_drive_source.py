@@ -1,16 +1,16 @@
 from collections.abc import AsyncIterator
 from typing import cast, override
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 from httpx import Response
 from kiota_abstractions.base_request_configuration import RequestConfiguration
 from kiota_abstractions.native_response_handler import NativeResponseHandler
 from kiota_http.middleware.options import ResponseHandlerOption
 from msgraph.graph_service_client import GraphServiceClient
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
-from domain.exceptions.metadata_inventory_errors import MetadataSourceError
 from domain.ports.sources.group_drive_source import GroupDriveSource, UserGroup
+from infrastructure.msgraph.base import raise_for_graph_error, validate_graph_url
 
 
 class GraphResource(BaseModel):
@@ -24,34 +24,8 @@ class GraphResourcePage(BaseModel):
     next_link: str | None = Field(default=None, alias="@odata.nextLink")
 
 
-class GraphError(BaseModel):
-    message: str | None = None
-    code: str | None = None
-
-
-class GraphErrorResponse(BaseModel):
-    error: GraphError
-
-
-def _validate_graph_url(url: str) -> None:
-    parsed = urlparse(url)
-    if (
-        parsed.scheme != "https"
-        or parsed.netloc != "graph.microsoft.com"
-        or not parsed.path.startswith("/v1.0/")
-    ):
-        raise ValueError("Graph returned a link outside the v1.0 API")
-
-
 def _parse_page(response: Response) -> GraphResourcePage:
-    if response.is_error:
-        try:
-            error = GraphErrorResponse.model_validate_json(response.content).error
-        except ValidationError:
-            detail = "Graph rejected the group drive request"
-        else:
-            detail = error.message or error.code or "Graph error"
-        raise MetadataSourceError(response.status_code, detail)
+    raise_for_graph_error(response, "Graph rejected the group drive request")
     return GraphResourcePage.model_validate_json(response.content)
 
 
@@ -67,7 +41,7 @@ class MsGraphGroupDriveSource(GroupDriveSource):
         )
         seen_urls: set[str] = set()
         while next_url is not None:
-            _validate_graph_url(next_url)
+            validate_graph_url(next_url)
             if next_url in seen_urls:
                 raise ValueError("Graph repeated an @odata.nextLink")
             seen_urls.add(next_url)
@@ -95,7 +69,7 @@ class MsGraphGroupDriveSource(GroupDriveSource):
         )
         seen_urls: set[str] = set()
         while next_url is not None:
-            _validate_graph_url(next_url)
+            validate_graph_url(next_url)
             if next_url in seen_urls:
                 raise ValueError("Graph repeated an @odata.nextLink")
             seen_urls.add(next_url)

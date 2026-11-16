@@ -2,7 +2,7 @@
 
 from collections.abc import AsyncIterator
 from typing import ClassVar, cast, override
-from urllib.parse import quote, urlencode, urlparse
+from urllib.parse import quote, urlencode
 
 from httpx import Response
 from kiota_abstractions.base_request_configuration import RequestConfiguration
@@ -17,6 +17,7 @@ from domain.models.employee import (
     EmploymentDetails,
 )
 from domain.ports.sources.employee_source import EmployeeSource
+from infrastructure.msgraph.base import validate_graph_url
 
 
 class GraphGroupMember(BaseModel):
@@ -139,6 +140,7 @@ class MsGraphEmployeeSource(EmployeeSource):
 
         while next_page_url is not None:
             page_url = next_page_url
+            validate_graph_url(page_url)
             if page_url in seen_urls:
                 raise ValueError("Graph repeated an @odata.nextLink")
             seen_urls.add(page_url)
@@ -169,11 +171,3 @@ class MsGraphEmployeeSource(EmployeeSource):
                     return
 
             next_page_url = page.next_link
-            if next_page_url is not None:
-                parsed = urlparse(next_page_url)
-                if (
-                    parsed.scheme != "https"
-                    or parsed.netloc != "graph.microsoft.com"
-                    or not parsed.path.startswith("/v1.0/")
-                ):
-                    raise ValueError("Graph returned a nextLink outside the v1.0 API")

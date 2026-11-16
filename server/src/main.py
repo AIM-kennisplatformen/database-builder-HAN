@@ -11,13 +11,13 @@ from api.routes.documents.router import router as documents_router
 from api.routes.employees.router import router as employees_router
 from api.routes.ubwfris.snapshots.router import router as ubwfris_snapshots_router
 from config import config
-from infrastructure.sources.ms_graph_employee_source import (
-    MsGraphEmployeeSource,
-)
-from infrastructure.sources.ms_graph_group_drive_source import MsGraphGroupDriveSource
-from infrastructure.sources.sharepoint_document_metadata_source import (
+from infrastructure.msgraph.document_metadata_source import (
     SharePointDocumentMetadataSource,
 )
+from infrastructure.msgraph.employee_source import (
+    MsGraphEmployeeSource,
+)
+from infrastructure.msgraph.group_drive_source import MsGraphGroupDriveSource
 
 
 @asynccontextmanager

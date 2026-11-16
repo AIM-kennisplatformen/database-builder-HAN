@@ -23,7 +23,7 @@ from domain.models.documents.document import (
     FileMetadata,
 )
 from domain.ports.sources.document_metadata_source import DocumentMetadataSource
-from infrastructure.sources.sharepoint_document_metadata_source import (
+from infrastructure.msgraph.document_metadata_source import (
     SharePointDocumentMetadataSource,
 )
 
