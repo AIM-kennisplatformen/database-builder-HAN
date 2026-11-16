@@ -1,0 +1,29 @@
+info:
+  name: limit
+  type: http
+  seq: 2
+
+http:
+  method: POST
+  url: "{{base_url}}/{{api_version}}/documents/metadata"
+  headers:
+    - name: Content-Type
+      value: application/json
+    - name: Accept
+      value: text/event-stream
+  body:
+    type: json
+    data: |-
+      {
+        "drive_id": "{{drive_id}}",
+        "extensions": ["pdf"],
+        "limit": 10
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false

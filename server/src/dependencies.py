@@ -1,13 +1,16 @@
 from typing import Annotated, Protocol
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException
 from fastapi.requests import Request
+from msgraph.graph_service_client import GraphServiceClient
 from psycopg_pool import AsyncConnectionPool
 
 from domain.models.ubwfris import IbRow, RhaRow
 from domain.ports.persistence.employee_store import EmployeeWriter
 from domain.ports.persistence.ubwfris_store import UbwfrisWriter
+from domain.ports.sources.document_metadata_source import DocumentMetadataSource
 from domain.ports.sources.employee_source import EmployeeSource
+from domain.ports.sources.group_drive_source import GroupDriveSource
 from domain.ports.sources.ubwfris_parser import UbwfrisParser
 from infrastructure.persistence.employee_postgres_writer import EmployeePostgresWriter
 from infrastructure.persistence.ubwfris_postgres_writer import (
@@ -22,6 +25,9 @@ from infrastructure.sources.ubwfris_excel_parser import (
 
 class ApplicationState(Protocol):
     employee_source: EmployeeSource
+    document_metadata_source: DocumentMetadataSource
+    group_drive_source: GroupDriveSource
+    graph_client: GraphServiceClient
     postgres_pool: AsyncConnectionPool
 
 
@@ -61,3 +67,29 @@ def get_ubwfris_rha_writer(
     pool: Annotated[AsyncConnectionPool, Depends(get_postgres_pool)],
 ) -> UbwfrisWriter[RhaRow]:
     return PostgresRhaWriter(pool)
+
+
+def get_document_metadata_source(request: Request) -> DocumentMetadataSource:
+    return _state(request).document_metadata_source
+
+
+def get_group_drive_source(request: Request) -> GroupDriveSource:
+    return _state(request).group_drive_source
+
+
+def get_graph_client(request: Request) -> GraphServiceClient:
+    return _state(request).graph_client
+
+
+async def get_current_graph_user_id(
+    client: Annotated[GraphServiceClient, Depends(get_graph_client)],
+) -> str:
+    try:
+        user = await client.me.get()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503, detail="Unable to identify the current Graph user"
+        ) from exc
+    if user is None or not user.id:
+        raise HTTPException(status_code=503, detail="Graph returned no current user ID")
+    return user.id

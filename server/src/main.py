@@ -7,11 +7,16 @@ from msgraph.graph_service_client import GraphServiceClient
 from psycopg.conninfo import make_conninfo
 from psycopg_pool import AsyncConnectionPool
 
+from api.routes.documents.router import router as documents_router
 from api.routes.employees.router import router as employees_router
 from api.routes.ubwfris.snapshots.router import router as ubwfris_snapshots_router
 from config import config
 from infrastructure.sources.ms_graph_employee_source import (
     MsGraphEmployeeSource,
+)
+from infrastructure.sources.ms_graph_group_drive_source import MsGraphGroupDriveSource
+from infrastructure.sources.sharepoint_document_metadata_source import (
+    SharePointDocumentMetadataSource,
 )
 
 
@@ -34,7 +39,12 @@ async def lifespan(app: FastAPI):
             credentials=credential,
             scopes=list(config.graph_scopes),
         )
+
         app.state.employee_source = MsGraphEmployeeSource(client, config.group_id)
+        app.state.document_metadata_source = SharePointDocumentMetadataSource(client)
+        app.state.group_drive_source = MsGraphGroupDriveSource(client)
+        app.state.graph_client = client
+
         async with AsyncConnectionPool(conninfo=conninfo, open=False) as pool:
             app.state.postgres_pool = pool
             yield
@@ -50,4 +60,5 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(employees_router)
+app.include_router(documents_router)
 app.include_router(ubwfris_snapshots_router)
