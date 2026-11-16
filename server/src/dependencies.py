@@ -6,12 +6,12 @@ from msgraph.graph_service_client import GraphServiceClient
 from psycopg_pool import AsyncConnectionPool
 
 from domain.models.ubwfris import IbRow, RhaRow
-from domain.ports.persistence.employee_store import EmployeeWriter
-from domain.ports.persistence.ubwfris_store import UbwfrisWriter
-from domain.ports.sources.document_metadata_source import DocumentMetadataSource
-from domain.ports.sources.employee_source import EmployeeSource
-from domain.ports.sources.group_drive_source import GroupDriveSource
-from domain.ports.sources.ubwfris_parser import UbwfrisParser
+from domain.ports.documents.document_metadata_source import DocumentMetadataSource
+from domain.ports.documents.group_drive_source import GroupDriveSource
+from domain.ports.employees.employee_source import EmployeeSource
+from domain.ports.employees.employee_store import EmployeeWriter
+from domain.ports.ubwfris.ubwfris_parser import UbwfrisParser
+from domain.ports.ubwfris.ubwfris_store import UbwfrisWriter
 from infrastructure.excel.ubwfris_parser import (
     UbwfrisIbExcelParser,
     UbwfrisRhaExcelParser,

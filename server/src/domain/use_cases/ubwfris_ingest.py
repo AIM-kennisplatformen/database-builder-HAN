@@ -20,8 +20,8 @@ from domain.models.ubwfris import (
     UbwfrisRow,
     UbwfrisWorkbook,
 )
-from domain.ports.persistence.ubwfris_store import UbwfrisWriter
-from domain.ports.sources.ubwfris_parser import ParsedUbwfrisRow, UbwfrisParser
+from domain.ports.ubwfris.ubwfris_parser import ParsedUbwfrisRow, UbwfrisParser
+from domain.ports.ubwfris.ubwfris_store import UbwfrisWriter
 
 
 async def _stream_ubwfris_parser[T: UbwfrisRow](

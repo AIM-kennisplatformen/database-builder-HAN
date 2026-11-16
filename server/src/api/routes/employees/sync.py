@@ -15,8 +15,8 @@ from domain.exceptions.employee_sync_errors import (
     SourceUnavailable,
     StoreUnavailable,
 )
-from domain.ports.persistence.employee_store import EmployeeWriter
-from domain.ports.sources.employee_source import EmployeeSource
+from domain.ports.employees.employee_source import EmployeeSource
+from domain.ports.employees.employee_store import EmployeeWriter
 from domain.use_cases.employee_sync import EmployeesSyncRequest, sync_employees
 
 router = APIRouter()

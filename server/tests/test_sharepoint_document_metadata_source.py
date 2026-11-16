@@ -22,7 +22,7 @@ from domain.models.documents.document import (
     DocumentMetadata,
     FileMetadata,
 )
-from domain.ports.sources.document_metadata_source import (
+from domain.ports.documents.document_metadata_source import (
     DocumentMetadataItem,
     DocumentMetadataSource,
 )

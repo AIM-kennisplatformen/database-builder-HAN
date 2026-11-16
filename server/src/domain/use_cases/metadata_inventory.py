@@ -6,7 +6,7 @@ from domain.exceptions.metadata_inventory_errors import (
     SourceUnavailable,
 )
 from domain.models.documents.document import Document
-from domain.ports.sources.document_metadata_source import (
+from domain.ports.documents.document_metadata_source import (
     DocumentMetadataItem,
     DocumentMetadataSource,
 )

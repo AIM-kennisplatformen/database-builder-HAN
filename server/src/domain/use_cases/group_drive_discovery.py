@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from domain.ports.sources.group_drive_source import GroupDriveSource
+from domain.ports.documents.group_drive_source import GroupDriveSource
 
 
 @dataclass(frozen=True)

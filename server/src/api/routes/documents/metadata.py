@@ -14,7 +14,7 @@ from domain.exceptions.metadata_inventory_errors import (
     MetadataSourceError,
     SourceUnavailable,
 )
-from domain.ports.sources.document_metadata_source import DocumentMetadataSource
+from domain.ports.documents.document_metadata_source import DocumentMetadataSource
 from domain.use_cases.metadata_inventory import (
     InventoryMetadataProgress,
     InventoryMetadataRequest,

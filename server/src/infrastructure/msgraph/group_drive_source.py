@@ -9,7 +9,7 @@ from kiota_http.middleware.options import ResponseHandlerOption
 from msgraph.graph_service_client import GraphServiceClient
 from pydantic import BaseModel, Field
 
-from domain.ports.sources.group_drive_source import GroupDriveSource, UserGroup
+from domain.ports.documents.group_drive_source import GroupDriveSource, UserGroup
 from infrastructure.msgraph.base import raise_for_graph_error, validate_graph_url
 
 

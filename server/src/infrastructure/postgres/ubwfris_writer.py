@@ -9,7 +9,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from domain.exceptions.ubwfris_ingest_errors import DuplicateUpload
 from domain.models.ubwfris import IbRow, RhaRow
-from domain.ports.persistence.ubwfris_store import UbwfrisWriter
+from domain.ports.ubwfris.ubwfris_store import UbwfrisWriter
 
 
 class PostgresIbWriter(UbwfrisWriter[IbRow]):

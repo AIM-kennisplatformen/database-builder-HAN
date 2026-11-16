@@ -8,8 +8,8 @@ from domain.exceptions.employee_sync_errors import (
     StoreUnavailable,
 )
 from domain.models.employee import Employee
-from domain.ports.persistence.employee_store import EmployeeWriter, WriteEmployeeOutcome
-from domain.ports.sources.employee_source import EmployeeSource, EmployeeStreamItem
+from domain.ports.employees.employee_source import EmployeeSource, EmployeeStreamItem
+from domain.ports.employees.employee_store import EmployeeWriter, WriteEmployeeOutcome
 
 
 @dataclass(frozen=True)

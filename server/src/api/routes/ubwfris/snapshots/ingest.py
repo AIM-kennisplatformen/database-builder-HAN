@@ -34,8 +34,8 @@ from domain.models.ubwfris import (
     UbwfrisRow,
     UbwfrisWorkbook,
 )
-from domain.ports.persistence.ubwfris_store import UbwfrisWriter
-from domain.ports.sources.ubwfris_parser import UbwfrisParser
+from domain.ports.ubwfris.ubwfris_parser import UbwfrisParser
+from domain.ports.ubwfris.ubwfris_store import UbwfrisWriter
 from domain.use_cases.ubwfris_ingest import ingest_ubwfris_workbook
 
 router = APIRouter()

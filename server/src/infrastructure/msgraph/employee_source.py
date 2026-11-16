@@ -16,7 +16,7 @@ from domain.models.employee import (
     EmployeeSelfReportedDetails,
     EmploymentDetails,
 )
-from domain.ports.sources.employee_source import EmployeeSource, EmployeeStreamItem
+from domain.ports.employees.employee_source import EmployeeSource, EmployeeStreamItem
 from infrastructure.msgraph.base import validate_graph_url
 
 

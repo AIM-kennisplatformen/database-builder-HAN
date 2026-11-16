@@ -16,7 +16,7 @@ from domain.models.ubwfris import (
     RhaRow,
     UbwfrisWorkbook,
 )
-from domain.ports.sources.ubwfris_parser import ParsedUbwfrisRow, UbwfrisParser
+from domain.ports.ubwfris.ubwfris_parser import ParsedUbwfrisRow, UbwfrisParser
 
 
 class UbwfrisIbExcelParser(UbwfrisParser[IbRow]):

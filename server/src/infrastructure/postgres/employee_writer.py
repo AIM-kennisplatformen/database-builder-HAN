@@ -6,7 +6,7 @@ from typing import cast, override
 from psycopg_pool import AsyncConnectionPool
 
 from domain.models.employee import Employee
-from domain.ports.persistence.employee_store import (
+from domain.ports.employees.employee_store import (
     EmployeeWriter,
     WriteEmployeeOutcome,
 )

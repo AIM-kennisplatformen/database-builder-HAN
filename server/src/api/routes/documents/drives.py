@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from dependencies import get_current_graph_user_id, get_group_drive_source
 from domain.exceptions.metadata_inventory_errors import MetadataSourceError
-from domain.ports.sources.group_drive_source import GroupDriveSource
+from domain.ports.documents.group_drive_source import GroupDriveSource
 from domain.use_cases.group_drive_discovery import get_user_group_drives
 
 router = APIRouter()
