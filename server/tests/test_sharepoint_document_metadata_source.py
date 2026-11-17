@@ -7,6 +7,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Response
 from msgraph.graph_service_client import GraphServiceClient
+from pydantic import ValidationError
 
 from api.routes.documents.metadata import (
     InventoryMetadataRequestBody,
@@ -30,6 +31,16 @@ from domain.ports.documents.document_store import DocumentStore
 from infrastructure.msgraph.document_metadata_source import (
     SharePointDocumentMetadataSource,
 )
+
+
+@pytest.mark.parametrize("removed_field", [{"limit": 10}, {"path": "Reports"}])
+def test_metadata_request_rejects_removed_fields(
+    removed_field: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        InventoryMetadataRequestBody.model_validate(
+            {"drive_id": "drive", **removed_field}
+        )
 
 
 def test_stream_metadata_follows_pages_and_maps_matching_files() -> None:
@@ -76,7 +87,9 @@ def test_stream_metadata_follows_pages_and_maps_matching_files() -> None:
     source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
 
     async def collect():
-        return [item async for item in source.stream_metadata("drive", ["docx"], None)]
+        return [
+            item async for item in source.stream_metadata("drive", ["docx"], [], [])
+        ]
 
     items = asyncio.run(collect())
 
@@ -94,7 +107,10 @@ def test_stream_metadata_follows_pages_and_maps_matching_files() -> None:
 def test_stream_metadata_scopes_to_folder_and_accepts_all_file_types() -> None:
     root = MagicMock()
     root.with_url.return_value.get = AsyncMock(
-        return_value=Response(200, json={"id": "folder-id", "folder": {}})
+        side_effect=[
+            Response(200, json={"id": "root", "folder": {}}),
+            Response(200, json={"id": "folder-id", "folder": {}}),
+        ]
     )
     delta = MagicMock()
     delta.with_url.return_value.get = AsyncMock(
@@ -102,10 +118,36 @@ def test_stream_metadata_scopes_to_folder_and_accepts_all_file_types() -> None:
             200,
             json={
                 "value": [
-                    {"id": "folder-id", "name": "Reports", "folder": {}},
-                    {"id": "first", "name": "Report.pdf", "file": {}},
-                    {"id": "second", "name": "Data.xlsx", "file": {}},
-                    {"id": "third", "name": "README", "file": {}},
+                    {
+                        "id": "folder-id",
+                        "name": "Reports",
+                        "folder": {},
+                        "parentReference": {"id": "root"},
+                    },
+                    {
+                        "id": "first",
+                        "name": "Report.pdf",
+                        "file": {},
+                        "parentReference": {"id": "folder-id"},
+                    },
+                    {
+                        "id": "second",
+                        "name": "Data.xlsx",
+                        "file": {},
+                        "parentReference": {"id": "folder-id"},
+                    },
+                    {
+                        "id": "third",
+                        "name": "README",
+                        "file": {},
+                        "parentReference": {"id": "folder-id"},
+                    },
+                    {
+                        "id": "outside",
+                        "name": "Other.pdf",
+                        "file": {},
+                        "parentReference": {"id": "root"},
+                    },
                 ],
                 "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta",
             },
@@ -122,7 +164,7 @@ def test_stream_metadata_scopes_to_folder_and_accepts_all_file_types() -> None:
         return [
             item
             async for item in source.stream_metadata(
-                "drive", [], None, "Team Reports/2026 #1"
+                "drive", [], ["Team Reports/2026 #1"], []
             )
         ]
 
@@ -132,17 +174,242 @@ def test_stream_metadata_scopes_to_folder_and_accepts_all_file_types() -> None:
         "Data.xlsx",
         "README",
     ]
-    assert root.with_url.call_args.args[0] == (
+    assert root.with_url.call_args_list[0].args[0] == (
+        "https://graph.microsoft.com/v1.0/drives/drive/root"
+    )
+    assert root.with_url.call_args_list[1].args[0] == (
         "https://graph.microsoft.com/v1.0/drives/drive/"
         "root:/Team%20Reports/2026%20%231:"
     )
     assert client.drives.by_drive_id.return_value.items.by_drive_item_id.call_args_list[
         0
-    ].args == ("folder-id",)
-    assert delta.with_url.call_args.args[0].endswith("/items/folder-id/delta")
+    ].args == ("root",)
+    assert delta.with_url.call_args.args[0].endswith("/root/delta")
 
 
-def test_stream_metadata_reports_available_and_limited_total() -> None:
+def test_stream_metadata_excludes_nested_folders_and_deduplicates_includes() -> None:
+    root = MagicMock()
+    root.with_url.return_value.get = AsyncMock(
+        side_effect=[
+            Response(200, json={"id": "root", "folder": {}}),
+            Response(200, json={"id": "reports", "folder": {}}),
+            Response(200, json={"id": "year", "folder": {}}),
+            Response(200, json={"id": "drafts", "folder": {}}),
+        ]
+    )
+    delta = MagicMock()
+    delta.with_url.return_value.get = AsyncMock(
+        return_value=Response(
+            200,
+            json={
+                "value": [
+                    {"id": "reports", "folder": {}, "parentReference": {"id": "root"}},
+                    {"id": "year", "folder": {}, "parentReference": {"id": "reports"}},
+                    {"id": "drafts", "folder": {}, "parentReference": {"id": "year"}},
+                    {
+                        "id": "one",
+                        "name": "One.pdf",
+                        "file": {},
+                        "parentReference": {"id": "reports"},
+                    },
+                    {
+                        "id": "two",
+                        "name": "Two.pdf",
+                        "file": {},
+                        "parentReference": {"id": "year"},
+                    },
+                    {
+                        "id": "skip",
+                        "name": "Skip.pdf",
+                        "file": {},
+                        "parentReference": {"id": "drafts"},
+                    },
+                    {
+                        "id": "outside",
+                        "name": "Outside.pdf",
+                        "file": {},
+                        "parentReference": {"id": "root"},
+                    },
+                ],
+                "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta",
+            },
+        )
+    )
+    client = MagicMock()
+    client.drives.by_drive_id.return_value.root = root
+    client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
+        delta
+    )
+    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+
+    async def collect() -> list[DocumentMetadataItem]:
+        return [
+            item
+            async for item in source.stream_metadata(
+                "drive", ["pdf"], ["Reports", "Reports/2026"], ["Reports/2026/Drafts"]
+            )
+        ]
+
+    items = asyncio.run(collect())
+    assert [item.document.id.id for item in items] == [
+        ("drive", "one"),
+        ("drive", "two"),
+    ]
+    assert all((item.total, item.available) == (2, 2) for item in items)
+    assert delta.with_url.call_count == 1
+
+
+def test_stream_metadata_exclusion_keeps_root_level_files() -> None:
+    root = MagicMock()
+    root.with_url.return_value.get = AsyncMock(
+        side_effect=[
+            Response(200, json={"id": "root", "folder": {}}),
+            Response(200, json={"id": "drafts", "folder": {}}),
+        ]
+    )
+    delta = MagicMock()
+    delta.with_url.return_value.get = AsyncMock(
+        return_value=Response(
+            200,
+            json={
+                "value": [
+                    {"id": "drafts", "folder": {}, "parentReference": {"id": "root"}},
+                    {
+                        "id": "keep",
+                        "name": "Keep.pdf",
+                        "file": {},
+                        "parentReference": {"id": "root"},
+                    },
+                    {
+                        "id": "skip",
+                        "name": "Skip.pdf",
+                        "file": {},
+                        "parentReference": {"id": "drafts"},
+                    },
+                ],
+                "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta",
+            },
+        )
+    )
+    client = MagicMock()
+    client.drives.by_drive_id.return_value.root = root
+    client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
+        delta
+    )
+    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+
+    async def collect() -> list[DocumentMetadataItem]:
+        return [
+            item async for item in source.stream_metadata("drive", [], [], ["Drafts"])
+        ]
+
+    assert [item.document.id.id for item in asyncio.run(collect())] == [
+        ("drive", "keep")
+    ]
+
+
+@pytest.mark.parametrize("folder_update", [None, {"id": "middle", "deleted": {}}])
+def test_stream_metadata_rejects_incomplete_folder_ancestry(
+    folder_update: dict[str, object] | None,
+) -> None:
+    root = MagicMock()
+    root.with_url.return_value.get = AsyncMock(
+        side_effect=[
+            Response(200, json={"id": "root", "folder": {}}),
+            Response(200, json={"id": "excluded", "folder": {}}),
+        ]
+    )
+    delta = MagicMock()
+    value: list[dict[str, object]] = [
+        {"id": "excluded", "folder": {}, "parentReference": {"id": "root"}},
+        {"id": "middle", "folder": {}, "parentReference": {"id": "excluded"}},
+        {
+            "id": "file",
+            "name": "File.pdf",
+            "file": {},
+            "parentReference": {"id": "middle"},
+        },
+    ]
+    if folder_update is None:
+        value.pop(1)
+    else:
+        value.append(folder_update)
+    delta.with_url.return_value.get = AsyncMock(
+        return_value=Response(
+            200,
+            json={
+                "value": value,
+                "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta",
+            },
+        )
+    )
+    client = MagicMock()
+    client.drives.by_drive_id.return_value.root = root
+    client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
+        delta
+    )
+    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+
+    async def collect() -> list[DocumentMetadataItem]:
+        return [
+            item async for item in source.stream_metadata("drive", [], [], ["Excluded"])
+        ]
+
+    with pytest.raises(ValueError, match="incomplete folder ancestry"):
+        asyncio.run(collect())
+
+
+def test_stream_metadata_uses_latest_parent_for_repeated_folder() -> None:
+    root = MagicMock()
+    root.with_url.return_value.get = AsyncMock(
+        side_effect=[
+            Response(200, json={"id": "root", "folder": {}}),
+            Response(200, json={"id": "excluded", "folder": {}}),
+        ]
+    )
+    delta = MagicMock()
+    delta.with_url.return_value.get = AsyncMock(
+        return_value=Response(
+            200,
+            json={
+                "value": [
+                    {"id": "excluded", "folder": {}, "parentReference": {"id": "root"}},
+                    {"id": "allowed", "folder": {}, "parentReference": {"id": "root"}},
+                    {
+                        "id": "moved",
+                        "folder": {},
+                        "parentReference": {"id": "excluded"},
+                    },
+                    {
+                        "id": "file",
+                        "name": "File.pdf",
+                        "file": {},
+                        "parentReference": {"id": "moved"},
+                    },
+                    {"id": "moved", "folder": {}, "parentReference": {"id": "allowed"}},
+                ],
+                "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta",
+            },
+        )
+    )
+    client = MagicMock()
+    client.drives.by_drive_id.return_value.root = root
+    client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
+        delta
+    )
+    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+
+    async def collect() -> list[DocumentMetadataItem]:
+        return [
+            item async for item in source.stream_metadata("drive", [], [], ["Excluded"])
+        ]
+
+    assert [item.document.id.id for item in asyncio.run(collect())] == [
+        ("drive", "file")
+    ]
+
+
+def test_stream_metadata_reports_total_after_repeated_and_deleted_items() -> None:
     delta = MagicMock()
     delta.with_url.return_value.get = AsyncMock(
         side_effect=[
@@ -176,11 +443,14 @@ def test_stream_metadata_reports_available_and_limited_total() -> None:
     source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
 
     async def collect() -> list[DocumentMetadataItem]:
-        return [item async for item in source.stream_metadata("drive", ["pdf"], 1)]
+        return [item async for item in source.stream_metadata("drive", ["pdf"], [], [])]
 
     items = asyncio.run(collect())
-    assert [item.document.id.id for item in items] == [("drive", "first")]
-    assert (items[0].total, items[0].available) == (1, 2)
+    assert [item.document.id.id for item in items] == [
+        ("drive", "first"),
+        ("drive", "third"),
+    ]
+    assert (items[0].total, items[0].available) == (2, 2)
     assert delta.with_url.call_count == 2
     item_builder.versions.with_url.assert_not_called()
 
@@ -218,7 +488,7 @@ def test_stream_metadata_maps_creation_and_latest_update_without_version_request
     source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
 
     async def collect() -> list[DocumentMetadataItem]:
-        return [item async for item in source.stream_metadata("drive", [], None)]
+        return [item async for item in source.stream_metadata("drive", [], [], [])]
 
     document = asyncio.run(collect())[0].document
     created = document.document_metadata.created
@@ -261,7 +531,7 @@ def test_stream_metadata_keeps_audit_timestamps_when_actors_are_missing() -> Non
     source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
 
     async def collect() -> list[DocumentMetadataItem]:
-        return [item async for item in source.stream_metadata("drive", [], None)]
+        return [item async for item in source.stream_metadata("drive", [], [], [])]
 
     document = asyncio.run(collect())[0].document
     assert document.document_metadata.created is not None
@@ -290,7 +560,7 @@ def test_graph_drive_error_is_reported_before_page_validation() -> None:
     source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
 
     async def collect() -> None:
-        async for _ in source.stream_metadata("bad-drive", ["pdf"], 10):
+        async for _ in source.stream_metadata("bad-drive", ["pdf"], [], []):
             pass
 
     with pytest.raises(MetadataSourceError) as error:
@@ -306,20 +576,18 @@ def test_metadata_endpoint_returns_graph_client_error() -> None:
             self,
             drive_id: str,
             extensions: list[str],
-            limit: int | None,
-            path: str | None = None,
+            include_paths: list[str],
+            exclude_paths: list[str],
         ):
-            assert (drive_id, extensions, limit, path) == (
+            assert (drive_id, extensions, include_paths, exclude_paths) == (
                 "bad-drive",
                 ["pdf"],
-                10,
-                None,
+                [],
+                [],
             )
             raise MetadataSourceError(400, "The supplied drive id is invalid")
 
-    request = InventoryMetadataRequestBody(
-        drive_id="bad-drive", extensions=["pdf"], limit=10
-    )
+    request = InventoryMetadataRequestBody(drive_id="bad-drive", extensions=["pdf"])
 
     async def collect():
         return [
@@ -342,10 +610,15 @@ def test_metadata_endpoint_streams_progress_and_completion() -> None:
             self,
             drive_id: str,
             extensions: list[str],
-            limit: int | None,
-            path: str | None = None,
+            include_paths: list[str],
+            exclude_paths: list[str],
         ) -> AsyncIterator[DocumentMetadataItem]:
-            assert (drive_id, extensions, limit, path) == ("drive", ["pdf"], 10, None)
+            assert (drive_id, extensions, include_paths, exclude_paths) == (
+                "drive",
+                ["pdf"],
+                [],
+                [],
+            )
             yield DocumentMetadataItem(
                 Document(
                     _id=DocumentId("drive", "item"),
@@ -385,7 +658,7 @@ def test_metadata_endpoint_streams_progress_and_completion() -> None:
         ) as client:
             return await client.post(
                 "/api/v1/documents/metadata",
-                json={"drive_id": "drive", "extensions": ["pdf"], "limit": 10},
+                json={"drive_id": "drive", "extensions": ["pdf"]},
             )
 
     response = asyncio.run(request())
@@ -399,7 +672,7 @@ def test_metadata_endpoint_streams_progress_and_completion() -> None:
     assert [document.id.id for document in saved] == [("drive", "item")]
 
 
-def test_metadata_endpoint_accepts_path_without_extensions() -> None:
+def test_metadata_endpoint_accepts_include_paths_without_extensions() -> None:
     class EmptySource:
         def __init__(self) -> None:
             self.items: list[DocumentMetadataItem] = []
@@ -408,19 +681,21 @@ def test_metadata_endpoint_accepts_path_without_extensions() -> None:
             self,
             drive_id: str,
             extensions: list[str],
-            limit: int | None,
-            path: str | None = None,
+            include_paths: list[str],
+            exclude_paths: list[str],
         ) -> AsyncIterator[DocumentMetadataItem]:
-            assert (drive_id, extensions, limit, path) == (
+            assert (drive_id, extensions, include_paths, exclude_paths) == (
                 "drive",
                 [],
-                None,
-                "Reports/2026",
+                ["Reports/2026"],
+                [],
             )
             for item in self.items:
                 yield item
 
-    request = InventoryMetadataRequestBody(drive_id="drive", path="Reports/2026")
+    request = InventoryMetadataRequestBody(
+        drive_id="drive", include_paths=["Reports/2026"]
+    )
 
     async def collect():
         return [

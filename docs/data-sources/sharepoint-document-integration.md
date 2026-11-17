@@ -40,8 +40,8 @@ An eventual operation that runs metadata followed by vectors may compose the two
 
 ## Metadata ingestion
 
-`POST /metadata` accepts an approved Graph drive ID and a list of normalized file extensions.
-It does not accept a path filter; it inventories the whole drive for those selected types.
+`POST /metadata` accepts an approved Graph drive ID, a list of normalized file extensions, and optional `include_paths` and `exclude_paths` lists of drive-root-relative folder paths.
+An empty include list inventories the whole drive. Each included folder is recursive; excluded folders and their descendants take precedence, including when nested within an included folder. Overlapping includes yield each file once. There is no file-count limit. A scoped run fails if Graph does not supply enough folder ancestry to apply the paths reliably.
 A changed selection does not erase records for types omitted from a later run.
 Selecting a new type requires a full baseline before delta updates can cover that type.
 The initiating operator's delegated Graph token defines what this run can see, and the operator identity is recorded with its observations and delta cursor.

@@ -18,8 +18,8 @@ from domain.ports.documents.document_store import DocumentStore
 class InventoryMetadataRequest:
     drive_id: str
     extensions: list[str] = field(default_factory=list)
-    limit: int | None = None
-    path: str | None = None
+    include_paths: list[str] = field(default_factory=list)
+    exclude_paths: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.drive_id.strip():
@@ -32,18 +32,28 @@ class InventoryMetadataRequest:
             for extension in normalized
         ):
             raise ValueError("extensions must be alphanumeric")
-        if self.limit is not None and self.limit < 1:
-            raise ValueError("limit must be positive")
-        if self.path is not None:
-            path = self.path.strip("/")
-            if path and any(
-                not segment.strip() or segment in {".", ".."}
-                for segment in path.split("/")
-            ):
-                raise ValueError(
-                    "path must be a folder path relative to the drive root"
-                )
-            object.__setattr__(self, "path", path or None)
+
+        def normalize_paths(paths: list[str], field_name: str) -> list[str]:
+            normalized_paths: list[str] = []
+            for path in paths:
+                normalized_path = path.strip("/")
+                if not normalized_path or any(
+                    not segment.strip() or segment in {".", ".."}
+                    for segment in normalized_path.split("/")
+                ):
+                    raise ValueError(
+                        f"{field_name} must contain folder paths relative to the drive root"
+                    )
+                if normalized_path not in normalized_paths:
+                    normalized_paths.append(normalized_path)
+            return normalized_paths
+
+        object.__setattr__(
+            self, "include_paths", normalize_paths(self.include_paths, "include_paths")
+        )
+        object.__setattr__(
+            self, "exclude_paths", normalize_paths(self.exclude_paths, "exclude_paths")
+        )
         object.__setattr__(self, "extensions", normalized)
 
 
@@ -58,11 +68,13 @@ async def _stream_document_metadata_source(
     source: DocumentMetadataSource,
     drive_id: str,
     extensions: list[str],
-    limit: int | None,
-    path: str | None,
+    include_paths: list[str],
+    exclude_paths: list[str],
 ) -> AsyncIterator[DocumentMetadataItem]:
     try:
-        async for item in source.stream_metadata(drive_id, extensions, limit, path):
+        async for item in source.stream_metadata(
+            drive_id, extensions, include_paths, exclude_paths
+        ):
             yield item
     except MetadataSourceError:
         raise
@@ -76,7 +88,7 @@ async def inventory_metadata(
     store: DocumentStore,
 ) -> AsyncIterator[InventoryMetadataProgress]:
     async for item in _stream_document_metadata_source(
-        source, req.drive_id, req.extensions, req.limit, req.path
+        source, req.drive_id, req.extensions, req.include_paths, req.exclude_paths
     ):
         try:
             await store.save_document(item.document)

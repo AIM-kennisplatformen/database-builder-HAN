@@ -1,11 +1,11 @@
 from collections.abc import AsyncIterator
 from enum import StrEnum
 from traceback import format_exception
-from typing import Annotated
+from typing import Annotated, ClassVar
 
 from fastapi import APIRouter, Depends
 from fastapi.sse import EventSourceResponse, ServerSentEvent
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from api.progress import ProgressEventLimiter
 from config import config
@@ -35,14 +35,20 @@ type InventoryError = (
 
 
 class InventoryMetadataRequestBody(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
     drive_id: str = Field(min_length=1)
     extensions: list[str] = Field(
         default_factory=list,
         description="File extensions to include; empty includes all files",
     )
-    limit: int | None = Field(default=None, gt=0)
-    path: str | None = Field(
-        default=None, description="Folder path relative to the drive root"
+    include_paths: list[str] = Field(
+        default_factory=list,
+        description="Recursive folder paths to include; empty scans the whole drive",
+    )
+    exclude_paths: list[str] = Field(
+        default_factory=list,
+        description="Recursive folder paths to exclude, including within included folders",
     )
 
 
@@ -141,7 +147,10 @@ async def inventory_metadata_endpoint(
     try:
         async for update in inventory_metadata(
             InventoryMetadataRequest(
-                request.drive_id, request.extensions, request.limit, request.path
+                request.drive_id,
+                request.extensions,
+                request.include_paths,
+                request.exclude_paths,
             ),
             source,
             store,

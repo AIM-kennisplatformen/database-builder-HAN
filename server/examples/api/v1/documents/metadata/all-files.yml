@@ -1,5 +1,5 @@
 info:
-  name: limit
+  name: all files
   type: http
   seq: 2
 
@@ -10,7 +10,6 @@ http:
     type: json
     data: |-
       {
-        "limit": null,
         "drive_id": "{{drive_id}}",
         "extensions": []
       }

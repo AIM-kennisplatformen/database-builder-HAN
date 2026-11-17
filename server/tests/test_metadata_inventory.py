@@ -37,10 +37,15 @@ def test_inventory_saves_each_document_before_reporting_progress() -> None:
             self,
             drive_id: str,
             extensions: list[str],
-            limit: int | None,
-            path: str | None = None,
+            include_paths: list[str],
+            exclude_paths: list[str],
         ) -> AsyncIterator[DocumentMetadataItem]:
-            assert (drive_id, extensions, limit, path) == ("drive", ["pdf"], None, None)
+            assert (drive_id, extensions, include_paths, exclude_paths) == (
+                "drive",
+                ["pdf"],
+                [],
+                [],
+            )
             yield DocumentMetadataItem(document, 1, 1)
 
     class Store:
@@ -66,10 +71,15 @@ def test_inventory_does_not_report_progress_when_save_fails() -> None:
             self,
             drive_id: str,
             extensions: list[str],
-            limit: int | None,
-            path: str | None = None,
+            include_paths: list[str],
+            exclude_paths: list[str],
         ) -> AsyncIterator[DocumentMetadataItem]:
-            assert (drive_id, extensions, limit, path) == ("drive", ["pdf"], None, None)
+            assert (drive_id, extensions, include_paths, exclude_paths) == (
+                "drive",
+                ["pdf"],
+                [],
+                [],
+            )
             yield DocumentMetadataItem(
                 Document(
                     _id=DocumentId("drive", "item"),
@@ -104,13 +114,17 @@ def test_inventory_does_not_report_progress_when_save_fails() -> None:
 
 
 def test_inventory_request_normalizes_optional_filters() -> None:
-    request = InventoryMetadataRequest("drive", path="/Reports/2026/")
+    request = InventoryMetadataRequest(
+        "drive",
+        include_paths=["/Reports/2026/", "Reports/2026"],
+        exclude_paths=["/Reports/2026/Drafts/"],
+    )
     assert request.extensions == []
-    assert request.path == "Reports/2026"
-    assert InventoryMetadataRequest("drive", path="/").path is None
+    assert request.include_paths == ["Reports/2026"]
+    assert request.exclude_paths == ["Reports/2026/Drafts"]
 
 
-@pytest.mark.parametrize("path", ["Reports//2026", "Reports/../2026", " "])
+@pytest.mark.parametrize("path", ["Reports//2026", "Reports/../2026", " ", "/"])
 def test_inventory_request_rejects_invalid_folder_paths(path: str) -> None:
-    with pytest.raises(ValueError, match="path must be a folder path"):
-        InventoryMetadataRequest("drive", path=path)
+    with pytest.raises(ValueError, match="folder paths relative"):
+        InventoryMetadataRequest("drive", include_paths=[path])

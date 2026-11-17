@@ -17,6 +17,6 @@ class DocumentMetadataSource(Protocol):
         self,
         drive_id: str,
         extensions: list[str],
-        limit: int | None,
-        path: str | None = None,
+        include_paths: list[str],
+        exclude_paths: list[str],
     ) -> AsyncIterator[DocumentMetadataItem]: ...

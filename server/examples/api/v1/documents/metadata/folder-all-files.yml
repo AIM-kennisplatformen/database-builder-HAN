@@ -16,7 +16,8 @@ http:
     data: |-
       {
         "drive_id": "{{drive_id}}",
-        "path": "Reports/"
+        "include_paths": ["Reports/"],
+        "exclude_paths": ["Reports/Drafts/"]
       }
   auth: inherit
 
