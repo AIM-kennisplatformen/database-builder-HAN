@@ -16,3 +16,5 @@
 - [Decision log](software-guidebook/13-decision-log.md)
 - [Data Sources](data-sources/index.md)
   - [MS Graph API](data-sources/ms-graph-api.md)
+  - [MS Graph files](data-sources/ms-graph-files.md)
+  - [SharePoint document integration design](data-sources/sharepoint-document-integration.md)

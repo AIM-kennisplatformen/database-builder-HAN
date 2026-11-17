@@ -4,6 +4,9 @@ from domain.exceptions.error import DomainError
 class SourceUnavailable(DomainError): ...
 
 
+class StoreUnavailable(DomainError): ...
+
+
 class MetadataSourceError(DomainError):
     def __init__(self, status_code: int, detail: str) -> None:
         super().__init__(detail)

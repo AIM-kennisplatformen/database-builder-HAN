@@ -9,12 +9,14 @@ from pydantic import BaseModel, Field
 
 from api.progress import ProgressEventLimiter
 from config import config
-from dependencies import get_document_metadata_source
+from dependencies import get_document_metadata_source, get_document_store
 from domain.exceptions.metadata_inventory_errors import (
     MetadataSourceError,
     SourceUnavailable,
+    StoreUnavailable,
 )
 from domain.ports.documents.document_metadata_source import DocumentMetadataSource
+from domain.ports.documents.document_store import DocumentStore
 from domain.use_cases.metadata_inventory import (
     InventoryMetadataProgress,
     InventoryMetadataRequest,
@@ -24,14 +26,24 @@ from domain.use_cases.metadata_inventory import (
 router = APIRouter()
 
 type InventoryError = (
-    ValueError | MetadataSourceError | SourceUnavailable | RuntimeError
+    ValueError
+    | MetadataSourceError
+    | SourceUnavailable
+    | StoreUnavailable
+    | RuntimeError
 )
 
 
 class InventoryMetadataRequestBody(BaseModel):
     drive_id: str = Field(min_length=1)
-    extensions: list[str] = Field(min_length=1)
+    extensions: list[str] = Field(
+        default_factory=list,
+        description="File extensions to include; empty includes all files",
+    )
     limit: int | None = Field(default=None, gt=0)
+    path: str | None = Field(
+        default=None, description="Folder path relative to the drive root"
+    )
 
 
 class InventoryMetadataEventStatus(StrEnum):
@@ -44,6 +56,8 @@ class InventoryMetadataEvent(BaseModel):
     status: InventoryMetadataEventStatus
     processed: int
     drive_id: str
+    total: int | None = None
+    available: int | None = None
     item_id: str | None = None
     name: str | None = None
     error_status: int | None = None
@@ -63,7 +77,7 @@ def _error_status(exc: InventoryError) -> int:
         return 422
     if isinstance(exc, MetadataSourceError):
         return exc.status_code if 400 <= exc.status_code < 500 else 502
-    if isinstance(exc, SourceUnavailable):
+    if isinstance(exc, (SourceUnavailable, StoreUnavailable)):
         return 503
     return 500
 
@@ -76,6 +90,8 @@ def _event(
             status=InventoryMetadataEventStatus.PROGRESS,
             processed=processed,
             drive_id=drive_id,
+            total=update.total,
+            available=update.available,
             item_id=update.document.id.id[1],
             name=update.document.file_metadata.name,
         )
@@ -86,6 +102,8 @@ def _failure_event(
     exc: InventoryError,
     drive_id: str,
     processed: int,
+    total: int | None,
+    available: int | None,
     *,
     traceback_exc: BaseException | None = None,
 ) -> ServerSentEvent:
@@ -94,6 +112,8 @@ def _failure_event(
             status=InventoryMetadataEventStatus.ERROR,
             processed=processed,
             drive_id=drive_id,
+            total=total,
+            available=available,
             error_status=_error_status(exc),
             detail=str(exc),
             traceback="".join(format_exception(traceback_exc or exc))
@@ -111,28 +131,41 @@ def _failure_event(
 async def inventory_metadata_endpoint(
     request: InventoryMetadataRequestBody,
     source: Annotated[DocumentMetadataSource, Depends(get_document_metadata_source)],
+    store: Annotated[DocumentStore, Depends(get_document_store)],
 ) -> AsyncIterator[ServerSentEvent]:
     processed = 0
+    total: int | None = None
+    available: int | None = None
     progress_limiter = ProgressEventLimiter(config.stream_progress_interval_seconds)
 
     try:
         async for update in inventory_metadata(
             InventoryMetadataRequest(
-                request.drive_id, request.extensions, request.limit
+                request.drive_id, request.extensions, request.limit, request.path
             ),
             source,
+            store,
         ):
             processed += 1
+            total = update.total
+            available = update.available
             if not progress_limiter.should_emit():
                 continue
             yield _event(update, request.drive_id, processed)
-    except (ValueError, MetadataSourceError, SourceUnavailable) as exc:
-        yield _failure_event(exc, request.drive_id, processed)
+    except (
+        ValueError,
+        MetadataSourceError,
+        SourceUnavailable,
+        StoreUnavailable,
+    ) as exc:
+        yield _failure_event(exc, request.drive_id, processed, total, available)
     except Exception as exc:  # noqa: BLE001 - terminate the SSE stream on unexpected failures
         yield _failure_event(
             RuntimeError("Metadata inventory failed"),
             request.drive_id,
             processed,
+            total,
+            available,
             traceback_exc=exc,
         )
     else:
@@ -141,5 +174,7 @@ async def inventory_metadata_endpoint(
                 status=InventoryMetadataEventStatus.COMPLETE,
                 processed=processed,
                 drive_id=request.drive_id,
+                total=total if total is not None else 0,
+                available=available if available is not None else 0,
             )
         )

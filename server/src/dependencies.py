@@ -7,6 +7,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from domain.models.ubwfris import IbRow, RhaRow
 from domain.ports.documents.document_metadata_source import DocumentMetadataSource
+from domain.ports.documents.document_store import DocumentStore
 from domain.ports.documents.group_drive_source import GroupDriveSource
 from domain.ports.employees.employee_source import EmployeeSource
 from domain.ports.employees.employee_store import EmployeeWriter
@@ -16,6 +17,7 @@ from infrastructure.excel.ubwfris_parser import (
     UbwfrisIbExcelParser,
     UbwfrisRhaExcelParser,
 )
+from infrastructure.postgres.document_store import PostgresDocumentStore
 from infrastructure.postgres.employee_writer import EmployeePostgresWriter
 from infrastructure.postgres.ubwfris_writer import (
     PostgresIbWriter,
@@ -71,6 +73,12 @@ def get_ubwfris_rha_writer(
 
 def get_document_metadata_source(request: Request) -> DocumentMetadataSource:
     return _state(request).document_metadata_source
+
+
+def get_document_store(
+    pool: Annotated[AsyncConnectionPool, Depends(get_postgres_pool)],
+) -> DocumentStore:
+    return PostgresDocumentStore(pool)
 
 
 def get_group_drive_source(request: Request) -> GroupDriveSource:

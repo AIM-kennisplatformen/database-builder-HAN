@@ -14,5 +14,9 @@ class DocumentMetadataItem:
 
 class DocumentMetadataSource(Protocol):
     def stream_metadata(
-        self, drive_id: str, extensions: list[str], limit: int | None
+        self,
+        drive_id: str,
+        extensions: list[str],
+        limit: int | None,
+        path: str | None = None,
     ) -> AsyncIterator[DocumentMetadataItem]: ...

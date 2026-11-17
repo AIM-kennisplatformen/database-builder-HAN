@@ -6,50 +6,27 @@ from typing import override
 
 from domain.models.base import ID, AggregateRoot, ValueObject
 from domain.models.documents.content_version import ContentVersion
-from domain.models.person import Person, PersonId
 
 
 @dataclass(frozen=True)
-class Author(ValueObject):
+class AuditActor(ValueObject):
     display_name: str
-    mail: str | None = None
-    person_id: PersonId | None = None
 
     def __post_init__(self) -> None:
         if not self.display_name.strip():
-            raise ValueError("Author must have a display name.")
-
-    @classmethod
-    def from_person(cls, person: Person) -> Author:
-        return cls(
-            display_name=person.display_name, mail=person.mail, person_id=person.id
-        )
+            raise ValueError("Audit actor must have a display name.")
 
 
 @dataclass(frozen=True)
 class AuditEntry(ValueObject):
-    author: Author
     timestamp: datetime
-    content_version: ContentVersion
+    actor: AuditActor | None = None
 
 
 @dataclass(frozen=True)
 class DocumentMetadata(ValueObject):
-    authors: tuple[Author, ...] = ()
-    update_history: tuple[AuditEntry, ...] = ()
-
-    def __post_init__(self) -> None:
-        timestamps = [entry.timestamp for entry in self.update_history]
-        if timestamps != sorted(timestamps):
-            raise ValueError("Document update history must be in chronological order.")
-
-    @property
-    def created(self) -> AuditEntry | None:
-        return self.update_history[0] if self.update_history else None
-
-    @property
-    def updated(self) -> AuditEntry | None:
-        return self.update_history[-1] if len(self.update_history) > 1 else None
+    created: AuditEntry | None = None
+    updated: AuditEntry | None = None
 
 
 @dataclass(frozen=True)
