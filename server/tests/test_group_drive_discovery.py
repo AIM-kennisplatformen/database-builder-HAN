@@ -35,6 +35,7 @@ class FakeGroupDriveSource:
                 UserGroup("group-a", "Research"),
                 UserGroup("group-a", "Research"),
                 UserGroup("group-b", "Teaching"),
+                UserGroup("group-c", "No drive"),
             ):
                 yield group
 
@@ -45,6 +46,7 @@ class FakeGroupDriveSource:
             for drive_id in {
                 "group-a": ("drive-1", "drive-2", "private-drive"),
                 "group-b": ("drive-2", "drive-3"),
+                "group-c": (),
             }[group_id]:
                 yield drive_id
 
@@ -54,7 +56,7 @@ class FakeGroupDriveSource:
         self, group_id: str
     ) -> AsyncIterator[GroupDriveLocation]:
         async for drive_id in self.stream_group_drive_ids(group_id):
-            yield GroupDriveLocation(drive_id)
+            yield GroupDriveLocation(drive_id, name=f"Name of {drive_id}")
 
 
 def test_use_cases_deduplicate_groups_and_list_only_requested_group_drives() -> None:
@@ -63,6 +65,7 @@ def test_use_cases_deduplicate_groups_and_list_only_requested_group_drives() -> 
     assert [(group.id, group.name) for group in groups] == [
         ("group-a", "Research"),
         ("group-b", "Teaching"),
+        ("group-c", "No drive"),
     ]
     group = asyncio.run(get_group_drives("user", "group-a", source))
     assert group.drive_ids == ("drive-1", "drive-2", "private-drive")
@@ -97,11 +100,11 @@ def test_graph_source_follows_membership_and_drive_pages() -> None:
             Response(
                 200,
                 json={
-                    "value": [{"id": "drive-1"}],
+                    "value": [{"id": "drive-1", "name": "Research documents"}],
                     "@odata.nextLink": "https://graph.microsoft.com/v1.0/drives-next",
                 },
             ),
-            Response(200, json={"value": [{"id": "drive-2"}]}),
+            Response(200, json={"value": [{"id": "drive-2", "name": "Archive"}]}),
         ]
     )
     client = MagicMock()
@@ -120,6 +123,10 @@ def test_graph_source_follows_membership_and_drive_pages() -> None:
     assert group.group_id == "group"
     assert group.group_name == "Research"
     assert group.drive_ids == ("drive-1", "drive-2")
+    assert group.locations == (
+        GroupDriveLocation("drive-1", name="Research documents"),
+        GroupDriveLocation("drive-2", name="Archive"),
+    )
     assert memberships.with_url.call_count == 2
     assert drives.with_url.call_count == 2
 
@@ -186,7 +193,9 @@ def test_graph_source_reports_drive_probe_server_failure() -> None:
 def test_graph_source_discovers_private_channel_drive_across_pages() -> None:
     drives = MagicMock()
     drives.with_url.return_value.get = AsyncMock(
-        return_value=Response(200, json={"value": [{"id": "team-drive"}]})
+        return_value=Response(
+            200, json={"value": [{"id": "team-drive", "name": "Team files"}]}
+        )
     )
     channels = MagicMock()
     channels.with_url.return_value.get = AsyncMock(
@@ -231,6 +240,13 @@ def test_graph_source_discovers_private_channel_drive_across_pages() -> None:
     client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta.with_url.return_value.get = AsyncMock(
         return_value=Response(200, json={"value": [], "@odata.deltaLink": "done"})
     )
+    drive_metadata = client.drives.by_drive_id.return_value.with_url.return_value
+    drive_metadata.get = AsyncMock(
+        side_effect=[
+            Response(200, json={"id": "private-drive", "name": "Private files"}),
+            Response(200, json={"id": "shared-drive", "name": "Shared files"}),
+        ]
+    )
     client.teams.by_team_id.return_value.channels = channels
     client.teams.by_team_id.return_value.channels.by_channel_id.return_value.files_folder = folder
     source = MsGraphGroupDriveSource(cast(GraphServiceClient, client))
@@ -241,10 +257,16 @@ def test_graph_source_discovers_private_channel_drive_across_pages() -> None:
         ]
 
     assert asyncio.run(collect()) == [
-        GroupDriveLocation("team-drive"),
-        GroupDriveLocation("private-drive", "private-folder"),
-        GroupDriveLocation("shared-drive", "shared-folder"),
+        GroupDriveLocation("team-drive", name="Team files"),
+        GroupDriveLocation("private-drive", "private-folder", "Private files"),
+        GroupDriveLocation("shared-drive", "shared-folder", "Shared files"),
     ]
+    assert [call.args[0] for call in client.drives.by_drive_id.call_args_list] == [
+        "team-drive",
+        "private-drive",
+        "shared-drive",
+    ]
+    assert drive_metadata.get.await_count == 2
     assert channels.with_url.call_count == 2
     assert folder.with_url.call_count == 2
     assert folder.with_url.call_args_list[0].args[0] == (
@@ -281,6 +303,9 @@ def test_private_channel_drive_is_kept_without_a_drive_root_probe() -> None:
     )
 
     delta.with_url.return_value.get = AsyncMock(
+        return_value=Response(403, json={"error": {"code": "accessDenied"}})
+    )
+    client.drives.by_drive_id.return_value.with_url.return_value.get = AsyncMock(
         return_value=Response(403, json={"error": {"code": "accessDenied"}})
     )
     source = MsGraphGroupDriveSource(cast(GraphServiceClient, client))
@@ -336,7 +361,7 @@ def test_current_user_id_comes_from_graph_me() -> None:
     client.me.get.assert_awaited_once()
 
 
-def test_group_routes_separate_memberships_and_drives() -> None:
+def test_group_drives_route_lists_only_memberships_with_named_drives() -> None:
     app = FastAPI()
     app.include_router(documents_router)
 
@@ -354,26 +379,35 @@ def test_group_routes_separate_memberships_and_drives() -> None:
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             return (
+                await client.get("/api/v1/documents/groups/drives"),
                 await client.get("/api/v1/documents/groups"),
                 await client.get("/api/v1/documents/groups/group-a/drives"),
-                await client.get("/api/v1/documents/groups/unknown/drives"),
             )
 
-    memberships, drives, unknown = asyncio.run(request())
+    group_drives, old_groups, old_group_drives = asyncio.run(request())
 
-    assert memberships.status_code == 200
-    assert memberships.json() == {
-        "groups": [
-            {"id": "group-a", "name": "Research"},
-            {"id": "group-b", "name": "Teaching"},
-        ],
-    }
-    assert drives.json() == {
-        "id": "group-a",
-        "name": "Research",
-        "drive_ids": ["drive-1", "drive-2", "private-drive"],
-    }
-    assert unknown.status_code == 404
+    assert group_drives.status_code == 200
+    assert group_drives.json() == [
+        {
+            "group_id": "group-a",
+            "group_name": "Research",
+            "drives": [
+                {"drive_id": "drive-1", "name": "Name of drive-1"},
+                {"drive_id": "drive-2", "name": "Name of drive-2"},
+                {"drive_id": "private-drive", "name": "Name of private-drive"},
+            ],
+        },
+        {
+            "group_id": "group-b",
+            "group_name": "Teaching",
+            "drives": [
+                {"drive_id": "drive-2", "name": "Name of drive-2"},
+                {"drive_id": "drive-3", "name": "Name of drive-3"},
+            ],
+        },
+    ]
+    assert old_groups.status_code == 404
+    assert old_group_drives.status_code == 404
 
 
 def test_group_without_drive_is_skipped() -> None:

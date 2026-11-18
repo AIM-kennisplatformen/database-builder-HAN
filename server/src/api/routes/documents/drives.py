@@ -8,26 +8,21 @@ from domain.exceptions.metadata_inventory_errors import MetadataSourceError
 from domain.ports.documents.group_drive_source import GroupDriveSource
 from domain.use_cases.group_drive_discovery import (
     GroupNotAccessible,
-    get_group_drives,
-    get_user_groups,
+    get_user_group_drives,
 )
 
 router = APIRouter()
 
 
-class GroupResponse(BaseModel):
-    id: str
+class DriveResponse(BaseModel):
+    drive_id: str
     name: str | None
-
-
-class GroupsResponse(BaseModel):
-    groups: list[GroupResponse]
 
 
 class GroupDrivesResponse(BaseModel):
-    id: str
-    name: str | None
-    drive_ids: list[str]
+    group_id: str
+    group_name: str | None
+    drives: list[DriveResponse]
 
 
 def _discovery_error(exc: Exception) -> HTTPException:
@@ -39,30 +34,23 @@ def _discovery_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=502, detail="Group discovery failed")
 
 
-@router.get("/groups", summary="List the current user's groups")
-async def get_groups_endpoint(
-    user_id: Annotated[str, Depends(get_current_graph_user_id)],
-    source: Annotated[GroupDriveSource, Depends(get_group_drive_source)],
-) -> GroupsResponse:
-    try:
-        groups = await get_user_groups(user_id, source)
-    except Exception as exc:
-        raise _discovery_error(exc) from exc
-    return GroupsResponse(
-        groups=[GroupResponse(id=group.id, name=group.name) for group in groups]
-    )
-
-
-@router.get("/groups/{group_id}/drives", summary="List a member group's drives")
+@router.get("/groups/drives", summary="List the current user's group drives")
 async def get_group_drives_endpoint(
-    group_id: str,
     user_id: Annotated[str, Depends(get_current_graph_user_id)],
     source: Annotated[GroupDriveSource, Depends(get_group_drive_source)],
-) -> GroupDrivesResponse:
+) -> list[GroupDrivesResponse]:
     try:
-        group = await get_group_drives(user_id, group_id, source)
+        groups = await get_user_group_drives(user_id, source)
     except Exception as exc:
         raise _discovery_error(exc) from exc
-    return GroupDrivesResponse(
-        id=group.group_id, name=group.group_name, drive_ids=list(group.drive_ids)
-    )
+    return [
+        GroupDrivesResponse(
+            group_id=group.group_id,
+            group_name=group.group_name,
+            drives=[
+                DriveResponse(drive_id=location.drive_id, name=location.name)
+                for location in group.locations
+            ],
+        )
+        for group in groups
+    ]

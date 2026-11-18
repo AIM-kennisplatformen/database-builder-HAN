@@ -19,6 +19,7 @@ from infrastructure.msgraph.base import raise_for_graph_error, validate_graph_ur
 
 class GraphResource(BaseModel):
     id: str = Field(min_length=1)
+    name: str | None = None
     odata_type: str | None = Field(default=None, alias="@odata.type")
     display_name: str | None = Field(default=None, alias="displayName")
     membership_type: str | None = Field(default=None, alias="membershipType")
@@ -71,6 +72,27 @@ class MsGraphGroupDriveSource(GroupDriveSource):
             return False
         raise_for_graph_error(response, "Graph rejected the drive access request")
         return True
+
+    async def _get_drive_name(self, drive_id: str) -> str | None:
+        drive_url = (
+            f"https://graph.microsoft.com/v1.0/drives/{quote(drive_id, safe='')}"
+        )
+        response = cast(
+            Response | None,
+            await self.client.drives.by_drive_id(drive_id)
+            .with_url(drive_url)
+            .get(
+                request_configuration=RequestConfiguration(
+                    options=[ResponseHandlerOption(NativeResponseHandler())]
+                )
+            ),
+        )
+        if response is None:
+            raise ValueError("Graph returned no drive metadata response")
+        if response.status_code in {403, 404}:
+            return None
+        raise_for_graph_error(response, "Graph rejected the drive metadata request")
+        return GraphResource.model_validate_json(response.content).name
 
     @override
     async def stream_user_groups(self, user_id: str) -> AsyncIterator[UserGroup]:
@@ -138,7 +160,7 @@ class MsGraphGroupDriveSource(GroupDriveSource):
                     drive.id
                 ):
                     seen_drive_ids.add(drive.id)
-                    yield GroupDriveLocation(drive.id)
+                    yield GroupDriveLocation(drive.id, name=drive.name)
             next_url = page.next_link
 
         channel_builder = self.client.teams.by_team_id(group_id).channels
@@ -193,5 +215,7 @@ class MsGraphGroupDriveSource(GroupDriveSource):
                 drive_id = folder.parent_reference.drive_id
                 if drive_id not in seen_drive_ids:
                     seen_drive_ids.add(drive_id)
-                    yield GroupDriveLocation(drive_id, folder.id)
+                    yield GroupDriveLocation(
+                        drive_id, folder.id, await self._get_drive_name(drive_id)
+                    )
             next_url = page.next_link

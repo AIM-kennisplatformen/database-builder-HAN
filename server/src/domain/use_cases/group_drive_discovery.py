@@ -33,6 +33,21 @@ async def get_user_groups(
     return tuple(groups.values())
 
 
+async def get_user_group_drives(
+    user_id: str, source: GroupDriveSource
+) -> tuple[GroupDrives, ...]:
+    groups_with_drives: list[GroupDrives] = []
+    for group in await get_user_groups(user_id, source):
+        locations: dict[str, GroupDriveLocation] = {}
+        async for location in source.stream_group_drive_locations(group.id):
+            _ = locations.setdefault(location.drive_id, location)
+        if locations:
+            groups_with_drives.append(
+                GroupDrives(group.id, group.name, tuple(locations.values()))
+            )
+    return tuple(groups_with_drives)
+
+
 async def get_group_drives(
     user_id: str, group_id: str, source: GroupDriveSource
 ) -> GroupDrives:

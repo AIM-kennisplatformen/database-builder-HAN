@@ -1,11 +1,11 @@
 info:
-  name: groups
+  name: group drives
   type: http
   seq: 1
 
 http:
   method: GET
-  url: "{{base_url}}/{{api_version}}/documents/groups"
+  url: "{{base_url}}/{{api_version}}/documents/groups/drives"
   auth: inherit
 
 settings:

@@ -13,6 +13,7 @@ class UserGroup:
 class GroupDriveLocation:
     drive_id: str
     root_item_id: str = "root"
+    name: str | None = None
 
 
 class GroupDriveSource(Protocol):
