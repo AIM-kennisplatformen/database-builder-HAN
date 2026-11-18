@@ -16,6 +16,7 @@ from dependencies import (
     get_group_drive_source,
 )
 from domain.exceptions.metadata_inventory_errors import (
+    MetadataRunAlreadyActive,
     MetadataSourceError,
     SourceUnavailable,
     StoreUnavailable,
@@ -40,6 +41,7 @@ type InventoryError = (
     | SourceUnavailable
     | StoreUnavailable
     | RuntimeError
+    | MetadataRunAlreadyActive
 )
 
 
@@ -93,6 +95,8 @@ def _sse_event(event: InventoryMetadataEvent) -> ServerSentEvent:
 
 
 def _error_status(exc: InventoryError) -> int:
+    if isinstance(exc, MetadataRunAlreadyActive):
+        return 409
     if isinstance(exc, GroupNotAccessible):
         return 404
     if isinstance(exc, ValueError):
@@ -195,7 +199,13 @@ async def inventory_metadata_endpoint(
         cause = exc.cause
         if isinstance(
             cause,
-            (ValueError, MetadataSourceError, SourceUnavailable, StoreUnavailable),
+            (
+                ValueError,
+                MetadataSourceError,
+                MetadataRunAlreadyActive,
+                SourceUnavailable,
+                StoreUnavailable,
+            ),
         ):
             yield _failure_event(cause, group_id, exc.drive_id, processed)
         else:
@@ -209,6 +219,7 @@ async def inventory_metadata_endpoint(
     except (
         ValueError,
         MetadataSourceError,
+        MetadataRunAlreadyActive,
         SourceUnavailable,
         StoreUnavailable,
     ) as exc:

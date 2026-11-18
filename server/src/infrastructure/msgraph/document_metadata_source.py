@@ -23,7 +23,9 @@ from domain.models.documents.document import (
 )
 from domain.ports.documents.document_metadata_source import (
     DocumentMetadataItem,
+    DocumentMetadataScan,
     DocumentMetadataSource,
+    DocumentRefreshSource,
 )
 from infrastructure.msgraph.base import raise_for_graph_error, validate_graph_url
 
@@ -98,7 +100,7 @@ def _audit_actor(identities: GraphIdentitySet | None) -> AuditActor | None:
     return None
 
 
-class SharePointDocumentMetadataSource(DocumentMetadataSource):
+class SharePointDocumentMetadataSource(DocumentMetadataSource, DocumentRefreshSource):
     def __init__(self, client: GraphServiceClient) -> None:
         self.client: GraphServiceClient = client
 
@@ -174,7 +176,7 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource):
         )
 
     @override
-    async def stream_metadata(
+    async def scan_metadata(
         self,
         drive_id: str,
         extensions: list[str],
@@ -182,7 +184,8 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource):
         exclude_paths: list[str],
         exclude_extensions: list[str] | None = None,
         root_item_id: str = "root",
-    ) -> AsyncIterator[DocumentMetadataItem]:
+        cursor: str | None = None,
+    ) -> DocumentMetadataScan:
         base_url = f"https://graph.microsoft.com/v1.0/drives/{quote(drive_id, safe='')}"
         scoped = bool(include_paths or exclude_paths)
         root_id: str | None = None
@@ -211,10 +214,14 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource):
             if root_item_id == "root"
             else f"items/{quote(root_item_id, safe='')}"
         )
-        next_url: str | None = f"{base_url}/{delta_path}/delta"
+        baseline_url = f"{base_url}/{delta_path}/delta"
+        baseline = cursor is None or scoped
+        next_url: str | None = baseline_url if baseline else cursor
         seen_urls: set[str] = set()
         matching_items: dict[str, GraphDriveItem] = {}
         folder_parents: dict[str, str | None] = {}
+        deleted_ids: set[str] = set()
+        delta_link: str | None = None
 
         while next_url is not None:
             if next_url in seen_urls:
@@ -232,7 +239,21 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource):
             )
             if response is None:
                 raise ValueError("Graph returned no drive item page")
-            raise_for_graph_error(response, "Graph rejected the drive metadata request")
+            try:
+                raise_for_graph_error(
+                    response, "Graph rejected the drive metadata request"
+                )
+            except MetadataSourceError as exc:
+                if exc.status_code != 410 or baseline:
+                    raise
+                # An expired cursor must not publish a partial delta.
+                baseline = True
+                next_url = baseline_url
+                seen_urls.clear()
+                matching_items.clear()
+                folder_parents.clear()
+                deleted_ids.clear()
+                continue
 
             page = GraphDeltaPage.model_validate_json(response.content)
             for item in page.value:
@@ -242,7 +263,7 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource):
                     folder_parents[item.id] = (
                         item.parent_reference.id if item.parent_reference else None
                     )
-                if (
+                excluded = (
                     item.deleted is not None
                     or item.file is None
                     or not item.name
@@ -252,7 +273,12 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource):
                     )
                     or item.name.rpartition(".")[2].lower()
                     in (exclude_extensions or [])
-                ):
+                )
+                if item.deleted is not None or (excluded and not baseline):
+                    deleted_ids.add(item.id)
+                else:
+                    deleted_ids.discard(item.id)
+                if excluded:
                     _ = matching_items.pop(item.id, None)
                 else:
                     matching_items[item.id] = item
@@ -260,6 +286,8 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource):
             next_url = page.next_link
             if next_url is None and page.delta_link is None:
                 raise ValueError("Graph did not complete the drive delta scan")
+            if next_url is None:
+                delta_link = page.delta_link
 
         def ancestors(item: GraphDriveItem) -> set[str]:
             parent_id = item.parent_reference.id if item.parent_reference else None
@@ -282,6 +310,35 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource):
                 and not ancestors(item) & exclude_ids
             )
         ]
-        total = len(selected)
-        for item in selected:
-            yield DocumentMetadataItem(self._document(drive_id, item), total, total)
+        if delta_link is None:
+            raise ValueError("Graph did not provide a completed delta cursor")
+        validate_graph_url(delta_link)
+        return DocumentMetadataScan(
+            documents=tuple(self._document(drive_id, item) for item in selected),
+            deleted_item_ids=tuple(sorted(deleted_ids)),
+            delta_link=delta_link,
+            baseline=baseline,
+        )
+
+    @override
+    async def stream_metadata(
+        self,
+        drive_id: str,
+        extensions: list[str],
+        include_paths: list[str],
+        exclude_paths: list[str],
+        exclude_extensions: list[str] | None = None,
+        root_item_id: str = "root",
+    ) -> AsyncIterator[DocumentMetadataItem]:
+        scan = await self.scan_metadata(
+            drive_id,
+            extensions,
+            include_paths,
+            exclude_paths,
+            exclude_extensions,
+            root_item_id,
+            None,
+        )
+        total = len(scan.documents)
+        for document in scan.documents:
+            yield DocumentMetadataItem(document, total, total)

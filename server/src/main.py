@@ -18,6 +18,7 @@ from infrastructure.msgraph.employee_source import (
     MsGraphEmployeeSource,
 )
 from infrastructure.msgraph.group_drive_source import MsGraphGroupDriveSource
+from infrastructure.postgres.document_store import PostgresDocumentStore
 
 
 @asynccontextmanager
@@ -45,8 +46,10 @@ async def lifespan(app: FastAPI):
         app.state.group_drive_source = MsGraphGroupDriveSource(client)
         app.state.graph_client = client
 
-        async with AsyncConnectionPool(conninfo=conninfo, open=False) as pool:
+        pool: AsyncConnectionPool = AsyncConnectionPool(conninfo=conninfo, open=False)
+        async with pool:
             app.state.postgres_pool = pool
+            await PostgresDocumentStore(pool).interrupt_metadata_runs()
             yield
     finally:
         credential.close()

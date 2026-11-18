@@ -1,15 +1,20 @@
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from typing import cast
 
 from domain.exceptions.metadata_inventory_errors import MetadataSourceError
-from domain.ports.documents.document_metadata_source import DocumentMetadataSource
-from domain.ports.documents.document_store import DocumentStore
+from domain.ports.documents.document_metadata_source import (
+    DocumentMetadataSource,
+    DocumentRefreshSource,
+)
+from domain.ports.documents.document_store import DocumentRefreshStore, DocumentStore
 from domain.ports.documents.group_drive_source import GroupDriveSource
 from domain.use_cases.group_drive_discovery import get_group_drives
 from domain.use_cases.metadata_inventory import (
     InventoryMetadataProgress,
     InventoryMetadataRequest,
     inventory_metadata,
+    refresh_metadata,
 )
 
 
@@ -101,9 +106,24 @@ async def inventory_group_metadata(
     ]
     for drive_request in requests:
         try:
-            async for update in inventory_metadata(
-                drive_request, metadata_source, store
-            ):
+            # Retain the legacy port path for existing in-memory adapters.
+            # Production Graph/PostgreSQL adapters implement the refresh ports.
+            supports_scan = callable(
+                getattr(type(metadata_source), "scan_metadata", None)
+            )
+            supports_run = callable(getattr(type(store), "begin_metadata_run", None))
+            if supports_scan != supports_run:
+                raise RuntimeError("Metadata source and store refresh ports must agree")
+            if supports_scan:
+                updates = refresh_metadata(
+                    user_id,
+                    drive_request,
+                    cast(DocumentRefreshSource, cast(object, metadata_source)),
+                    cast(DocumentRefreshStore, cast(object, store)),
+                )
+            else:
+                updates = inventory_metadata(drive_request, metadata_source, store)
+            async for update in updates:
                 yield GroupMetadataProgress(drive_request.drive_id, update)
         except MetadataSourceError as exc:
             if exc.status_code == 403 and not included:

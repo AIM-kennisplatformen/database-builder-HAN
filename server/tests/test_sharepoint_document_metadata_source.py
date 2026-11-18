@@ -75,6 +75,177 @@ class OneGroupSource:
             yield GroupDriveLocation(drive_id)
 
 
+def test_incremental_scan_uses_cursor_and_reports_deleted_items() -> None:
+    delta = MagicMock()
+    delta.with_url.return_value.get = AsyncMock(
+        return_value=Response(
+            200,
+            json={
+                "value": [
+                    {"id": "removed", "deleted": {}},
+                    {"id": "changed", "name": "Report.pdf", "file": {}},
+                ],
+                "@odata.deltaLink": "https://graph.microsoft.com/v1.0/new-cursor",
+            },
+        )
+    )
+    client = MagicMock()
+    client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
+        delta
+    )
+    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    old_cursor = "https://graph.microsoft.com/v1.0/old-cursor"
+
+    scan = asyncio.run(
+        source.scan_metadata("drive", [], [], [], [], "root", old_cursor)
+    )
+
+    assert delta.with_url.call_args.args == (old_cursor,)
+    assert [item.id.id[1] for item in scan.documents] == ["changed"]
+    assert scan.deleted_item_ids == ("removed",)
+    assert scan.delta_link.endswith("/new-cursor")
+    assert not scan.baseline
+
+
+def test_incremental_scan_marks_file_renamed_out_of_selected_extension_invisible() -> (
+    None
+):
+    delta = MagicMock()
+    delta.with_url.return_value.get = AsyncMock(
+        return_value=Response(
+            200,
+            json={
+                "value": [
+                    {"id": "previously-visible", "name": "Report.txt", "file": {}}
+                ],
+                "@odata.deltaLink": "https://graph.microsoft.com/v1.0/new-cursor",
+            },
+        )
+    )
+    client = MagicMock()
+    client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
+        delta
+    )
+    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+
+    scan = asyncio.run(
+        source.scan_metadata(
+            "drive",
+            ["pdf"],
+            [],
+            [],
+            [],
+            "root",
+            "https://graph.microsoft.com/v1.0/old-cursor",
+        )
+    )
+
+    assert scan.documents == ()
+    assert scan.deleted_item_ids == ("previously-visible",)
+    assert not scan.baseline
+
+
+def test_incremental_scan_uses_last_matching_entry_for_same_file() -> None:
+    delta = MagicMock()
+    delta.with_url.return_value.get = AsyncMock(
+        side_effect=[
+            Response(
+                200,
+                json={
+                    "value": [{"id": "item", "name": "Report.txt", "file": {}}],
+                    "@odata.nextLink": "https://graph.microsoft.com/v1.0/next",
+                },
+            ),
+            Response(
+                200,
+                json={
+                    "value": [{"id": "item", "name": "Report.pdf", "file": {}}],
+                    "@odata.deltaLink": "https://graph.microsoft.com/v1.0/new-cursor",
+                },
+            ),
+        ]
+    )
+    client = MagicMock()
+    client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
+        delta
+    )
+    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+
+    scan = asyncio.run(
+        source.scan_metadata(
+            "drive",
+            ["pdf"],
+            [],
+            [],
+            [],
+            "root",
+            "https://graph.microsoft.com/v1.0/old-cursor",
+        )
+    )
+
+    assert [item.id.id[1] for item in scan.documents] == ["item"]
+    assert scan.deleted_item_ids == ()
+    assert delta.with_url.call_count == 2
+
+
+def test_baseline_scan_does_not_mark_unselected_extension_invisible() -> None:
+    delta = MagicMock()
+    delta.with_url.return_value.get = AsyncMock(
+        return_value=Response(
+            200,
+            json={
+                "value": [{"id": "unselected", "name": "Report.txt", "file": {}}],
+                "@odata.deltaLink": "https://graph.microsoft.com/v1.0/new-cursor",
+            },
+        )
+    )
+    client = MagicMock()
+    client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
+        delta
+    )
+    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+
+    scan = asyncio.run(source.scan_metadata("drive", ["pdf"], [], []))
+
+    assert scan.baseline
+    assert scan.documents == ()
+    assert scan.deleted_item_ids == ()
+
+
+def test_expired_cursor_restarts_full_baseline() -> None:
+    delta = MagicMock()
+    delta.with_url.return_value.get = AsyncMock(
+        side_effect=[
+            Response(410, json={"error": {"code": "resyncRequired"}}),
+            Response(
+                200,
+                json={
+                    "value": [{"id": "item", "name": "Report.pdf", "file": {}}],
+                    "@odata.deltaLink": "https://graph.microsoft.com/v1.0/new-cursor",
+                },
+            ),
+        ]
+    )
+    client = MagicMock()
+    client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
+        delta
+    )
+    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+
+    scan = asyncio.run(
+        source.scan_metadata(
+            "drive", [], [], [], [], "root", "https://graph.microsoft.com/v1.0/expired"
+        )
+    )
+
+    assert scan.baseline
+    assert [item.id.id[1] for item in scan.documents] == ["item"]
+    assert [call.args[0] for call in delta.with_url.call_args_list] == [
+        "https://graph.microsoft.com/v1.0/expired",
+        "https://graph.microsoft.com/v1.0/drives/drive/root/delta",
+    ]
+
+
 def test_stream_metadata_follows_pages_and_maps_matching_files() -> None:
     delta = MagicMock()
     delta.with_url.return_value.get = AsyncMock(

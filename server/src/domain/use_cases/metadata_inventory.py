@@ -1,7 +1,9 @@
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from json import dumps
 
 from domain.exceptions.metadata_inventory_errors import (
+    MetadataRunAlreadyActive,
     MetadataSourceError,
     SourceUnavailable,
     StoreUnavailable,
@@ -10,8 +12,9 @@ from domain.models.documents.document import Document
 from domain.ports.documents.document_metadata_source import (
     DocumentMetadataItem,
     DocumentMetadataSource,
+    DocumentRefreshSource,
 )
-from domain.ports.documents.document_store import DocumentStore
+from domain.ports.documents.document_store import DocumentRefreshStore, DocumentStore
 
 
 @dataclass(frozen=True)
@@ -120,3 +123,68 @@ async def inventory_metadata(
         yield InventoryMetadataProgress(
             document=item.document, total=item.total, available=item.available
         )
+
+
+async def refresh_metadata(
+    principal_id: str,
+    req: InventoryMetadataRequest,
+    source: DocumentRefreshSource,
+    store: DocumentRefreshStore,
+) -> AsyncIterator[InventoryMetadataProgress]:
+    """Stage a Graph delta and publish its metadata and cursor atomically."""
+    selection = dumps(
+        {
+            "root_item_id": req.root_item_id,
+            "extensions": sorted(set(req.extensions)),
+            "include_paths": sorted(set(req.include_paths)),
+            "exclude_paths": sorted(set(req.exclude_paths)),
+            "exclude_extensions": sorted(set(req.exclude_extensions)),
+        },
+        sort_keys=True,
+    )
+    try:
+        run = await store.begin_metadata_run(principal_id, req.drive_id, selection)
+    except MetadataRunAlreadyActive:
+        raise
+    except Exception as exc:
+        raise StoreUnavailable("Document metadata store is unavailable") from exc
+    try:
+        try:
+            scan = await source.scan_metadata(
+                req.drive_id,
+                req.extensions,
+                req.include_paths,
+                req.exclude_paths,
+                req.exclude_extensions,
+                req.root_item_id,
+                run.cursor if not (req.include_paths or req.exclude_paths) else None,
+            )
+        except MetadataSourceError:
+            raise
+        except Exception as exc:
+            raise SourceUnavailable("Document metadata source is unavailable") from exc
+        total = len(scan.documents)
+        for document in scan.documents:
+            try:
+                await store.stage_document(run.id, document)
+            except Exception as exc:
+                raise StoreUnavailable(
+                    "Document metadata store is unavailable"
+                ) from exc
+            yield InventoryMetadataProgress(document, total, total)
+        for item_id in scan.deleted_item_ids:
+            try:
+                await store.stage_deleted(run.id, item_id)
+            except Exception as exc:
+                raise StoreUnavailable(
+                    "Document metadata store is unavailable"
+                ) from exc
+        try:
+            await store.publish_metadata_run(
+                run.id, scan.delta_link, scan.baseline, run.same_selection
+            )
+        except Exception as exc:
+            raise StoreUnavailable("Document metadata store is unavailable") from exc
+    except BaseException:
+        await store.fail_metadata_run(run.id)
+        raise

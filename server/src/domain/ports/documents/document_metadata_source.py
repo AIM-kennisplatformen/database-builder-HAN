@@ -12,6 +12,14 @@ class DocumentMetadataItem:
     available: int
 
 
+@dataclass(frozen=True)
+class DocumentMetadataScan:
+    documents: tuple[Document, ...]
+    deleted_item_ids: tuple[str, ...]
+    delta_link: str
+    baseline: bool
+
+
 class DocumentMetadataSource(Protocol):
     def stream_metadata(
         self,
@@ -22,3 +30,16 @@ class DocumentMetadataSource(Protocol):
         exclude_extensions: list[str],
         root_item_id: str,
     ) -> AsyncIterator[DocumentMetadataItem]: ...
+
+
+class DocumentRefreshSource(Protocol):
+    async def scan_metadata(
+        self,
+        drive_id: str,
+        extensions: list[str],
+        include_paths: list[str],
+        exclude_paths: list[str],
+        exclude_extensions: list[str],
+        root_item_id: str,
+        cursor: str | None,
+    ) -> DocumentMetadataScan: ...
