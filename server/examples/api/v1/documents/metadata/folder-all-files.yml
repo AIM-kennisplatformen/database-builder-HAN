@@ -5,7 +5,7 @@ info:
 
 http:
   method: POST
-  url: "{{base_url}}/{{api_version}}/documents/metadata"
+  url: "{{base_url}}/{{api_version}}/documents/groups/{{group_id}}/metadata"
   headers:
     - name: Content-Type
       value: application/json
@@ -15,9 +15,20 @@ http:
     type: json
     data: |-
       {
-        "drive_id": "{{drive_id}}",
-        "include_paths": ["Reports/"],
-        "exclude_paths": ["Reports/Drafts/"]
+        "include": [
+          {
+            "drive_id": "{{drive_id}}",
+            "paths": ["Reports/"],
+            "extensions": ["pdf"]
+          }
+        ],
+        "exclude": [
+          {
+            "drive_id": "{{drive_id}}",
+            "paths": ["Reports/Drafts/"],
+            "extensions": ["xlsx"]
+          }
+        ]
       }
   auth: inherit
 

@@ -5,13 +5,13 @@ info:
 
 http:
   method: POST
-  url: "{{base_url}}/{{api_version}}/documents/metadata"
+  url: "{{base_url}}/{{api_version}}/documents/groups/{{group_id}}/metadata"
   body:
     type: json
     data: |-
       {
-        "drive_id": "{{drive_id}}",
-        "extensions": []
+        "include": [],
+        "exclude": []
       }
   auth: inherit
 

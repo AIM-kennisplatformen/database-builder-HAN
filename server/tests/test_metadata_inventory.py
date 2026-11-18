@@ -39,10 +39,20 @@ def test_inventory_saves_each_document_before_reporting_progress() -> None:
             extensions: list[str],
             include_paths: list[str],
             exclude_paths: list[str],
+            exclude_extensions: list[str],
+            root_item_id: str,
         ) -> AsyncIterator[DocumentMetadataItem]:
-            assert (drive_id, extensions, include_paths, exclude_paths) == (
+            assert root_item_id == "root"
+            assert (
+                drive_id,
+                extensions,
+                include_paths,
+                exclude_paths,
+                exclude_extensions,
+            ) == (
                 "drive",
                 ["pdf"],
+                [],
                 [],
                 [],
             )
@@ -73,10 +83,20 @@ def test_inventory_does_not_report_progress_when_save_fails() -> None:
             extensions: list[str],
             include_paths: list[str],
             exclude_paths: list[str],
+            exclude_extensions: list[str],
+            root_item_id: str,
         ) -> AsyncIterator[DocumentMetadataItem]:
-            assert (drive_id, extensions, include_paths, exclude_paths) == (
+            assert root_item_id == "root"
+            assert (
+                drive_id,
+                extensions,
+                include_paths,
+                exclude_paths,
+                exclude_extensions,
+            ) == (
                 "drive",
                 ["pdf"],
+                [],
                 [],
                 [],
             )

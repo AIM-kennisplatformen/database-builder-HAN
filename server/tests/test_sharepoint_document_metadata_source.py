@@ -10,11 +10,17 @@ from msgraph.graph_service_client import GraphServiceClient
 from pydantic import ValidationError
 
 from api.routes.documents.metadata import (
+    DriveMetadataSelectorBody,
     InventoryMetadataRequestBody,
     inventory_metadata_endpoint,
 )
 from api.routes.documents.router import router as documents_router
-from dependencies import get_document_metadata_source, get_document_store
+from dependencies import (
+    get_current_graph_user_id,
+    get_document_metadata_source,
+    get_document_store,
+    get_group_drive_source,
+)
 from domain.exceptions.metadata_inventory_errors import MetadataSourceError
 from domain.models.documents.content_version import ContentVersion
 from domain.models.documents.document import (
@@ -28,19 +34,45 @@ from domain.ports.documents.document_metadata_source import (
     DocumentMetadataSource,
 )
 from domain.ports.documents.document_store import DocumentStore
+from domain.ports.documents.group_drive_source import GroupDriveLocation, UserGroup
 from infrastructure.msgraph.document_metadata_source import (
     SharePointDocumentMetadataSource,
 )
 
 
-@pytest.mark.parametrize("removed_field", [{"limit": 10}, {"path": "Reports"}])
+@pytest.mark.parametrize(
+    "removed_field",
+    [{"limit": 10}, {"path": "Reports"}, {"include_drive_ids": ["drive"]}],
+)
 def test_metadata_request_rejects_removed_fields(
     removed_field: dict[str, object],
 ) -> None:
     with pytest.raises(ValidationError):
+        InventoryMetadataRequestBody.model_validate(removed_field)
+
+
+def test_metadata_selector_requires_paths_list() -> None:
+    with pytest.raises(ValidationError):
         InventoryMetadataRequestBody.model_validate(
-            {"drive_id": "drive", **removed_field}
+            {"include": [{"drive_id": "drive", "paths": "Reports/"}]}
         )
+
+
+class OneGroupSource:
+    async def stream_user_groups(self, user_id: str) -> AsyncIterator[UserGroup]:
+        assert user_id == "user"
+        yield UserGroup("group", "Research")
+
+    async def stream_group_drive_ids(self, group_id: str) -> AsyncIterator[str]:
+        assert group_id == "group"
+        yield "bad-drive"
+        yield "drive"
+
+    async def stream_group_drive_locations(
+        self, group_id: str
+    ) -> AsyncIterator[GroupDriveLocation]:
+        async for drive_id in self.stream_group_drive_ids(group_id):
+            yield GroupDriveLocation(drive_id)
 
 
 def test_stream_metadata_follows_pages_and_maps_matching_files() -> None:
@@ -409,6 +441,59 @@ def test_stream_metadata_uses_latest_parent_for_repeated_folder() -> None:
     ]
 
 
+def test_stream_metadata_scans_from_channel_folder_root() -> None:
+    root = MagicMock()
+    root.with_url.return_value.get = AsyncMock(
+        return_value=Response(200, json={"id": "reports", "folder": {}})
+    )
+    delta = MagicMock()
+    delta.with_url.return_value.get = AsyncMock(
+        return_value=Response(
+            200,
+            json={
+                "value": [
+                    {
+                        "id": "reports",
+                        "folder": {},
+                        "parentReference": {"id": "channel-root"},
+                    },
+                    {
+                        "id": "file",
+                        "name": "Report.pdf",
+                        "file": {},
+                        "parentReference": {"id": "reports"},
+                    },
+                ],
+                "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta",
+            },
+        )
+    )
+    client = MagicMock()
+    client.drives.by_drive_id.return_value.root = root
+    client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
+        delta
+    )
+    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+
+    async def collect() -> list[DocumentMetadataItem]:
+        return [
+            item
+            async for item in source.stream_metadata(
+                "drive", [], ["Reports"], [], [], "channel-root"
+            )
+        ]
+
+    assert [item.document.id.id for item in asyncio.run(collect())] == [
+        ("drive", "file")
+    ]
+    assert root.with_url.call_args.args[0] == (
+        "https://graph.microsoft.com/v1.0/drives/drive/items/channel-root:/Reports:"
+    )
+    assert delta.with_url.call_args.args[0] == (
+        "https://graph.microsoft.com/v1.0/drives/drive/items/channel-root/delta"
+    )
+
+
 def test_stream_metadata_reports_total_after_repeated_and_deleted_items() -> None:
     delta = MagicMock()
     delta.with_url.return_value.get = AsyncMock(
@@ -453,6 +538,36 @@ def test_stream_metadata_reports_total_after_repeated_and_deleted_items() -> Non
     assert (items[0].total, items[0].available) == (2, 2)
     assert delta.with_url.call_count == 2
     item_builder.versions.with_url.assert_not_called()
+
+
+def test_stream_metadata_excludes_file_extensions() -> None:
+    delta = MagicMock()
+    delta.with_url.return_value.get = AsyncMock(
+        return_value=Response(
+            200,
+            json={
+                "value": [
+                    {"id": "keep", "name": "Keep.pdf", "file": {}},
+                    {"id": "skip", "name": "Skip.docx", "file": {}},
+                ],
+                "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta",
+            },
+        )
+    )
+    client = MagicMock()
+    client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
+        delta
+    )
+    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+
+    async def collect() -> list[DocumentMetadataItem]:
+        return [
+            item async for item in source.stream_metadata("drive", [], [], [], ["docx"])
+        ]
+
+    items = asyncio.run(collect())
+    assert [item.document.id.id for item in items] == [("drive", "keep")]
+    assert (items[0].total, items[0].available) == (1, 1)
 
 
 def test_stream_metadata_maps_creation_and_latest_update_without_version_request() -> (
@@ -578,22 +693,34 @@ def test_metadata_endpoint_returns_graph_client_error() -> None:
             extensions: list[str],
             include_paths: list[str],
             exclude_paths: list[str],
+            exclude_extensions: list[str],
+            root_item_id: str,
         ):
-            assert (drive_id, extensions, include_paths, exclude_paths) == (
+            assert root_item_id == "root"
+            assert (
+                drive_id,
+                extensions,
+                include_paths,
+                exclude_paths,
+                exclude_extensions,
+            ) == (
                 "bad-drive",
                 ["pdf"],
+                [],
                 [],
                 [],
             )
             raise MetadataSourceError(400, "The supplied drive id is invalid")
 
-    request = InventoryMetadataRequestBody(drive_id="bad-drive", extensions=["pdf"])
+    request = InventoryMetadataRequestBody(
+        include=[DriveMetadataSelectorBody(drive_id="bad-drive", extensions=["pdf"])],
+    )
 
     async def collect():
         return [
             event
             async for event in inventory_metadata_endpoint(
-                request, ErrorSource(), AsyncMock()
+                "group", request, "user", OneGroupSource(), ErrorSource(), AsyncMock()
             )
         ]
 
@@ -602,6 +729,129 @@ def test_metadata_endpoint_returns_graph_client_error() -> None:
     assert events[0].event == "error"
     assert events[0].data["error_status"] == 400
     assert events[0].data["detail"] == "The supplied drive id is invalid"
+    assert events[0].data["drive_id"] == "bad-drive"
+
+
+def test_metadata_endpoint_skips_inaccessible_drive_and_completes() -> None:
+    class PartlyAccessibleSource:
+        async def stream_metadata(
+            self,
+            drive_id: str,
+            extensions: list[str],
+            include_paths: list[str],
+            exclude_paths: list[str],
+            exclude_extensions: list[str],
+            root_item_id: str,
+        ) -> AsyncIterator[DocumentMetadataItem]:
+            assert root_item_id == "root"
+            assert (extensions, include_paths, exclude_paths, exclude_extensions) == (
+                [],
+                [],
+                [],
+                [],
+            )
+            if drive_id == "bad-drive":
+                raise MetadataSourceError(403, "Access denied")
+            yield DocumentMetadataItem(
+                Document(
+                    _id=DocumentId(drive_id, "item"),
+                    file_metadata=FileMetadata(
+                        name="Report.pdf",
+                        mime_type="application/pdf",
+                        size_bytes=10,
+                        content_version=ContentVersion("v1"),
+                        source_url=None,
+                    ),
+                    document_metadata=DocumentMetadata(),
+                ),
+                1,
+                1,
+            )
+
+    async def collect():
+        return [
+            event
+            async for event in inventory_metadata_endpoint(
+                "group",
+                InventoryMetadataRequestBody(),
+                "user",
+                OneGroupSource(),
+                PartlyAccessibleSource(),
+                AsyncMock(),
+            )
+        ]
+
+    events = asyncio.run(collect())
+    assert [event.event for event in events] == ["skipped", "progress", "complete"]
+    assert events[0].data["drive_id"] == "bad-drive"
+    assert events[0].data["error_status"] == 403
+    assert events[-1].data["processed"] == 1
+    assert events[-1].data["skipped_drive_ids"] == ["bad-drive"]
+
+
+def test_metadata_endpoint_reports_explicitly_included_drive_denial() -> None:
+    class DeniedSource:
+        def stream_metadata(
+            self,
+            drive_id: str,
+            extensions: list[str],
+            include_paths: list[str],
+            exclude_paths: list[str],
+            exclude_extensions: list[str],
+            root_item_id: str,
+        ):
+            assert drive_id == "bad-drive"
+            assert (extensions, include_paths, exclude_paths, exclude_extensions) == (
+                [],
+                [],
+                [],
+                [],
+            )
+            assert root_item_id == "root"
+            raise MetadataSourceError(403, "Access denied")
+
+    async def collect():
+        return [
+            event
+            async for event in inventory_metadata_endpoint(
+                "group",
+                InventoryMetadataRequestBody(
+                    include=[DriveMetadataSelectorBody(drive_id="bad-drive")]
+                ),
+                "user",
+                OneGroupSource(),
+                DeniedSource(),
+                AsyncMock(),
+            )
+        ]
+
+    events = asyncio.run(collect())
+    assert [event.event for event in events] == ["error"]
+    assert events[0].data["drive_id"] == "bad-drive"
+    assert events[0].data["error_status"] == 403
+
+
+def test_metadata_endpoint_reports_explicit_drive_filtered_by_discovery() -> None:
+    async def collect():
+        return [
+            event
+            async for event in inventory_metadata_endpoint(
+                "group",
+                InventoryMetadataRequestBody(
+                    include=[DriveMetadataSelectorBody(drive_id="hidden-drive")]
+                ),
+                "user",
+                OneGroupSource(),
+                AsyncMock(),
+                AsyncMock(),
+            )
+        ]
+
+    events = asyncio.run(collect())
+    assert [event.event for event in events] == ["error"]
+    assert events[0].data["drive_id"] == "hidden-drive"
+    assert events[0].data["error_status"] == 403
+    assert events[0].data["processed"] == 0
 
 
 def test_metadata_endpoint_streams_progress_and_completion() -> None:
@@ -612,10 +862,20 @@ def test_metadata_endpoint_streams_progress_and_completion() -> None:
             extensions: list[str],
             include_paths: list[str],
             exclude_paths: list[str],
+            exclude_extensions: list[str],
+            root_item_id: str,
         ) -> AsyncIterator[DocumentMetadataItem]:
-            assert (drive_id, extensions, include_paths, exclude_paths) == (
+            assert root_item_id == "root"
+            assert (
+                drive_id,
+                extensions,
+                include_paths,
+                exclude_paths,
+                exclude_extensions,
+            ) == (
                 "drive",
                 ["pdf"],
+                [],
                 [],
                 [],
             )
@@ -651,14 +911,21 @@ def test_metadata_endpoint_streams_progress_and_completion() -> None:
 
     app.dependency_overrides[get_document_metadata_source] = get_source
     app.dependency_overrides[get_document_store] = get_store
+    app.dependency_overrides[get_group_drive_source] = lambda: OneGroupSource()
+    app.dependency_overrides[get_current_graph_user_id] = lambda: "user"
 
     async def request() -> Response:
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             return await client.post(
-                "/api/v1/documents/metadata",
-                json={"drive_id": "drive", "extensions": ["pdf"]},
+                "/api/v1/documents/groups/group/metadata",
+                json={
+                    "include": [
+                        {"drive_id": "drive", "paths": [], "extensions": ["pdf"]}
+                    ],
+                    "exclude": [],
+                },
             )
 
     response = asyncio.run(request())
@@ -667,8 +934,8 @@ def test_metadata_endpoint_streams_progress_and_completion() -> None:
     assert "event: progress" in response.text
     assert "event: complete" in response.text
     assert '"item_id": "item"' in response.text
-    assert response.text.count('"total": 1') == 2
-    assert response.text.count('"available": 1') == 2
+    assert response.text.count('"total": 1') == 1
+    assert response.text.count('"available": 1') == 1
     assert [document.id.id for document in saved] == [("drive", "item")]
 
 
@@ -683,29 +950,38 @@ def test_metadata_endpoint_accepts_include_paths_without_extensions() -> None:
             extensions: list[str],
             include_paths: list[str],
             exclude_paths: list[str],
+            exclude_extensions: list[str],
+            root_item_id: str,
         ) -> AsyncIterator[DocumentMetadataItem]:
-            assert (drive_id, extensions, include_paths, exclude_paths) == (
+            assert root_item_id == "root"
+            assert (
+                drive_id,
+                extensions,
+                include_paths,
+                exclude_paths,
+                exclude_extensions,
+            ) == (
                 "drive",
                 [],
                 ["Reports/2026"],
+                [],
                 [],
             )
             for item in self.items:
                 yield item
 
     request = InventoryMetadataRequestBody(
-        drive_id="drive", include_paths=["Reports/2026"]
+        include=[DriveMetadataSelectorBody(drive_id="drive", paths=["Reports/2026"])],
     )
 
     async def collect():
         return [
             event
             async for event in inventory_metadata_endpoint(
-                request, EmptySource(), AsyncMock()
+                "group", request, "user", OneGroupSource(), EmptySource(), AsyncMock()
             )
         ]
 
     events = asyncio.run(collect())
     assert [event.event for event in events] == ["complete"]
-    assert events[0].data["total"] == 0
-    assert events[0].data["available"] == 0
+    assert events[0].data["processed"] == 0

@@ -102,10 +102,21 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource):
     def __init__(self, client: GraphServiceClient) -> None:
         self.client: GraphServiceClient = client
 
-    async def _folder_id(self, drive_id: str, path: str) -> str:
+    async def _folder_id(
+        self, drive_id: str, path: str, root_item_id: str = "root"
+    ) -> str:
         base_url = f"https://graph.microsoft.com/v1.0/drives/{quote(drive_id, safe='')}"
         encoded_path = "/".join(quote(segment, safe="") for segment in path.split("/"))
-        folder_url = f"{base_url}/root:/{encoded_path}:" if path else f"{base_url}/root"
+        root_path = (
+            "root"
+            if root_item_id == "root"
+            else f"items/{quote(root_item_id, safe='')}"
+        )
+        folder_url = (
+            f"{base_url}/{root_path}:/{encoded_path}:"
+            if path
+            else f"{base_url}/{root_path}"
+        )
         response = cast(
             Response | None,
             await self.client.drives.by_drive_id(drive_id)
@@ -169,19 +180,38 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource):
         extensions: list[str],
         include_paths: list[str],
         exclude_paths: list[str],
+        exclude_extensions: list[str] | None = None,
+        root_item_id: str = "root",
     ) -> AsyncIterator[DocumentMetadataItem]:
         base_url = f"https://graph.microsoft.com/v1.0/drives/{quote(drive_id, safe='')}"
         scoped = bool(include_paths or exclude_paths)
-        root_id = await self._folder_id(drive_id, "") if scoped else None
-        include_ids = {await self._folder_id(drive_id, path) for path in include_paths}
-        exclude_ids = {await self._folder_id(drive_id, path) for path in exclude_paths}
+        root_id: str | None = None
+        if scoped:
+            root_id = (
+                await self._folder_id(drive_id, "", root_item_id)
+                if root_item_id == "root"
+                else root_item_id
+            )
+        include_ids = {
+            await self._folder_id(drive_id, path, root_item_id)
+            for path in include_paths
+        }
+        exclude_ids = {
+            await self._folder_id(drive_id, path, root_item_id)
+            for path in exclude_paths
+        }
 
         delta = (
             self.client.drives.by_drive_id(drive_id)
-            .items.by_drive_item_id("root")
+            .items.by_drive_item_id(root_item_id)
             .delta
         )
-        next_url: str | None = f"{base_url}/root/delta"
+        delta_path = (
+            "root"
+            if root_item_id == "root"
+            else f"items/{quote(root_item_id, safe='')}"
+        )
+        next_url: str | None = f"{base_url}/{delta_path}/delta"
         seen_urls: set[str] = set()
         matching_items: dict[str, GraphDriveItem] = {}
         folder_parents: dict[str, str | None] = {}
@@ -220,6 +250,8 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource):
                         extensions
                         and item.name.rpartition(".")[2].lower() not in extensions
                     )
+                    or item.name.rpartition(".")[2].lower()
+                    in (exclude_extensions or [])
                 ):
                     _ = matching_items.pop(item.id, None)
                 else:

@@ -19,4 +19,6 @@ class DocumentMetadataSource(Protocol):
         extensions: list[str],
         include_paths: list[str],
         exclude_paths: list[str],
+        exclude_extensions: list[str],
+        root_item_id: str,
     ) -> AsyncIterator[DocumentMetadataItem]: ...

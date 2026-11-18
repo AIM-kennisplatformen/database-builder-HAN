@@ -5,7 +5,7 @@ info:
 
 http:
   method: GET
-  url: "{{base_url}}/{{api_version}}/documents/drives"
+  url: "{{base_url}}/{{api_version}}/documents/groups/{{group_id}}/drives"
   auth: inherit
 
 settings:
