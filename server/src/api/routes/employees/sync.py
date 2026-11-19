@@ -1,12 +1,15 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from enum import StrEnum
 from typing import Annotated
 
+import anyio
 from fastapi import APIRouter, Depends
 from fastapi.sse import EventSourceResponse, ServerSentEvent
+from frozendict import frozendict
 from pydantic import BaseModel, Field
 
 from api.progress import ProgressEventLimiter
+from api.stream import StreamEvent, StreamEventKind, StreamLifecycle
 from config import config
 from dependencies import get_employee_source, get_employee_store
 from domain.exceptions.employee_sync_errors import (
@@ -17,9 +20,23 @@ from domain.exceptions.employee_sync_errors import (
 )
 from domain.ports.employees.employee_source import EmployeeSource
 from domain.ports.employees.employee_store import EmployeeWriter
-from domain.use_cases.employee_sync import EmployeesSyncRequest, sync_employees
+from domain.use_cases.employee_sync import (
+    EmployeesSyncProgress,
+    EmployeesSyncRequest,
+    EmployeesSyncResult,
+    sync_employees,
+)
 
 router = APIRouter()
+
+EMPLOYEE_SYNC_ERROR_STATUS: frozendict[type[Exception], int] = frozendict(
+    {
+        InvalidLimit: 422,
+        NoEmployeesFound: 404,
+        SourceUnavailable: 501,
+        StoreUnavailable: 503,
+    }
+)
 
 
 class EmployeesSyncRequestBody(BaseModel):
@@ -44,10 +61,56 @@ class EmployeesSyncProgressEvent(BaseModel):
     detail: str | None = None
 
 
-def _sse_event(progress: EmployeesSyncProgressEvent) -> ServerSentEvent:
-    return ServerSentEvent(
-        event=progress.status.value,
-        data=progress.model_dump(exclude_none=True),
+def _event(update: EmployeesSyncProgress | EmployeesSyncResult) -> StreamEvent:
+    if isinstance(update, EmployeesSyncResult):
+        status = EmployeesSyncProgressStatus.COMPLETE
+        kind = StreamEventKind.COMPLETE
+    else:
+        status = EmployeesSyncProgressStatus.PROGRESS
+        kind = StreamEventKind.PROGRESS
+
+    event = EmployeesSyncProgressEvent(
+        status=status,
+        processed=update.processed,
+        total=update.total,
+        available=update.available,
+        created=update.created,
+        updated=update.updated,
+        unchanged=update.unchanged,
+    )
+    return StreamEvent(
+        event.status.value,
+        event.model_dump(exclude_none=True),
+        kind,
+    )
+
+
+def _failure_event(
+    exc: Exception,
+    progress: EmployeesSyncProgress | None,
+) -> StreamEvent:
+    error_status = 500
+    detail = "Employee sync failed"
+    for error_type, status in EMPLOYEE_SYNC_ERROR_STATUS.items():
+        if isinstance(exc, error_type):
+            error_status = status
+            detail = str(exc)
+            break
+    event = EmployeesSyncProgressEvent(
+        status=EmployeesSyncProgressStatus.ERROR,
+        processed=progress.processed if progress else 0,
+        total=progress.total if progress else None,
+        available=progress.available if progress else 0,
+        created=progress.created if progress else 0,
+        updated=progress.updated if progress else 0,
+        unchanged=progress.unchanged if progress else 0,
+        error_status=error_status,
+        detail=detail,
+    )
+    return StreamEvent(
+        event.status.value,
+        event.model_dump(exclude_none=True),
+        StreamEventKind.ERROR,
     )
 
 
@@ -64,88 +127,33 @@ async def sync_employees_endpoint(
     request: EmployeesSyncRequestBody,
     source: Annotated[EmployeeSource, Depends(get_employee_source)],
     store: Annotated[EmployeeWriter, Depends(get_employee_store)],
-) -> AsyncIterator[ServerSentEvent]:
-    processed = 0
-    total: int | None = None
-    available = 0
-    created = 0
-    updated = 0
-    unchanged = 0
-    progress_limiter = ProgressEventLimiter(config.stream_progress_interval_seconds)
-
+) -> AsyncGenerator[ServerSentEvent]:
+    missing_outcome = _failure_event(
+        RuntimeError("Employee sync ended without an outcome"),
+        None,
+    )
+    lifecycle = StreamLifecycle(
+        ProgressEventLimiter(config.stream_progress_interval_seconds),
+        missing_outcome,
+    )
+    updates = sync_employees(EmployeesSyncRequest(request.limit), source, store)
+    last_progress: EmployeesSyncProgress | None = None
     try:
-        async for update in sync_employees(
-            EmployeesSyncRequest(request.limit), source, store
-        ):
-            processed = update.processed
-            total = update.total
-            available = update.available
-            created = update.created
-            updated = update.updated
-            unchanged = update.unchanged
-
-            if not progress_limiter.should_emit():
-                continue
-
-            yield _sse_event(
-                EmployeesSyncProgressEvent(
-                    status=EmployeesSyncProgressStatus.PROGRESS,
-                    processed=update.processed,
-                    total=update.total,
-                    available=update.available,
-                    created=update.created,
-                    updated=update.updated,
-                    unchanged=update.unchanged,
-                )
-            )
-    except (
-        InvalidLimit,
-        NoEmployeesFound,
-        SourceUnavailable,
-        StoreUnavailable,
-    ) as exc:
-        status = {
-            InvalidLimit: 422,
-            NoEmployeesFound: 404,
-            SourceUnavailable: 501,
-            StoreUnavailable: 503,
-        }[type(exc)]
-        yield _sse_event(
-            EmployeesSyncProgressEvent(
-                status=EmployeesSyncProgressStatus.ERROR,
-                processed=processed,
-                total=total,
-                available=available,
-                created=created,
-                updated=updated,
-                unchanged=unchanged,
-                error_status=status,
-                detail=str(exc),
-            )
-        )
-    except Exception:  # noqa: BLE001 - terminate the SSE stream on unexpected failures
-        yield _sse_event(
-            EmployeesSyncProgressEvent(
-                status=EmployeesSyncProgressStatus.ERROR,
-                processed=processed,
-                total=total,
-                available=available,
-                created=created,
-                updated=updated,
-                unchanged=unchanged,
-                error_status=500,
-                detail="Employee sync failed",
-            )
-        )
+        async for update in updates:
+            if isinstance(update, EmployeesSyncProgress):
+                last_progress = update
+            event = _event(update)
+            response = lifecycle.encode(event)
+            if response is not None:
+                yield response
+    except Exception as exc:  # noqa: BLE001 - terminate the SSE stream on failures
+        response = lifecycle.encode(_failure_event(exc, last_progress))
+        if response is not None:
+            yield response
     else:
-        yield _sse_event(
-            EmployeesSyncProgressEvent(
-                status=EmployeesSyncProgressStatus.COMPLETE,
-                processed=processed,
-                total=total,
-                available=available,
-                created=created,
-                updated=updated,
-                unchanged=unchanged,
-            )
-        )
+        response = lifecycle.finish()
+        if response is not None:
+            yield response
+    finally:
+        with anyio.CancelScope(shield=True):
+            await updates.aclose()

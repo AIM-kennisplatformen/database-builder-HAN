@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass
 
 from domain.exceptions.employee_sync_errors import (
@@ -30,6 +30,19 @@ class EmployeesSyncProgress:
         return self.created + self.updated + self.unchanged
 
 
+@dataclass(frozen=True)
+class EmployeesSyncResult:
+    total: int | None
+    available: int
+    created: int
+    updated: int
+    unchanged: int
+
+    @property
+    def processed(self) -> int:
+        return self.created + self.updated + self.unchanged
+
+
 async def _stream_employee_source(
     source: EmployeeSource, limit: int | None
 ) -> AsyncIterator[EmployeeStreamItem]:
@@ -51,7 +64,7 @@ async def _write_employee(
 
 async def sync_employees(
     req: EmployeesSyncRequest, source: EmployeeSource, store: EmployeeWriter
-) -> AsyncIterator[EmployeesSyncProgress]:
+) -> AsyncGenerator[EmployeesSyncProgress | EmployeesSyncResult]:
     if req.limit is not None and req.limit <= 0:
         raise InvalidLimit("Employee sync limit must be positive")
 
@@ -59,7 +72,11 @@ async def sync_employees(
     updated = 0
     unchanged = 0
 
+    total: int | None = None
+    available = 0
     async for item in _stream_employee_source(source, req.limit):
+        total = item.total
+        available = item.available
         match await _write_employee(store, item.employee):
             case WriteEmployeeOutcome.CREATED:
                 created += 1
@@ -77,3 +94,5 @@ async def sync_employees(
 
     if created + updated + unchanged == 0:
         raise NoEmployeesFound("Employee sync found no employees")
+
+    yield EmployeesSyncResult(total, available, created, updated, unchanged)

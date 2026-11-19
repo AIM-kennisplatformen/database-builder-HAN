@@ -10,6 +10,7 @@ from domain.use_cases.metadata_ingest.group import (
     MetadataIngestDriveFailure,
     MetadataIngestProgress,
     MetadataIngestRequest,
+    MetadataIngestResult,
     MetadataIngestSkipped,
     ingest_group_metadata,
 )
@@ -21,6 +22,7 @@ __all__ = [
     "MetadataIngestDriveRequest",
     "MetadataIngestProgress",
     "MetadataIngestRequest",
+    "MetadataIngestResult",
     "MetadataIngestSkipped",
     "ingest_group_metadata",
     "ingest_metadata",

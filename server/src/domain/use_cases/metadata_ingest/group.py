@@ -31,12 +31,20 @@ class MetadataIngestRequest:
 class MetadataIngestProgress:
     drive_id: str
     update: MetadataIngestDriveProgress
+    processed: int = 0
 
 
 @dataclass(frozen=True)
 class MetadataIngestSkipped:
     drive_id: str
     reason: str
+    processed: int = 0
+
+
+@dataclass(frozen=True)
+class MetadataIngestResult:
+    processed: int
+    skipped_drive_ids: tuple[str, ...]
 
 
 class MetadataIngestDriveFailure(Exception):
@@ -77,7 +85,9 @@ async def ingest_group_metadata(
     drive_source: GroupDriveSource,
     metadata_source: DocumentRefreshSource,
     store: DocumentRefreshStore,
-) -> AsyncGenerator[MetadataIngestProgress | MetadataIngestSkipped]:
+) -> AsyncGenerator[
+    MetadataIngestProgress | MetadataIngestSkipped | MetadataIngestResult
+]:
     """Validate the selection, then ingest selected drives in discovery order."""
     group = await get_group_drives(user_id, request.group_id, drive_source)
     locations = {location.drive_id: location for location in group.locations}
@@ -124,6 +134,8 @@ async def ingest_group_metadata(
         )
         for drive_id in selected
     ]
+    processed = 0
+    skipped_drive_ids: list[str] = []
     for drive_request in requests:
         updates = _ingest_drive(
             user_id,
@@ -134,6 +146,21 @@ async def ingest_group_metadata(
         )
         try:
             async for update in updates:
-                yield update
+                if isinstance(update, MetadataIngestSkipped):
+                    skipped_drive_ids.append(update.drive_id)
+                    yield MetadataIngestSkipped(
+                        update.drive_id,
+                        update.reason,
+                        processed,
+                    )
+                else:
+                    processed += 1
+                    yield MetadataIngestProgress(
+                        update.drive_id,
+                        update.update,
+                        processed,
+                    )
         finally:
             await updates.aclose()
+
+    yield MetadataIngestResult(processed, tuple(skipped_drive_ids))

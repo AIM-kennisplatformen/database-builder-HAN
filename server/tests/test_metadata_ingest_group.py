@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import override
 from uuid import UUID, uuid4
 
@@ -21,7 +21,10 @@ from domain.use_cases.group_drive_discovery import GroupNotAccessible
 from domain.use_cases.metadata_ingest import (
     DriveMetadataSelector,
     MetadataIngestDriveFailure,
+    MetadataIngestProgress,
     MetadataIngestRequest,
+    MetadataIngestResult,
+    MetadataIngestSkipped,
     ingest_group_metadata,
 )
 
@@ -117,6 +120,14 @@ class Store:
         self.staged.clear()
 
 
+def _drive_ids(updates: Sequence[object]) -> list[str]:
+    return [
+        update.drive_id
+        for update in updates
+        if isinstance(update, (MetadataIngestProgress, MetadataIngestSkipped))
+    ]
+
+
 def test_include_and_exclude_apply_per_drive_filters() -> None:
     metadata, store = Metadata(), Store()
     request = MetadataIngestRequest(
@@ -134,7 +145,9 @@ def test_include_and_exclude_apply_per_drive_filters() -> None:
         ]
 
     updates = asyncio.run(collect())
-    assert [update.drive_id for update in updates] == ["private-drive"]
+    assert _drive_ids(updates) == ["private-drive"]
+    assert isinstance(updates[-1], MetadataIngestResult)
+    assert updates[-1].processed == 1
     assert metadata.calls == [
         ("private-drive", ["pdf"], ["Reports"], ["Reports/Drafts"], []),
     ]
@@ -161,6 +174,7 @@ def test_empty_include_uses_all_drives_and_excludes_selected_extensions() -> Non
                 metadata,
                 store,
             )
+            if isinstance(update, MetadataIngestProgress)
         ]
 
     assert asyncio.run(collect()) == ["team-drive", "private-drive"]
@@ -187,6 +201,7 @@ def test_channel_folder_root_is_passed_to_metadata_scan() -> None:
             async for update in ingest_group_metadata(
                 "user", MetadataIngestRequest("group"), ChannelGroup(), metadata, store
             )
+            if isinstance(update, MetadataIngestProgress)
         ]
 
     assert asyncio.run(collect()) == ["private-drive"]
@@ -259,7 +274,7 @@ def test_excluded_drive_is_not_scanned() -> None:
             )
         ]
 
-    assert [update.drive_id for update in asyncio.run(collect())] == ["private-drive"]
+    assert _drive_ids(asyncio.run(collect())) == ["private-drive"]
 
 
 def test_inaccessible_drive_is_skipped_and_later_drive_continues() -> None:
@@ -282,11 +297,23 @@ def test_inaccessible_drive_is_skipped_and_later_drive_continues() -> None:
         ]
 
     updates = asyncio.run(collect())
-    assert [update.drive_id for update in updates] == [
+    assert _drive_ids(updates) == [
         "team-drive",
         "private-drive",
         "other-drive",
     ]
+    assert [
+        (update.drive_id, update.processed)
+        for update in updates
+        if isinstance(update, (MetadataIngestProgress, MetadataIngestSkipped))
+    ] == [
+        ("team-drive", 1),
+        ("private-drive", 1),
+        ("other-drive", 2),
+    ]
+    assert isinstance(updates[-1], MetadataIngestResult)
+    assert updates[-1].processed == 2
+    assert updates[-1].skipped_drive_ids == ("private-drive",)
     assert [document.id.id[0] for document in store.saved] == [
         "team-drive",
         "other-drive",
@@ -312,6 +339,7 @@ def test_explicitly_included_drive_denial_stops_run() -> None:
                 metadata,
                 store,
             )
+            if isinstance(update, MetadataIngestProgress)
         ]
 
     with pytest.raises(MetadataIngestDriveFailure) as error:
@@ -330,7 +358,8 @@ def test_later_drive_failure_reports_drive_and_keeps_earlier_writes() -> None:
         async for update in ingest_group_metadata(
             "user", MetadataIngestRequest("group"), Groups(), metadata, store
         ):
-            seen.append(update.drive_id)
+            if isinstance(update, MetadataIngestProgress | MetadataIngestSkipped):
+                seen.append(update.drive_id)
 
     with pytest.raises(MetadataIngestDriveFailure) as error:
         asyncio.run(collect())

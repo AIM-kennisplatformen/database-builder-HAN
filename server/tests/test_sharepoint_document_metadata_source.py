@@ -1,16 +1,17 @@
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterator
-from typing import cast
+from collections.abc import AsyncIterator
+from types import SimpleNamespace
+from typing import cast, override
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi import FastAPI
-from fastapi.sse import ServerSentEvent
 from httpx import ASGITransport, AsyncClient, Response
 from msgraph.graph_service_client import GraphServiceClient
 from pydantic import ValidationError
 
+from api.routes.documents import metadata as metadata_route
 from api.routes.documents.metadata import (
     DriveMetadataSelectorBody,
     MetadataIngestRequestBody,
@@ -23,7 +24,10 @@ from dependencies import (
     get_document_store,
     get_group_drive_source,
 )
-from domain.exceptions.metadata_ingest_errors import MetadataSourceError
+from domain.exceptions.metadata_ingest_errors import (
+    MetadataRunAlreadyActive,
+    MetadataSourceError,
+)
 from domain.models.documents.content_version import ContentVersion
 from domain.models.documents.document import (
     Document,
@@ -899,8 +903,26 @@ def test_graph_drive_error_is_reported_before_page_validation() -> None:
     assert "valid drive" in str(error.value)
 
 
-def test_metadata_endpoint_returns_graph_client_error() -> None:
+@pytest.mark.parametrize(
+    ("graph_status", "event_status"),
+    [(400, 400), (404, 404), (500, 502)],
+)
+def test_metadata_endpoint_returns_graph_client_error(
+    graph_status: int,
+    event_status: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DEBUG", "true")
+    monkeypatch.setattr(
+        metadata_route,
+        "config",
+        SimpleNamespace(stream_progress_interval_seconds=1),
+    )
+
     class ErrorSource:
+        def __init__(self) -> None:
+            self.status_code: int = graph_status
+
         async def scan_metadata(
             self,
             drive_id: str,
@@ -926,7 +948,9 @@ def test_metadata_endpoint_returns_graph_client_error() -> None:
                 [],
                 [],
             )
-            raise MetadataSourceError(400, "The supplied drive id is invalid")
+            raise MetadataSourceError(
+                self.status_code, "The supplied drive id is invalid"
+            )
 
     request = MetadataIngestRequestBody(
         include=[DriveMetadataSelectorBody(drive_id="bad-drive", extensions=["pdf"])],
@@ -948,9 +972,143 @@ def test_metadata_endpoint_returns_graph_client_error() -> None:
     events = asyncio.run(collect())
     assert len(events) == 1
     assert events[0].event == "error"
-    assert events[0].data["error_status"] == 400
-    assert events[0].data["detail"] == "The supplied drive id is invalid"
-    assert events[0].data["drive_id"] == "bad-drive"
+    assert events[0].data == {
+        "status": "error",
+        "group_id": "group",
+        "drive_id": "bad-drive",
+        "processed": 0,
+        "error_status": event_status,
+        "detail": "The supplied drive id is invalid",
+    }
+
+
+def test_metadata_endpoint_failure_reports_group_progress_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        metadata_route,
+        "config",
+        SimpleNamespace(stream_progress_interval_seconds=1),
+    )
+
+    class DriveThenFailureGroup(OneGroupSource):
+        @override
+        async def stream_group_drive_ids(self, group_id: str) -> AsyncIterator[str]:
+            assert group_id == "group"
+            yield "drive"
+            yield "bad-drive"
+
+    class FailureAfterProgressSource:
+        async def scan_metadata(
+            self,
+            drive_id: str,
+            extensions: list[str],
+            include_paths: list[str],
+            exclude_paths: list[str],
+            exclude_extensions: list[str],
+            root_item_id: str,
+            cursor: str | None,
+        ) -> DocumentMetadataScan:
+            _ = (
+                extensions,
+                include_paths,
+                exclude_paths,
+                exclude_extensions,
+                root_item_id,
+                cursor,
+            )
+            if drive_id == "bad-drive":
+                raise MetadataSourceError(503, "Graph unavailable")
+            return DocumentMetadataScan(
+                (
+                    Document(
+                        _id=DocumentId("drive", "item"),
+                        file_metadata=FileMetadata(
+                            name="Report.pdf",
+                            mime_type="application/pdf",
+                            size_bytes=10,
+                            content_version=ContentVersion("v1"),
+                            source_url=None,
+                        ),
+                        document_metadata=DocumentMetadata(),
+                    ),
+                ),
+                (),
+                "new-cursor",
+                False,
+            )
+
+    async def collect():
+        return [
+            event
+            async for event in ingest_group_metadata_endpoint(
+                "group",
+                MetadataIngestRequestBody(),
+                "user",
+                DriveThenFailureGroup(),
+                FailureAfterProgressSource(),
+                MetadataRefreshStore(),
+            )
+        ]
+
+    events = asyncio.run(collect())
+    assert [event.event for event in events] == ["progress", "error"]
+    assert events[0].data["processed"] == 1
+    assert events[1].data == {
+        "status": "error",
+        "group_id": "group",
+        "drive_id": "bad-drive",
+        "processed": 1,
+        "error_status": 502,
+        "detail": "Graph unavailable",
+    }
+
+
+def test_metadata_known_error_subclass_inherits_status_and_hides_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DEBUG", "true")
+
+    class SpecializedRunAlreadyActive(MetadataRunAlreadyActive):
+        pass
+
+    class AlreadyActiveStore(MetadataRefreshStore):
+        @override
+        async def start_metadata_run(
+            self, principal_id: str, drive_id: str, selection: MetadataSelection
+        ) -> MetadataIngestRun:
+            _ = (principal_id, drive_id, selection)
+            raise SpecializedRunAlreadyActive("metadata run is already active")
+
+    monkeypatch.setattr(
+        metadata_route,
+        "config",
+        SimpleNamespace(stream_progress_interval_seconds=1),
+    )
+
+    async def collect():
+        return [
+            event
+            async for event in ingest_group_metadata_endpoint(
+                "group",
+                MetadataIngestRequestBody(),
+                "user",
+                OneGroupSource(),
+                cast(DocumentRefreshSource, cast(object, AsyncMock())),
+                AlreadyActiveStore(),
+            )
+        ]
+
+    events = asyncio.run(collect())
+    assert [event.event for event in events] == ["error"]
+    assert events[0].data == {
+        "status": "error",
+        "group_id": "group",
+        "drive_id": "bad-drive",
+        "processed": 0,
+        "error_status": 409,
+        "detail": "metadata run is already active",
+    }
 
 
 def test_metadata_endpoint_skips_inaccessible_drive_and_completes() -> None:
@@ -1009,10 +1167,30 @@ def test_metadata_endpoint_skips_inaccessible_drive_and_completes() -> None:
 
     events = asyncio.run(collect())
     assert [event.event for event in events] == ["skipped", "progress", "complete"]
-    assert events[0].data["drive_id"] == "bad-drive"
-    assert events[0].data["error_status"] == 403
-    assert events[-1].data["processed"] == 1
-    assert events[-1].data["skipped_drive_ids"] == ["bad-drive"]
+    assert events[0].data == {
+        "status": "skipped",
+        "group_id": "group",
+        "drive_id": "bad-drive",
+        "processed": 0,
+        "error_status": 403,
+        "detail": "Access denied",
+    }
+    assert events[1].data == {
+        "status": "progress",
+        "group_id": "group",
+        "drive_id": "drive",
+        "processed": 1,
+        "total": 1,
+        "available": 1,
+        "item_id": "item",
+        "name": "Report.pdf",
+    }
+    assert events[2].data == {
+        "status": "complete",
+        "group_id": "group",
+        "processed": 1,
+        "skipped_drive_ids": ["bad-drive"],
+    }
 
 
 def test_metadata_endpoint_reports_explicitly_included_drive_denial() -> None:
@@ -1348,16 +1526,13 @@ def test_metadata_endpoint_close_discards_staged_refresh() -> None:
 
     async def close_after_first_progress() -> None:
         store = RefreshStore()
-        endpoint = cast(
-            AsyncGenerator[ServerSentEvent],
-            ingest_group_metadata_endpoint(
-                "group",
-                MetadataIngestRequestBody(),
-                "user",
-                OneGroupSource(),
-                cast(DocumentRefreshSource, cast(object, RefreshSource())),
-                cast(DocumentRefreshStore, cast(object, store)),
-            ),
+        endpoint = ingest_group_metadata_endpoint(
+            "group",
+            MetadataIngestRequestBody(),
+            "user",
+            OneGroupSource(),
+            cast(DocumentRefreshSource, cast(object, RefreshSource())),
+            cast(DocumentRefreshStore, cast(object, store)),
         )
 
         event = await anext(endpoint)

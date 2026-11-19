@@ -1,14 +1,15 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from enum import StrEnum
-from traceback import format_exception
 from typing import Annotated, ClassVar
 
 import anyio
 from fastapi import APIRouter, Depends
 from fastapi.sse import EventSourceResponse, ServerSentEvent
+from frozendict import frozendict
 from pydantic import BaseModel, ConfigDict, Field
 
 from api.progress import ProgressEventLimiter
+from api.stream import StreamEvent, StreamEventKind, StreamLifecycle
 from config import config
 from dependencies import (
     get_current_graph_user_id,
@@ -31,20 +32,21 @@ from domain.use_cases.metadata_ingest import (
     MetadataIngestDriveFailure,
     MetadataIngestProgress,
     MetadataIngestRequest,
+    MetadataIngestResult,
     MetadataIngestSkipped,
     ingest_group_metadata,
 )
 
 router = APIRouter()
 
-type MetadataIngestError = (
-    GroupNotAccessible
-    | ValueError
-    | MetadataSourceError
-    | SourceUnavailable
-    | StoreUnavailable
-    | RuntimeError
-    | MetadataRunAlreadyActive
+METADATA_ERROR_STATUS: frozendict[type[Exception], int] = frozendict(
+    {
+        MetadataRunAlreadyActive: 409,
+        GroupNotAccessible: 404,
+        ValueError: 422,
+        SourceUnavailable: 503,
+        StoreUnavailable: 503,
+    }
 )
 
 
@@ -88,108 +90,97 @@ class MetadataIngestEvent(BaseModel):
     error_status: int | None = None
     skipped_drive_ids: list[str] | None = None
     detail: str | None = None
-    traceback: str | None = None
 
 
-def _sse_event(event: MetadataIngestEvent) -> ServerSentEvent:
-    return ServerSentEvent(
-        event=event.status.value, data=event.model_dump(exclude_none=True)
+def _event(
+    update: MetadataIngestProgress | MetadataIngestSkipped | MetadataIngestResult,
+    group_id: str,
+) -> StreamEvent:
+    if isinstance(update, MetadataIngestResult):
+        event = MetadataIngestEvent(
+            status=MetadataIngestEventStatus.COMPLETE,
+            group_id=group_id,
+            processed=update.processed,
+            skipped_drive_ids=list(update.skipped_drive_ids),
+        )
+        return StreamEvent(
+            event.status.value,
+            event.model_dump(exclude_none=True),
+            StreamEventKind.COMPLETE,
+        )
+    if isinstance(update, MetadataIngestSkipped):
+        event = MetadataIngestEvent(
+            status=MetadataIngestEventStatus.SKIPPED,
+            group_id=group_id,
+            processed=update.processed,
+            drive_id=update.drive_id,
+            error_status=403,
+            detail=update.reason,
+        )
+        return StreamEvent(
+            event.status.value,
+            event.model_dump(exclude_none=True),
+            StreamEventKind.NON_TERMINAL,
+        )
+
+    progress = update.update
+    event = MetadataIngestEvent(
+        status=MetadataIngestEventStatus.PROGRESS,
+        group_id=group_id,
+        processed=update.processed,
+        drive_id=update.drive_id,
+        total=progress.total,
+        available=progress.available,
+        item_id=progress.document.id.id[1],
+        name=progress.document.file_metadata.name,
+    )
+    return StreamEvent(
+        event.status.value,
+        event.model_dump(exclude_none=True),
+        StreamEventKind.PROGRESS,
     )
 
 
-def _error_status(exc: MetadataIngestError) -> int:
-    if isinstance(exc, MetadataRunAlreadyActive):
-        return 409
-    if isinstance(exc, GroupNotAccessible):
-        return 404
-    if isinstance(exc, ValueError):
-        return 422
+def _resolve_error(exc: Exception) -> tuple[int, str]:
     if isinstance(exc, MetadataSourceError):
-        return exc.status_code if 400 <= exc.status_code < 500 else 502
-    if isinstance(exc, (SourceUnavailable, StoreUnavailable)):
-        return 503
-    return 500
+        status = exc.status_code if 400 <= exc.status_code < 500 else 502
+        return status, str(exc)
+
+    status = next(
+        (
+            value
+            for error_type, value in METADATA_ERROR_STATUS.items()
+            if isinstance(exc, error_type)
+        ),
+        None,
+    )
+    if status is not None:
+        return status, str(exc)
+
+    return 500, "Metadata inventory failed"
 
 
 def _failure_event(
     exc: Exception | MetadataIngestDriveFailure,
     group_id: str,
-    processed: int,
-) -> ServerSentEvent:
-    drive_id: str | None = None
-    original: Exception = exc
-    if isinstance(exc, MetadataIngestDriveFailure):
-        drive_id = exc.drive_id
-        original = exc.cause
+    progress: MetadataIngestProgress | MetadataIngestSkipped | None,
+) -> StreamEvent:
+    drive_id = exc.drive_id if isinstance(exc, MetadataIngestDriveFailure) else None
+    original = exc.cause if isinstance(exc, MetadataIngestDriveFailure) else exc
+    error_status, detail = _resolve_error(original)
 
-    if isinstance(
-        original,
-        (
-            GroupNotAccessible,
-            ValueError,
-            MetadataSourceError,
-            MetadataRunAlreadyActive,
-            SourceUnavailable,
-            StoreUnavailable,
-        ),
-    ):
-        failure: MetadataIngestError = original
-    else:
-        failure = RuntimeError("Metadata inventory failed")
-
-    return _sse_event(
-        MetadataIngestEvent(
-            status=MetadataIngestEventStatus.ERROR,
-            group_id=group_id,
-            drive_id=drive_id,
-            processed=processed,
-            error_status=_error_status(failure),
-            detail=str(failure),
-            traceback="".join(format_exception(original))
-            if config.debug
-            else None,
-        )
+    event = MetadataIngestEvent(
+        status=MetadataIngestEventStatus.ERROR,
+        group_id=group_id,
+        drive_id=drive_id,
+        processed=progress.processed if progress else 0,
+        error_status=error_status,
+        detail=detail,
     )
-
-
-def _event(
-    update: MetadataIngestProgress | MetadataIngestSkipped | None,
-    group_id: str,
-    processed: int,
-    skipped_drive_ids: list[str],
-) -> ServerSentEvent:
-    if update is None:
-        return _sse_event(
-            MetadataIngestEvent(
-                status=MetadataIngestEventStatus.COMPLETE,
-                group_id=group_id,
-                processed=processed,
-                skipped_drive_ids=skipped_drive_ids,
-            )
-        )
-    if isinstance(update, MetadataIngestSkipped):
-        return _sse_event(
-            MetadataIngestEvent(
-                status=MetadataIngestEventStatus.SKIPPED,
-                group_id=group_id,
-                drive_id=update.drive_id,
-                processed=processed,
-                error_status=403,
-                detail=update.reason,
-            )
-        )
-    progress = update.update
-    return _sse_event(
-        MetadataIngestEvent(
-            status=MetadataIngestEventStatus.PROGRESS,
-            group_id=group_id,
-            drive_id=update.drive_id,
-            processed=processed,
-            total=progress.total,
-            available=progress.available,
-            item_id=progress.document.id.id[1],
-            name=progress.document.file_metadata.name,
-        )
+    return StreamEvent(
+        event.status.value,
+        event.model_dump(exclude_none=True),
+        StreamEventKind.ERROR,
     )
 
 
@@ -205,10 +196,17 @@ async def ingest_group_metadata_endpoint(
     drive_source: Annotated[GroupDriveSource, Depends(get_group_drive_source)],
     source: Annotated[DocumentRefreshSource, Depends(get_document_metadata_source)],
     store: Annotated[DocumentRefreshStore, Depends(get_document_store)],
-) -> AsyncIterator[ServerSentEvent]:
-    processed = 0
-    skipped_drive_ids: list[str] = []
-    progress_limiter = ProgressEventLimiter(config.stream_progress_interval_seconds)
+) -> AsyncGenerator[ServerSentEvent]:
+    last_update: MetadataIngestProgress | MetadataIngestSkipped | None = None
+    missing_outcome = _failure_event(
+        RuntimeError("Metadata inventory ended without an outcome"),
+        group_id,
+        None,
+    )
+    lifecycle = StreamLifecycle(
+        ProgressEventLimiter(config.stream_progress_interval_seconds),
+        missing_outcome,
+    )
     selection = MetadataIngestRequest(
         group_id,
         [
@@ -225,22 +223,23 @@ async def ingest_group_metadata_endpoint(
         ],
     )
     updates = ingest_group_metadata(user_id, selection, drive_source, source, store)
+
     try:
-        async for progress in updates:
-            if isinstance(progress, MetadataIngestSkipped):
-                skipped_drive_ids.append(progress.drive_id)
-                yield _event(progress, group_id, processed, skipped_drive_ids)
-                continue
-            processed += 1
-            if not progress_limiter.should_emit():
-                continue
-            yield _event(progress, group_id, processed, skipped_drive_ids)
+        async for update in updates:
+            if isinstance(update, MetadataIngestProgress | MetadataIngestSkipped):
+                last_update = update
+            response = lifecycle.encode(_event(update, group_id))
+            if response is not None:
+                yield response
     except Exception as exc:  # noqa: BLE001 - terminate the SSE stream on failures
-        yield _failure_event(exc, group_id, processed)
+        response = lifecycle.encode(_failure_event(exc, group_id, last_update))
+        if response is not None:
+            yield response
     else:
-        yield _event(None, group_id, processed, skipped_drive_ids)
+        response = lifecycle.finish()
+        if response is not None:
+            yield response
     finally:
-        # Close the nested ingestion generator so per-drive staging is discarded
-        # when the client disconnects.
+        # Close nested ingestion so cancellation discards unfinished staging.
         with anyio.CancelScope(shield=True):
             await updates.aclose()

@@ -19,6 +19,7 @@ dependencies = [
     "sqlalchemy>=2,<3",
     "uvicorn>=0.30,<1",
     "dotenv>=0.9.9",
+    "frozendict>=2.4.6,<3",
 ]
 
 [tool.uv]
