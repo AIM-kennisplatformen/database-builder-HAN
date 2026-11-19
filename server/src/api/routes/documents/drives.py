@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from dependencies import get_current_graph_user_id, get_group_drive_source
-from domain.exceptions.metadata_inventory_errors import MetadataSourceError
+from domain.exceptions.metadata_ingest_errors import MetadataSourceError
 from domain.ports.documents.group_drive_source import GroupDriveSource
 from domain.use_cases.group_drive_discovery import (
     GroupNotAccessible,

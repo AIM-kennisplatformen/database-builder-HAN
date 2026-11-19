@@ -1,18 +1,20 @@
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import FastAPI
+from fastapi.sse import ServerSentEvent
 from httpx import ASGITransport, AsyncClient, Response
 from msgraph.graph_service_client import GraphServiceClient
 from pydantic import ValidationError
 
 from api.routes.documents.metadata import (
     DriveMetadataSelectorBody,
-    InventoryMetadataRequestBody,
-    inventory_metadata_endpoint,
+    MetadataIngestRequestBody,
+    ingest_group_metadata_endpoint,
 )
 from api.routes.documents.router import router as documents_router
 from dependencies import (
@@ -21,7 +23,7 @@ from dependencies import (
     get_document_store,
     get_group_drive_source,
 )
-from domain.exceptions.metadata_inventory_errors import MetadataSourceError
+from domain.exceptions.metadata_ingest_errors import MetadataSourceError
 from domain.models.documents.content_version import ContentVersion
 from domain.models.documents.document import (
     Document,
@@ -29,12 +31,21 @@ from domain.models.documents.document import (
     DocumentMetadata,
     FileMetadata,
 )
+from domain.models.documents.metadata_selection import MetadataSelection
 from domain.ports.documents.document_metadata_source import (
     DocumentMetadataItem,
-    DocumentMetadataSource,
+    DocumentMetadataScan,
+    DocumentRefreshSource,
 )
-from domain.ports.documents.document_store import DocumentStore
-from domain.ports.documents.group_drive_source import GroupDriveLocation, UserGroup
+from domain.ports.documents.document_store import (
+    DocumentRefreshStore,
+    MetadataIngestRun,
+)
+from domain.ports.documents.group_drive_source import (
+    GroupDriveLocation,
+    GroupDriveSource,
+    UserGroup,
+)
 from infrastructure.msgraph.document_metadata_source import (
     SharePointDocumentMetadataSource,
 )
@@ -48,12 +59,12 @@ def test_metadata_request_rejects_removed_fields(
     removed_field: dict[str, object],
 ) -> None:
     with pytest.raises(ValidationError):
-        InventoryMetadataRequestBody.model_validate(removed_field)
+        MetadataIngestRequestBody.model_validate(removed_field)
 
 
 def test_metadata_selector_requires_paths_list() -> None:
     with pytest.raises(ValidationError):
-        InventoryMetadataRequestBody.model_validate(
+        MetadataIngestRequestBody.model_validate(
             {"include": [{"drive_id": "drive", "paths": "Reports/"}]}
         )
 
@@ -73,6 +84,38 @@ class OneGroupSource:
     ) -> AsyncIterator[GroupDriveLocation]:
         async for drive_id in self.stream_group_drive_ids(group_id):
             yield GroupDriveLocation(drive_id)
+
+
+class MetadataRefreshStore:
+    def __init__(self) -> None:
+        self.cursor: str | None = None
+        self.staged: list[Document] = []
+        self.published: list[Document] = []
+
+    async def start_metadata_run(
+        self, principal_id: str, drive_id: str, selection: MetadataSelection
+    ) -> MetadataIngestRun:
+        _ = (principal_id, drive_id, selection)
+        return MetadataIngestRun(uuid4(), self.cursor, True)
+
+    async def stage_document(self, run_id: UUID, document: Document) -> None:
+        _ = run_id
+        self.staged.append(document)
+
+    async def stage_deleted(self, run_id: UUID, item_id: str) -> None:
+        _ = (run_id, item_id)
+
+    async def publish_metadata_run(
+        self, run_id: UUID, delta_link: str, baseline: bool, reconcile: bool
+    ) -> None:
+        _ = (run_id, baseline, reconcile)
+        self.published.extend(self.staged)
+        self.staged.clear()
+        self.cursor = delta_link
+
+    async def fail_metadata_run(self, run_id: UUID) -> None:
+        _ = run_id
+        self.staged.clear()
 
 
 def test_incremental_scan_uses_cursor_and_reports_deleted_items() -> None:
@@ -858,7 +901,7 @@ def test_graph_drive_error_is_reported_before_page_validation() -> None:
 
 def test_metadata_endpoint_returns_graph_client_error() -> None:
     class ErrorSource:
-        def stream_metadata(
+        async def scan_metadata(
             self,
             drive_id: str,
             extensions: list[str],
@@ -866,7 +909,9 @@ def test_metadata_endpoint_returns_graph_client_error() -> None:
             exclude_paths: list[str],
             exclude_extensions: list[str],
             root_item_id: str,
-        ):
+            cursor: str | None,
+        ) -> DocumentMetadataScan:
+            assert cursor is None
             assert root_item_id == "root"
             assert (
                 drive_id,
@@ -883,15 +928,20 @@ def test_metadata_endpoint_returns_graph_client_error() -> None:
             )
             raise MetadataSourceError(400, "The supplied drive id is invalid")
 
-    request = InventoryMetadataRequestBody(
+    request = MetadataIngestRequestBody(
         include=[DriveMetadataSelectorBody(drive_id="bad-drive", extensions=["pdf"])],
     )
 
     async def collect():
         return [
             event
-            async for event in inventory_metadata_endpoint(
-                "group", request, "user", OneGroupSource(), ErrorSource(), AsyncMock()
+            async for event in ingest_group_metadata_endpoint(
+                "group",
+                request,
+                "user",
+                OneGroupSource(),
+                ErrorSource(),
+                MetadataRefreshStore(),
             )
         ]
 
@@ -905,7 +955,7 @@ def test_metadata_endpoint_returns_graph_client_error() -> None:
 
 def test_metadata_endpoint_skips_inaccessible_drive_and_completes() -> None:
     class PartlyAccessibleSource:
-        async def stream_metadata(
+        async def scan_metadata(
             self,
             drive_id: str,
             extensions: list[str],
@@ -913,7 +963,9 @@ def test_metadata_endpoint_skips_inaccessible_drive_and_completes() -> None:
             exclude_paths: list[str],
             exclude_extensions: list[str],
             root_item_id: str,
-        ) -> AsyncIterator[DocumentMetadataItem]:
+            cursor: str | None,
+        ) -> DocumentMetadataScan:
+            assert cursor is None
             assert root_item_id == "root"
             assert (extensions, include_paths, exclude_paths, exclude_extensions) == (
                 [],
@@ -923,32 +975,35 @@ def test_metadata_endpoint_skips_inaccessible_drive_and_completes() -> None:
             )
             if drive_id == "bad-drive":
                 raise MetadataSourceError(403, "Access denied")
-            yield DocumentMetadataItem(
-                Document(
-                    _id=DocumentId(drive_id, "item"),
-                    file_metadata=FileMetadata(
-                        name="Report.pdf",
-                        mime_type="application/pdf",
-                        size_bytes=10,
-                        content_version=ContentVersion("v1"),
-                        source_url=None,
+            return DocumentMetadataScan(
+                (
+                    Document(
+                        _id=DocumentId(drive_id, "item"),
+                        file_metadata=FileMetadata(
+                            name="Report.pdf",
+                            mime_type="application/pdf",
+                            size_bytes=10,
+                            content_version=ContentVersion("v1"),
+                            source_url=None,
+                        ),
+                        document_metadata=DocumentMetadata(),
                     ),
-                    document_metadata=DocumentMetadata(),
                 ),
-                1,
-                1,
+                (),
+                "new-cursor",
+                False,
             )
 
     async def collect():
         return [
             event
-            async for event in inventory_metadata_endpoint(
+            async for event in ingest_group_metadata_endpoint(
                 "group",
-                InventoryMetadataRequestBody(),
+                MetadataIngestRequestBody(),
                 "user",
                 OneGroupSource(),
                 PartlyAccessibleSource(),
-                AsyncMock(),
+                MetadataRefreshStore(),
             )
         ]
 
@@ -962,7 +1017,7 @@ def test_metadata_endpoint_skips_inaccessible_drive_and_completes() -> None:
 
 def test_metadata_endpoint_reports_explicitly_included_drive_denial() -> None:
     class DeniedSource:
-        def stream_metadata(
+        async def scan_metadata(
             self,
             drive_id: str,
             extensions: list[str],
@@ -970,7 +1025,9 @@ def test_metadata_endpoint_reports_explicitly_included_drive_denial() -> None:
             exclude_paths: list[str],
             exclude_extensions: list[str],
             root_item_id: str,
-        ):
+            cursor: str | None,
+        ) -> DocumentMetadataScan:
+            assert cursor is None
             assert drive_id == "bad-drive"
             assert (extensions, include_paths, exclude_paths, exclude_extensions) == (
                 [],
@@ -984,15 +1041,15 @@ def test_metadata_endpoint_reports_explicitly_included_drive_denial() -> None:
     async def collect():
         return [
             event
-            async for event in inventory_metadata_endpoint(
+            async for event in ingest_group_metadata_endpoint(
                 "group",
-                InventoryMetadataRequestBody(
+                MetadataIngestRequestBody(
                     include=[DriveMetadataSelectorBody(drive_id="bad-drive")]
                 ),
                 "user",
                 OneGroupSource(),
                 DeniedSource(),
-                AsyncMock(),
+                MetadataRefreshStore(),
             )
         ]
 
@@ -1006,15 +1063,15 @@ def test_metadata_endpoint_reports_explicit_drive_filtered_by_discovery() -> Non
     async def collect():
         return [
             event
-            async for event in inventory_metadata_endpoint(
+            async for event in ingest_group_metadata_endpoint(
                 "group",
-                InventoryMetadataRequestBody(
+                MetadataIngestRequestBody(
                     include=[DriveMetadataSelectorBody(drive_id="hidden-drive")]
                 ),
                 "user",
                 OneGroupSource(),
-                AsyncMock(),
-                AsyncMock(),
+                cast(DocumentRefreshSource, cast(object, AsyncMock())),
+                cast(DocumentRefreshStore, cast(object, AsyncMock())),
             )
         ]
 
@@ -1025,9 +1082,35 @@ def test_metadata_endpoint_reports_explicit_drive_filtered_by_discovery() -> Non
     assert events[0].data["processed"] == 0
 
 
+def test_metadata_endpoint_reports_unexpected_failure() -> None:
+    class BrokenGroupSource:
+        async def stream_user_groups(self, user_id: str) -> AsyncIterator[UserGroup]:
+            if user_id:
+                raise RuntimeError("discovery failed")
+            yield UserGroup("unreachable", None)
+
+    async def collect():
+        return [
+            event
+            async for event in ingest_group_metadata_endpoint(
+                "group",
+                MetadataIngestRequestBody(),
+                "user",
+                cast(GroupDriveSource, cast(object, BrokenGroupSource())),
+                cast(DocumentRefreshSource, cast(object, AsyncMock())),
+                cast(DocumentRefreshStore, cast(object, AsyncMock())),
+            )
+        ]
+
+    events = asyncio.run(collect())
+    assert len(events) == 1
+    assert events[0].event == "error"
+    assert events[0].data["error_status"] == 500
+
+
 def test_metadata_endpoint_streams_progress_and_completion() -> None:
     class OneDocumentSource:
-        async def stream_metadata(
+        async def scan_metadata(
             self,
             drive_id: str,
             extensions: list[str],
@@ -1035,7 +1118,9 @@ def test_metadata_endpoint_streams_progress_and_completion() -> None:
             exclude_paths: list[str],
             exclude_extensions: list[str],
             root_item_id: str,
-        ) -> AsyncIterator[DocumentMetadataItem]:
+            cursor: str | None,
+        ) -> DocumentMetadataScan:
+            assert cursor is None
             assert root_item_id == "root"
             assert (
                 drive_id,
@@ -1050,34 +1135,56 @@ def test_metadata_endpoint_streams_progress_and_completion() -> None:
                 [],
                 [],
             )
-            yield DocumentMetadataItem(
-                Document(
-                    _id=DocumentId("drive", "item"),
-                    file_metadata=FileMetadata(
-                        name="Report.pdf",
-                        mime_type="application/pdf",
-                        size_bytes=10,
-                        content_version=ContentVersion("v1"),
-                        source_url=None,
+            return DocumentMetadataScan(
+                (
+                    Document(
+                        _id=DocumentId("drive", "item"),
+                        file_metadata=FileMetadata(
+                            name="Report.pdf",
+                            mime_type="application/pdf",
+                            size_bytes=10,
+                            content_version=ContentVersion("v1"),
+                            source_url=None,
+                        ),
+                        document_metadata=DocumentMetadata(),
                     ),
-                    document_metadata=DocumentMetadata(),
                 ),
-                1,
-                1,
+                (),
+                "new-cursor",
+                False,
             )
 
     app = FastAPI()
     app.include_router(documents_router)
     saved: list[Document] = []
 
-    async def get_source() -> DocumentMetadataSource:
+    async def get_source() -> DocumentRefreshSource:
         return OneDocumentSource()
 
     class Store:
-        async def save_document(self, document: Document) -> None:
+        async def start_metadata_run(
+            self, principal_id: str, drive_id: str, selection: MetadataSelection
+        ) -> MetadataIngestRun:
+            _ = (principal_id, drive_id, selection)
+            return MetadataIngestRun(uuid4(), None, True)
+
+        async def stage_document(self, run_id: UUID, document: Document) -> None:
+            _ = run_id
             saved.append(document)
 
-    async def get_store() -> DocumentStore:
+        async def stage_deleted(self, run_id: UUID, item_id: str) -> None:
+            _ = (run_id, item_id)
+
+        async def publish_metadata_run(
+            self, run_id: UUID, delta_link: str, baseline: bool, reconcile: bool
+        ) -> None:
+            _ = (run_id, delta_link, baseline, reconcile)
+
+        async def fail_metadata_run(self, run_id: UUID) -> None:
+            _ = run_id
+            saved.clear()
+
+    async def get_store() -> DocumentRefreshStore:
         return Store()
 
     app.dependency_overrides[get_document_metadata_source] = get_source
@@ -1112,10 +1219,7 @@ def test_metadata_endpoint_streams_progress_and_completion() -> None:
 
 def test_metadata_endpoint_accepts_include_paths_without_extensions() -> None:
     class EmptySource:
-        def __init__(self) -> None:
-            self.items: list[DocumentMetadataItem] = []
-
-        async def stream_metadata(
+        async def scan_metadata(
             self,
             drive_id: str,
             extensions: list[str],
@@ -1123,7 +1227,9 @@ def test_metadata_endpoint_accepts_include_paths_without_extensions() -> None:
             exclude_paths: list[str],
             exclude_extensions: list[str],
             root_item_id: str,
-        ) -> AsyncIterator[DocumentMetadataItem]:
+            cursor: str | None,
+        ) -> DocumentMetadataScan:
+            assert cursor is None
             assert root_item_id == "root"
             assert (
                 drive_id,
@@ -1138,21 +1244,130 @@ def test_metadata_endpoint_accepts_include_paths_without_extensions() -> None:
                 [],
                 [],
             )
-            for item in self.items:
-                yield item
+            return DocumentMetadataScan((), (), "new-cursor", True)
 
-    request = InventoryMetadataRequestBody(
+    request = MetadataIngestRequestBody(
         include=[DriveMetadataSelectorBody(drive_id="drive", paths=["Reports/2026"])],
     )
 
     async def collect():
         return [
             event
-            async for event in inventory_metadata_endpoint(
-                "group", request, "user", OneGroupSource(), EmptySource(), AsyncMock()
+            async for event in ingest_group_metadata_endpoint(
+                "group",
+                request,
+                "user",
+                OneGroupSource(),
+                EmptySource(),
+                MetadataRefreshStore(),
             )
         ]
 
     events = asyncio.run(collect())
     assert [event.event for event in events] == ["complete"]
     assert events[0].data["processed"] == 0
+
+
+def test_metadata_endpoint_close_discards_staged_refresh() -> None:
+    old_document = Document(
+        _id=DocumentId("drive", "old"),
+        file_metadata=FileMetadata(
+            name="Old.pdf",
+            mime_type="application/pdf",
+            size_bytes=10,
+            content_version=ContentVersion("v1"),
+            source_url=None,
+        ),
+        document_metadata=DocumentMetadata(),
+    )
+    new_document = Document(
+        _id=DocumentId("drive", "new"),
+        file_metadata=FileMetadata(
+            name="New.pdf",
+            mime_type="application/pdf",
+            size_bytes=10,
+            content_version=ContentVersion("v2"),
+            source_url=None,
+        ),
+        document_metadata=DocumentMetadata(),
+    )
+
+    class RefreshSource:
+        async def scan_metadata(
+            self,
+            drive_id: str,
+            extensions: list[str],
+            include_paths: list[str],
+            exclude_paths: list[str],
+            exclude_extensions: list[str],
+            root_item_id: str,
+            cursor: str | None,
+        ) -> DocumentMetadataScan:
+            _ = (
+                drive_id,
+                extensions,
+                include_paths,
+                exclude_paths,
+                exclude_extensions,
+                root_item_id,
+            )
+            assert cursor == "old-cursor"
+            return DocumentMetadataScan((new_document,), (), "new-cursor", False)
+
+    class RefreshStore:
+        def __init__(self) -> None:
+            self.staged: dict[str, Document] = {}
+            self.published: dict[str, Document] = {"old": old_document}
+            self.cursor: str | None = "old-cursor"
+            self.failed: bool = False
+
+        async def start_metadata_run(
+            self, principal_id: str, drive_id: str, selection: MetadataSelection
+        ) -> MetadataIngestRun:
+            _ = (principal_id, drive_id, selection)
+            return MetadataIngestRun(uuid4(), self.cursor, True)
+
+        async def stage_document(self, run_id: object, document: Document) -> None:
+            _ = run_id
+            self.staged[document.id.id[1]] = document
+
+        async def stage_deleted(self, run_id: object, item_id: str) -> None:
+            _ = (run_id, item_id)
+
+        async def publish_metadata_run(
+            self, run_id: object, delta_link: str, baseline: bool, reconcile: bool
+        ) -> None:
+            _ = (run_id, delta_link, baseline, reconcile)
+            self.published.update(self.staged)
+            self.cursor = delta_link
+
+        async def fail_metadata_run(self, run_id: object) -> None:
+            _ = run_id
+            self.staged.clear()
+            self.failed = True
+
+    async def close_after_first_progress() -> None:
+        store = RefreshStore()
+        endpoint = cast(
+            AsyncGenerator[ServerSentEvent],
+            ingest_group_metadata_endpoint(
+                "group",
+                MetadataIngestRequestBody(),
+                "user",
+                OneGroupSource(),
+                cast(DocumentRefreshSource, cast(object, RefreshSource())),
+                cast(DocumentRefreshStore, cast(object, store)),
+            ),
+        )
+
+        event = await anext(endpoint)
+        assert event.event == "progress"
+        assert store.staged == {"new": new_document}
+        await endpoint.aclose()
+
+        assert store.failed
+        assert store.staged == {}
+        assert store.published == {"old": old_document}
+        assert store.cursor == "old-cursor"
+
+    asyncio.run(close_after_first_progress())

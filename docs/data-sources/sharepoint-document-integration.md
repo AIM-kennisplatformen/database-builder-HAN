@@ -48,7 +48,7 @@ A changed selection does not erase records for types omitted from a later run.
 Selecting a new type requires a full baseline before delta updates can cover that type.
 The initiating operator's delegated Graph token defines what this run can see, and the operator identity is recorded with its observations and delta cursor.
 The current local setup requires the operator to sign in interactively.
-The drive allowlist is an enforced domain policy; a caller-supplied drive ID does not grant approval.
+The caller's direct group membership and Graph drive discovery after access checks define the drives eligible for metadata ingestion. A caller-supplied drive ID alone does not grant approval; an included drive must be among those discovered for the selected group.
 
 The first run walks the [drive delta feed](https://learn.microsoft.com/en-us/graph/api/driveitem-delta?view=graph-rest-1.0) to completion, follows every `@odata.nextLink`, and saves its `@odata.deltaLink` only after a complete successful scan.
 Later runs use that cursor; an expired cursor starts a fresh baseline.
@@ -59,7 +59,7 @@ On failure or cancellation, the previously published catalog stays available.
 
 There is no whole-run metadata deadline.
 Individual Graph requests have timeouts and bounded retry behavior.
-A job may still be cancelled after the caller-disconnect grace period or interrupted by process failure.
+Metadata inventory runs inside the request that opened the SSE stream. Disconnecting cancels the scan; the unfinished run is marked failed and its staged rows are cleared. The published catalog and delta cursor remain unchanged, so a retry starts from the last published cursor. At startup, crash recovery marks any remaining `running` metadata runs as `interrupted` and clears unpublished staging; published catalog records stay available. This global sweep assumes one server instance, so every `running` row belongs to a prior process that can no longer be active.
 Only one metadata run for a drive and principal may mutate that principal's cursor at a time.
 
 PostgreSQL has one document record per `(drive_id, item_id)` and separate per-principal observations.
@@ -162,15 +162,9 @@ CORS restricts browser origins but does not authenticate Studio by itself.
 A future application credential may be added behind ingestion ports only if the workflow still respects the intended user-visible drive scope.
 An app-only token by itself does not establish an individual user's access and cannot replace the user-bound search source.
 
-## Jobs, SSE, and failure recovery
+## SSE and failure recovery
 
-The metadata and vector endpoints create durable jobs, stream `progress`, `complete`, and `error` SSE events, and include the job ID in the initial response.
-`GET /jobs/{job-id}/events` lets a caller reconnect to the same event stream and recover its position.
-The route follows the typed event and transport-mapping style of the existing [UBW FRIS ingestion route](../../server/src/api/routes/ubwfris/snapshots/ingest.py), while a separate runner owns the job lifetime.
-If no caller remains connected for two minutes, the runner requests cancellation at a safe checkpoint.
-Timeout and cancellation are `error` events with distinct machine-readable codes, job ID, and last progress counts.
-Job outcomes persist in PostgreSQL.
-If the local process restarts mid-run, the run becomes `interrupted` and an operator must sign in and restart it; published data remains usable.
+`POST /groups/{group_id}/metadata` runs inventory in the request and streams `progress`, `skipped`, `complete`, and `error` SSE events. There is no durable job or reconnect endpoint. Disconnecting cancels the request and its metadata run; staging is cleared, while the published catalog and cursor remain unchanged. The caller can start a new request, which resumes from the last published delta cursor. Startup recovery handles runs left `running` by a process crash by marking them interrupted and clearing staging; it does not resume them automatically.
 
 ## Studio data destinations
 

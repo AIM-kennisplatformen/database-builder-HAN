@@ -1,10 +1,10 @@
 import asyncio
-from typing import final
+from typing import cast, final, override
 from uuid import uuid4
 
 import pytest
 
-from domain.exceptions.metadata_inventory_errors import SourceUnavailable
+from domain.exceptions.metadata_ingest_errors import SourceUnavailable
 from domain.models.documents.content_version import ContentVersion
 from domain.models.documents.document import (
     Document,
@@ -12,12 +12,16 @@ from domain.models.documents.document import (
     DocumentMetadata,
     FileMetadata,
 )
-from domain.ports.documents.document_metadata_source import DocumentMetadataScan
-from domain.ports.documents.document_store import DocumentMetadataRun
-from domain.use_cases.metadata_inventory import (
-    InventoryMetadataRequest,
-    refresh_metadata,
+from domain.models.documents.metadata_selection import MetadataSelection
+from domain.ports.documents.document_metadata_source import (
+    DocumentMetadataScan,
+    DocumentRefreshSource,
 )
+from domain.ports.documents.document_store import (
+    DocumentRefreshStore,
+    MetadataIngestRun,
+)
+from domain.use_cases.metadata_ingest import MetadataIngestDriveRequest, ingest_metadata
 
 
 def document(item_id: str = "item") -> Document:
@@ -64,23 +68,22 @@ class Source:
         return self.scan
 
 
-@final
 class Store:
     def __init__(self, cursor: str | None = None) -> None:
-        self.cursor = cursor
+        self.cursor: str | None = cursor
         self.staged: dict[str, Document] = {}
         self.deleted: set[str] = set()
         self.published: dict[str, Document] = {}
-        self.failed = False
-        self.completed = False
-        self.selection: str | None = None
+        self.failed: bool = False
+        self.completed: bool = False
+        self.selection: MetadataSelection | None = None
 
-    async def begin_metadata_run(
-        self, principal_id: str, drive_id: str, selection: str
-    ) -> DocumentMetadataRun:
+    async def start_metadata_run(
+        self, principal_id: str, drive_id: str, selection: MetadataSelection
+    ) -> MetadataIngestRun:
         assert (principal_id, drive_id) == ("operator", "drive")
         self.selection = selection
-        return DocumentMetadataRun(uuid4(), self.cursor, True)
+        return MetadataIngestRun(uuid4(), self.cursor, True)
 
     async def stage_document(self, run_id: object, document: Document) -> None:
         _ = run_id
@@ -117,13 +120,17 @@ def test_refresh_publishes_documents_deletions_and_cursor_together() -> None:
     async def collect() -> list[str]:
         return [
             update.document.id.id[1]
-            async for update in refresh_metadata(
-                "operator", InventoryMetadataRequest("drive"), source, store
+            async for update in ingest_metadata(
+                "operator",
+                MetadataIngestDriveRequest("drive"),
+                cast(DocumentRefreshSource, cast(object, source)),
+                cast(DocumentRefreshStore, cast(object, store)),
             )
         ]
 
     assert asyncio.run(collect()) == ["new"]
     assert source.received_cursor == "old-cursor"
+    assert store.selection == MetadataSelection("root", (), (), (), ())
     assert store.published == {"new": new}
     assert store.cursor == "new-cursor"
     assert store.completed
@@ -136,8 +143,11 @@ def test_failed_scan_preserves_published_data_and_cursor() -> None:
     store.published["old"] = old
 
     async def collect() -> None:
-        async for _ in refresh_metadata(
-            "operator", InventoryMetadataRequest("drive"), source, store
+        async for _ in ingest_metadata(
+            "operator",
+            MetadataIngestDriveRequest("drive"),
+            cast(DocumentRefreshSource, cast(object, source)),
+            cast(DocumentRefreshStore, cast(object, store)),
         ):
             pass
 
@@ -148,19 +158,104 @@ def test_failed_scan_preserves_published_data_and_cursor() -> None:
     assert store.published == {"old": old}
 
 
+def test_cleanup_failure_is_logged_without_masking_scan_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    @final
+    class FailingCleanupStore(Store):
+        def __init__(self, cursor: str | None = None) -> None:
+            super().__init__(cursor)
+            self.cleanup_attempted: bool = False
+
+        @override
+        async def fail_metadata_run(self, run_id: object) -> None:
+            _ = run_id
+            self.cleanup_attempted = True
+            raise RuntimeError("cleanup failed")
+
+    old = document("old")
+    store = FailingCleanupStore("old-cursor")
+    store.published["old"] = old
+    source = Source(RuntimeError("Graph failed"))
+
+    async def collect() -> None:
+        async for _ in ingest_metadata(
+            "operator",
+            MetadataIngestDriveRequest("drive"),
+            cast(DocumentRefreshSource, cast(object, source)),
+            cast(DocumentRefreshStore, cast(object, store)),
+        ):
+            pass
+
+    with pytest.raises(SourceUnavailable, match="source is unavailable"):
+        asyncio.run(collect())
+
+    assert store.cleanup_attempted
+    assert store.staged == {}
+    assert store.published == {"old": old}
+    assert store.cursor == "old-cursor"
+    assert "Could not clear staging for metadata run" in caplog.text
+
+
 def test_path_scope_uses_baseline_even_when_cursor_exists() -> None:
     source = Source(DocumentMetadataScan((), (), "new-cursor", True))
     store = Store("old-cursor")
 
     async def collect() -> None:
-        async for _ in refresh_metadata(
+        async for _ in ingest_metadata(
             "operator",
-            InventoryMetadataRequest("drive", include_paths=["Reports"]),
-            source,
-            store,
+            MetadataIngestDriveRequest("drive", include_paths=["Reports"]),
+            cast(DocumentRefreshSource, cast(object, source)),
+            cast(DocumentRefreshStore, cast(object, store)),
         ):
             pass
 
     asyncio.run(collect())
     assert source.received_cursor is None
     assert store.completed
+
+
+def test_cancelled_refresh_discards_staging_and_preserves_published_catalog() -> None:
+    @final
+    class BlockingStore(Store):
+        def __init__(self, cursor: str | None = None) -> None:
+            super().__init__(cursor)
+            self.staged_once = asyncio.Event()
+            self.finish_stage = asyncio.Event()
+
+        @override
+        async def stage_document(self, run_id: object, document: Document) -> None:
+            await super().stage_document(run_id, document)
+            self.staged_once.set()
+            await self.finish_stage.wait()
+
+    async def exercise_cancellation() -> None:
+        old = document("old")
+        store = BlockingStore("old-cursor")
+        store.published["old"] = old
+        source = Source(
+            DocumentMetadataScan((document("new"),), (), "new-cursor", False)
+        )
+
+        async def consume() -> None:
+            async for _ in ingest_metadata(
+                "operator",
+                MetadataIngestDriveRequest("drive"),
+                cast(DocumentRefreshSource, cast(object, source)),
+                cast(DocumentRefreshStore, cast(object, store)),
+            ):
+                pass
+
+        task = asyncio.create_task(consume())
+        await asyncio.wait_for(store.staged_once.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert store.failed
+        assert store.staged == {}
+        assert store.published == {"old": old}
+        assert store.cursor == "old-cursor"
+        assert not store.completed
+
+    asyncio.run(exercise_cancellation())

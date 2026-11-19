@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 from httpx import Response
 from pydantic import BaseModel, ValidationError
 
-from domain.exceptions.metadata_inventory_errors import MetadataSourceError
+from domain.exceptions.metadata_ingest_errors import MetadataSourceError
 
 
 class GraphError(BaseModel):

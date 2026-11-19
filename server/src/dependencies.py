@@ -6,8 +6,8 @@ from msgraph.graph_service_client import GraphServiceClient
 from psycopg_pool import AsyncConnectionPool
 
 from domain.models.ubwfris import IbRow, RhaRow
-from domain.ports.documents.document_metadata_source import DocumentMetadataSource
-from domain.ports.documents.document_store import DocumentStore
+from domain.ports.documents.document_metadata_source import DocumentRefreshSource
+from domain.ports.documents.document_store import DocumentRefreshStore
 from domain.ports.documents.group_drive_source import GroupDriveSource
 from domain.ports.employees.employee_source import EmployeeSource
 from domain.ports.employees.employee_store import EmployeeWriter
@@ -27,7 +27,7 @@ from infrastructure.postgres.ubwfris_writer import (
 
 class ApplicationState(Protocol):
     employee_source: EmployeeSource
-    document_metadata_source: DocumentMetadataSource
+    document_metadata_source: DocumentRefreshSource
     group_drive_source: GroupDriveSource
     graph_client: GraphServiceClient
     postgres_pool: AsyncConnectionPool
@@ -71,13 +71,13 @@ def get_ubwfris_rha_writer(
     return PostgresRhaWriter(pool)
 
 
-def get_document_metadata_source(request: Request) -> DocumentMetadataSource:
+def get_document_metadata_source(request: Request) -> DocumentRefreshSource:
     return _state(request).document_metadata_source
 
 
 def get_document_store(
     pool: Annotated[AsyncConnectionPool, Depends(get_postgres_pool)],
-) -> DocumentStore:
+) -> DocumentRefreshStore:
     return PostgresDocumentStore(pool)
 
 

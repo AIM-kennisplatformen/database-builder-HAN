@@ -13,7 +13,7 @@ from dependencies import (
     get_current_graph_user_id,
     get_group_drive_source,
 )
-from domain.exceptions.metadata_inventory_errors import MetadataSourceError
+from domain.exceptions.metadata_ingest_errors import MetadataSourceError
 from domain.ports.documents.group_drive_source import (
     GroupDriveLocation,
     GroupDriveSource,

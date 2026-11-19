@@ -10,7 +10,7 @@ from kiota_http.middleware.options import ResponseHandlerOption
 from msgraph.graph_service_client import GraphServiceClient
 from pydantic import BaseModel, Field
 
-from domain.exceptions.metadata_inventory_errors import MetadataSourceError
+from domain.exceptions.metadata_ingest_errors import MetadataSourceError
 from domain.models.documents.content_version import ContentVersion
 from domain.models.documents.document import (
     AuditActor,

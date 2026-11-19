@@ -1,5 +1,7 @@
-"""Persist the latest metadata observed for each Graph drive item."""
+"""Persist document metadata, observations, and inventory cursors."""
 
+from dataclasses import asdict
+from json import dumps
 from typing import cast, override
 from uuid import UUID, uuid4
 
@@ -8,12 +10,13 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 from pydantic import TypeAdapter
 
-from domain.exceptions.metadata_inventory_errors import MetadataRunAlreadyActive
+from domain.exceptions.metadata_ingest_errors import MetadataRunAlreadyActive
 from domain.models.documents.document import Document, DocumentMetadata
+from domain.models.documents.metadata_selection import MetadataSelection
 from domain.ports.documents.document_store import (
-    DocumentMetadataRun,
     DocumentRefreshStore,
     DocumentStore,
+    MetadataIngestRun,
 )
 
 _metadata_adapter = TypeAdapter(DocumentMetadata)
@@ -69,10 +72,11 @@ class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
             )
 
     @override
-    async def begin_metadata_run(
-        self, principal_id: str, drive_id: str, selection: str
-    ) -> DocumentMetadataRun:
+    async def start_metadata_run(
+        self, principal_id: str, drive_id: str, selection: MetadataSelection
+    ) -> MetadataIngestRun:
         run_id = uuid4()
+        serialized_selection = dumps(asdict(selection), sort_keys=True)
         try:
             async with self._pool.connection() as connection:
                 cursor = await connection.execute(
@@ -81,18 +85,20 @@ class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
                     (principal_id, drive_id),
                 )
                 row = await cursor.fetchone()
-                same_selection = row is not None and row[0] == selection
+                same_selection = (
+                    row is not None and row[0] == serialized_selection
+                )
                 _ = await connection.execute(
                     """INSERT INTO document_metadata_runs
                        (id, principal_id, drive_id, selection, status)
                        VALUES (%s, %s, %s, %s, 'running')""",
-                    (run_id, principal_id, drive_id, selection),
+                    (run_id, principal_id, drive_id, serialized_selection),
                 )
         except UniqueViolation as exc:
             raise MetadataRunAlreadyActive(
                 "A metadata run is already active for this operator and drive"
             ) from exc
-        return DocumentMetadataRun(
+        return MetadataIngestRun(
             run_id,
             row[1] if same_selection and row is not None else None,
             same_selection,
@@ -237,8 +243,13 @@ class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
             )
 
     async def interrupt_metadata_runs(self) -> None:
+        """Recover per-drive runs orphaned by a process crash at startup."""
         async with self._pool.connection() as connection:
-            _ = await connection.execute("DELETE FROM document_metadata_staging")
+            _ = await connection.execute(
+                """DELETE FROM document_metadata_staging AS staging
+                   USING document_metadata_runs AS run
+                   WHERE staging.run_id = run.id AND run.status = 'running'"""
+            )
             _ = await connection.execute(
                 """UPDATE document_metadata_runs SET status = 'interrupted',
                    finished_at = now() WHERE status = 'running'"""

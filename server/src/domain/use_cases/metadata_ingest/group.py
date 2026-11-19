@@ -1,20 +1,15 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
-from typing import cast
 
-from domain.exceptions.metadata_inventory_errors import MetadataSourceError
-from domain.ports.documents.document_metadata_source import (
-    DocumentMetadataSource,
-    DocumentRefreshSource,
-)
-from domain.ports.documents.document_store import DocumentRefreshStore, DocumentStore
+from domain.exceptions.metadata_ingest_errors import MetadataSourceError
+from domain.ports.documents.document_metadata_source import DocumentRefreshSource
+from domain.ports.documents.document_store import DocumentRefreshStore
 from domain.ports.documents.group_drive_source import GroupDriveSource
 from domain.use_cases.group_drive_discovery import get_group_drives
-from domain.use_cases.metadata_inventory import (
-    InventoryMetadataProgress,
-    InventoryMetadataRequest,
-    inventory_metadata,
-    refresh_metadata,
+from domain.use_cases.metadata_ingest.drive import (
+    MetadataIngestDriveProgress,
+    MetadataIngestDriveRequest,
+    ingest_metadata,
 )
 
 
@@ -26,39 +21,64 @@ class DriveMetadataSelector:
 
 
 @dataclass(frozen=True)
-class GroupMetadataRequest:
+class MetadataIngestRequest:
     group_id: str
     include: list[DriveMetadataSelector] = field(default_factory=list)
     exclude: list[DriveMetadataSelector] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
-class GroupMetadataProgress:
+class MetadataIngestProgress:
     drive_id: str
-    update: InventoryMetadataProgress
+    update: MetadataIngestDriveProgress
 
 
 @dataclass(frozen=True)
-class GroupMetadataSkipped:
+class MetadataIngestSkipped:
     drive_id: str
     reason: str
 
 
-class DriveInventoryFailure(Exception):
+class MetadataIngestDriveFailure(Exception):
     def __init__(self, drive_id: str, cause: Exception) -> None:
         super().__init__(str(cause))
         self.drive_id: str = drive_id
         self.cause: Exception = cause
 
 
-async def inventory_group_metadata(
+async def _ingest_drive(
     user_id: str,
-    request: GroupMetadataRequest,
+    request: MetadataIngestDriveRequest,
+    metadata_source: DocumentRefreshSource,
+    store: DocumentRefreshStore,
+    *,
+    allow_skip: bool,
+) -> AsyncGenerator[MetadataIngestProgress | MetadataIngestSkipped]:
+    updates = ingest_metadata(user_id, request, metadata_source, store)
+    try:
+        try:
+            async for update in updates:
+                yield MetadataIngestProgress(request.drive_id, update)
+        except MetadataSourceError as exc:
+            if exc.status_code == 403 and allow_skip:
+                yield MetadataIngestSkipped(request.drive_id, str(exc))
+                return
+            raise MetadataIngestDriveFailure(request.drive_id, exc) from exc
+        except Exception as exc:
+            raise MetadataIngestDriveFailure(request.drive_id, exc) from exc
+    finally:
+        # Propagate request cancellation through the per-drive use case.
+        await updates.aclose()
+
+
+async def ingest_group_metadata(
+    user_id: str,
+    request: MetadataIngestRequest,
     drive_source: GroupDriveSource,
-    metadata_source: DocumentMetadataSource,
-    store: DocumentStore,
-) -> AsyncIterator[GroupMetadataProgress | GroupMetadataSkipped]:
-    """Validate the full selection, then inventory selected drives in discovery order."""
+    metadata_source: DocumentRefreshSource,
+    store: DocumentRefreshStore,
+) -> AsyncGenerator[MetadataIngestProgress | MetadataIngestSkipped]:
+    """Validate the selection, then ingest selected drives in discovery order."""
     group = await get_group_drives(user_id, request.group_id, drive_source)
     locations = {location.drive_id: location for location in group.locations}
     available = set(locations)
@@ -70,7 +90,7 @@ async def inventory_group_metadata(
         drive_id for drive_id in included if drive_id not in available
     ]
     if unavailable_included:
-        raise DriveInventoryFailure(
+        raise MetadataIngestDriveFailure(
             unavailable_included[0],
             MetadataSourceError(403, "Included drive is not accessible in this group"),
         )
@@ -94,7 +114,7 @@ async def inventory_group_metadata(
     )
     # Construct every per-drive request before the first write.
     requests = [
-        InventoryMetadataRequest(
+        MetadataIngestDriveRequest(
             drive_id,
             included[drive_id].extensions if drive_id in included else [],
             included[drive_id].paths if drive_id in included else [],
@@ -105,30 +125,15 @@ async def inventory_group_metadata(
         for drive_id in selected
     ]
     for drive_request in requests:
+        updates = _ingest_drive(
+            user_id,
+            drive_request,
+            metadata_source,
+            store,
+            allow_skip=not included,
+        )
         try:
-            # Retain the legacy port path for existing in-memory adapters.
-            # Production Graph/PostgreSQL adapters implement the refresh ports.
-            supports_scan = callable(
-                getattr(type(metadata_source), "scan_metadata", None)
-            )
-            supports_run = callable(getattr(type(store), "begin_metadata_run", None))
-            if supports_scan != supports_run:
-                raise RuntimeError("Metadata source and store refresh ports must agree")
-            if supports_scan:
-                updates = refresh_metadata(
-                    user_id,
-                    drive_request,
-                    cast(DocumentRefreshSource, cast(object, metadata_source)),
-                    cast(DocumentRefreshStore, cast(object, store)),
-                )
-            else:
-                updates = inventory_metadata(drive_request, metadata_source, store)
             async for update in updates:
-                yield GroupMetadataProgress(drive_request.drive_id, update)
-        except MetadataSourceError as exc:
-            if exc.status_code == 403 and not included:
-                yield GroupMetadataSkipped(drive_request.drive_id, str(exc))
-                continue
-            raise DriveInventoryFailure(drive_request.drive_id, exc) from exc
-        except Exception as exc:
-            raise DriveInventoryFailure(drive_request.drive_id, exc) from exc
+                yield update
+        finally:
+            await updates.aclose()

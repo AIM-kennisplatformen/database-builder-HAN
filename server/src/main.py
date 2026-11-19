@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI):
     try:
         client = GraphServiceClient(
             credentials=credential,
-            scopes=list(config.graph_scopes),
+            scopes=[],
         )
 
         app.state.employee_source = MsGraphEmployeeSource(client, config.group_id)
@@ -49,6 +49,8 @@ async def lifespan(app: FastAPI):
         pool: AsyncConnectionPool = AsyncConnectionPool(conninfo=conninfo, open=False)
         async with pool:
             app.state.postgres_pool = pool
+            # Crash recovery clears only staging from unfinished runs.
+            # The single-instance deployment makes prior running rows orphaned.
             await PostgresDocumentStore(pool).interrupt_metadata_runs()
             yield
     finally:

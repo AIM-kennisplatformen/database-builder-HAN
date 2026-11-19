@@ -3,6 +3,7 @@ from enum import StrEnum
 from traceback import format_exception
 from typing import Annotated, ClassVar
 
+import anyio
 from fastapi import APIRouter, Depends
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, ConfigDict, Field
@@ -15,28 +16,30 @@ from dependencies import (
     get_document_store,
     get_group_drive_source,
 )
-from domain.exceptions.metadata_inventory_errors import (
+from domain.exceptions.metadata_ingest_errors import (
     MetadataRunAlreadyActive,
     MetadataSourceError,
     SourceUnavailable,
     StoreUnavailable,
 )
-from domain.ports.documents.document_metadata_source import DocumentMetadataSource
-from domain.ports.documents.document_store import DocumentStore
+from domain.ports.documents.document_metadata_source import DocumentRefreshSource
+from domain.ports.documents.document_store import DocumentRefreshStore
 from domain.ports.documents.group_drive_source import GroupDriveSource
 from domain.use_cases.group_drive_discovery import GroupNotAccessible
-from domain.use_cases.group_metadata_inventory import (
-    DriveInventoryFailure,
+from domain.use_cases.metadata_ingest import (
     DriveMetadataSelector,
-    GroupMetadataRequest,
-    GroupMetadataSkipped,
-    inventory_group_metadata,
+    MetadataIngestDriveFailure,
+    MetadataIngestProgress,
+    MetadataIngestRequest,
+    MetadataIngestSkipped,
+    ingest_group_metadata,
 )
 
 router = APIRouter()
 
-type InventoryError = (
-    ValueError
+type MetadataIngestError = (
+    GroupNotAccessible
+    | ValueError
     | MetadataSourceError
     | SourceUnavailable
     | StoreUnavailable
@@ -53,7 +56,7 @@ class DriveMetadataSelectorBody(BaseModel):
     extensions: list[str] = Field(default_factory=list)
 
 
-class InventoryMetadataRequestBody(BaseModel):
+class MetadataIngestRequestBody(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
     include: list[DriveMetadataSelectorBody] = Field(
@@ -66,15 +69,15 @@ class InventoryMetadataRequestBody(BaseModel):
     )
 
 
-class InventoryMetadataEventStatus(StrEnum):
+class MetadataIngestEventStatus(StrEnum):
     PROGRESS = "progress"
     SKIPPED = "skipped"
     COMPLETE = "complete"
     ERROR = "error"
 
 
-class InventoryMetadataEvent(BaseModel):
-    status: InventoryMetadataEventStatus
+class MetadataIngestEvent(BaseModel):
+    status: MetadataIngestEventStatus
     group_id: str
     processed: int
     drive_id: str | None = None
@@ -88,13 +91,13 @@ class InventoryMetadataEvent(BaseModel):
     traceback: str | None = None
 
 
-def _sse_event(event: InventoryMetadataEvent) -> ServerSentEvent:
+def _sse_event(event: MetadataIngestEvent) -> ServerSentEvent:
     return ServerSentEvent(
         event=event.status.value, data=event.model_dump(exclude_none=True)
     )
 
 
-def _error_status(exc: InventoryError) -> int:
+def _error_status(exc: MetadataIngestError) -> int:
     if isinstance(exc, MetadataRunAlreadyActive):
         return 409
     if isinstance(exc, GroupNotAccessible):
@@ -109,24 +112,83 @@ def _error_status(exc: InventoryError) -> int:
 
 
 def _failure_event(
-    exc: InventoryError,
+    exc: Exception | MetadataIngestDriveFailure,
     group_id: str,
-    drive_id: str | None,
     processed: int,
-    *,
-    traceback_exc: BaseException | None = None,
 ) -> ServerSentEvent:
+    drive_id: str | None = None
+    original: Exception = exc
+    if isinstance(exc, MetadataIngestDriveFailure):
+        drive_id = exc.drive_id
+        original = exc.cause
+
+    if isinstance(
+        original,
+        (
+            GroupNotAccessible,
+            ValueError,
+            MetadataSourceError,
+            MetadataRunAlreadyActive,
+            SourceUnavailable,
+            StoreUnavailable,
+        ),
+    ):
+        failure: MetadataIngestError = original
+    else:
+        failure = RuntimeError("Metadata inventory failed")
+
     return _sse_event(
-        InventoryMetadataEvent(
-            status=InventoryMetadataEventStatus.ERROR,
+        MetadataIngestEvent(
+            status=MetadataIngestEventStatus.ERROR,
             group_id=group_id,
             drive_id=drive_id,
             processed=processed,
-            error_status=_error_status(exc),
-            detail=str(exc),
-            traceback="".join(format_exception(traceback_exc or exc))
+            error_status=_error_status(failure),
+            detail=str(failure),
+            traceback="".join(format_exception(original))
             if config.debug
             else None,
+        )
+    )
+
+
+def _event(
+    update: MetadataIngestProgress | MetadataIngestSkipped | None,
+    group_id: str,
+    processed: int,
+    skipped_drive_ids: list[str],
+) -> ServerSentEvent:
+    if update is None:
+        return _sse_event(
+            MetadataIngestEvent(
+                status=MetadataIngestEventStatus.COMPLETE,
+                group_id=group_id,
+                processed=processed,
+                skipped_drive_ids=skipped_drive_ids,
+            )
+        )
+    if isinstance(update, MetadataIngestSkipped):
+        return _sse_event(
+            MetadataIngestEvent(
+                status=MetadataIngestEventStatus.SKIPPED,
+                group_id=group_id,
+                drive_id=update.drive_id,
+                processed=processed,
+                error_status=403,
+                detail=update.reason,
+            )
+        )
+    progress = update.update
+    return _sse_event(
+        MetadataIngestEvent(
+            status=MetadataIngestEventStatus.PROGRESS,
+            group_id=group_id,
+            drive_id=update.drive_id,
+            processed=processed,
+            total=progress.total,
+            available=progress.available,
+            item_id=progress.document.id.id[1],
+            name=progress.document.file_metadata.name,
         )
     )
 
@@ -134,20 +196,20 @@ def _failure_event(
 @router.post(
     "/groups/{group_id}/metadata",
     response_class=EventSourceResponse,
-    summary="Inventory metadata from a member group's selected drives",
+    summary="Ingest metadata from a member group's selected drives",
 )
-async def inventory_metadata_endpoint(
+async def ingest_group_metadata_endpoint(
     group_id: str,
-    request: InventoryMetadataRequestBody,
+    request: MetadataIngestRequestBody,
     user_id: Annotated[str, Depends(get_current_graph_user_id)],
     drive_source: Annotated[GroupDriveSource, Depends(get_group_drive_source)],
-    source: Annotated[DocumentMetadataSource, Depends(get_document_metadata_source)],
-    store: Annotated[DocumentStore, Depends(get_document_store)],
+    source: Annotated[DocumentRefreshSource, Depends(get_document_metadata_source)],
+    store: Annotated[DocumentRefreshStore, Depends(get_document_store)],
 ) -> AsyncIterator[ServerSentEvent]:
     processed = 0
     skipped_drive_ids: list[str] = []
     progress_limiter = ProgressEventLimiter(config.stream_progress_interval_seconds)
-    selection = GroupMetadataRequest(
+    selection = MetadataIngestRequest(
         group_id,
         [
             DriveMetadataSelector(
@@ -162,82 +224,23 @@ async def inventory_metadata_endpoint(
             for selector in request.exclude
         ],
     )
+    updates = ingest_group_metadata(user_id, selection, drive_source, source, store)
     try:
-        async for progress in inventory_group_metadata(
-            user_id, selection, drive_source, source, store
-        ):
-            if isinstance(progress, GroupMetadataSkipped):
+        async for progress in updates:
+            if isinstance(progress, MetadataIngestSkipped):
                 skipped_drive_ids.append(progress.drive_id)
-                yield _sse_event(
-                    InventoryMetadataEvent(
-                        status=InventoryMetadataEventStatus.SKIPPED,
-                        group_id=group_id,
-                        drive_id=progress.drive_id,
-                        processed=processed,
-                        error_status=403,
-                        detail=progress.reason,
-                    )
-                )
+                yield _event(progress, group_id, processed, skipped_drive_ids)
                 continue
             processed += 1
             if not progress_limiter.should_emit():
                 continue
-            update = progress.update
-            yield _sse_event(
-                InventoryMetadataEvent(
-                    status=InventoryMetadataEventStatus.PROGRESS,
-                    group_id=group_id,
-                    drive_id=progress.drive_id,
-                    processed=processed,
-                    total=update.total,
-                    available=update.available,
-                    item_id=update.document.id.id[1],
-                    name=update.document.file_metadata.name,
-                )
-            )
-    except DriveInventoryFailure as exc:
-        cause = exc.cause
-        if isinstance(
-            cause,
-            (
-                ValueError,
-                MetadataSourceError,
-                MetadataRunAlreadyActive,
-                SourceUnavailable,
-                StoreUnavailable,
-            ),
-        ):
-            yield _failure_event(cause, group_id, exc.drive_id, processed)
-        else:
-            yield _failure_event(
-                RuntimeError("Metadata inventory failed"),
-                group_id,
-                exc.drive_id,
-                processed,
-                traceback_exc=cause,
-            )
-    except (
-        ValueError,
-        MetadataSourceError,
-        MetadataRunAlreadyActive,
-        SourceUnavailable,
-        StoreUnavailable,
-    ) as exc:
-        yield _failure_event(exc, group_id, None, processed)
-    except Exception as exc:  # noqa: BLE001 - terminate the SSE stream on unexpected failures
-        yield _failure_event(
-            RuntimeError("Metadata inventory failed"),
-            group_id,
-            None,
-            processed,
-            traceback_exc=exc,
-        )
+            yield _event(progress, group_id, processed, skipped_drive_ids)
+    except Exception as exc:  # noqa: BLE001 - terminate the SSE stream on failures
+        yield _failure_event(exc, group_id, processed)
     else:
-        yield _sse_event(
-            InventoryMetadataEvent(
-                status=InventoryMetadataEventStatus.COMPLETE,
-                group_id=group_id,
-                processed=processed,
-                skipped_drive_ids=skipped_drive_ids,
-            )
-        )
+        yield _event(None, group_id, processed, skipped_drive_ids)
+    finally:
+        # Close the nested ingestion generator so per-drive staging is discarded
+        # when the client disconnects.
+        with anyio.CancelScope(shield=True):
+            await updates.aclose()

@@ -3,10 +3,11 @@ from typing import Protocol
 from uuid import UUID
 
 from domain.models.documents.document import Document
+from domain.models.documents.metadata_selection import MetadataSelection
 
 
 @dataclass(frozen=True)
-class DocumentMetadataRun:
+class MetadataIngestRun:
     id: UUID
     cursor: str | None
     same_selection: bool
@@ -17,9 +18,9 @@ class DocumentStore(Protocol):
 
 
 class DocumentRefreshStore(Protocol):
-    async def begin_metadata_run(
-        self, principal_id: str, drive_id: str, selection: str
-    ) -> DocumentMetadataRun: ...
+    async def start_metadata_run(
+        self, principal_id: str, drive_id: str, selection: MetadataSelection
+    ) -> MetadataIngestRun: ...
 
     async def stage_document(self, run_id: UUID, document: Document) -> None: ...
 
