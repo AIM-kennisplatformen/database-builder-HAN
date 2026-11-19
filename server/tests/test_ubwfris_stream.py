@@ -116,7 +116,10 @@ def test_ubwfris_stream_preserves_invalid_workbook_error_payload(
             "http_status": 422,
             "detail": "The uploaded workbook is empty",
         },
-        "context": {"operation": "ubwfris.ingest", "snapshot_id": sha256(b"").hexdigest()},
+        "context": {
+            "operation": "ubwfris.ingest",
+            "snapshot_id": sha256(b"").hexdigest(),
+        },
         "progress": {
             "processed_rows": 0,
             "total_rows": 0,
@@ -162,7 +165,10 @@ def test_ubwfris_stream_preserves_duplicate_upload_error_payload(
             "http_status": 409,
             "detail": "Workbook was already imported",
         },
-        "context": {"operation": "ubwfris.ingest", "snapshot_id": sha256(b"workbook").hexdigest()},
+        "context": {
+            "operation": "ubwfris.ingest",
+            "snapshot_id": sha256(b"workbook").hexdigest(),
+        },
         "progress": {
             "processed_rows": 0,
             "total_rows": 0,
@@ -216,7 +222,10 @@ def test_ubwfris_stream_masks_unexpected_failure(
             "http_status": 500,
             "detail": "The operation failed",
         },
-        "context": {"operation": "ubwfris.ingest", "snapshot_id": sha256(b"workbook").hexdigest()},
+        "context": {
+            "operation": "ubwfris.ingest",
+            "snapshot_id": sha256(b"workbook").hexdigest(),
+        },
         "progress": {
             "processed_rows": 1,
             "total_rows": 2,

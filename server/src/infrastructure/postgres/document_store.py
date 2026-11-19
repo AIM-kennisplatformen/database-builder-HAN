@@ -85,9 +85,7 @@ class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
                     (principal_id, drive_id),
                 )
                 row = await cursor.fetchone()
-                same_selection = (
-                    row is not None and row[0] == serialized_selection
-                )
+                same_selection = row is not None and row[0] == serialized_selection
                 _ = await connection.execute(
                     """INSERT INTO document_metadata_runs
                        (id, principal_id, drive_id, selection, status)

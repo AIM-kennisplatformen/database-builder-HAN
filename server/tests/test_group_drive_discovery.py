@@ -425,9 +425,7 @@ def test_group_drive_discovery_uses_safe_shared_error_mapping(
 
         def stream_user_groups(self, user_id: str) -> AsyncIterator[UserGroup]:
             _ = user_id
-            raise MetadataSourceError(
-                graph_status, "sensitive upstream response"
-            )
+            raise MetadataSourceError(graph_status, "sensitive upstream response")
 
         def stream_group_drive_locations(
             self, group_id: str

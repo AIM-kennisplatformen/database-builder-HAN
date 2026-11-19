@@ -177,7 +177,7 @@ async def _fail_metadata_run(store: DocumentRefreshStore, run_id: UUID) -> None:
     """Clear staging; log cleanup failures so they do not mask the scan failure."""
     try:
         await store.fail_metadata_run(run_id)
-    except (KeyboardInterrupt, SystemExit):
+    except KeyboardInterrupt, SystemExit:
         raise
     except BaseException:
         # Startup recovery will clear staging left behind by an unsuccessful cleanup.
