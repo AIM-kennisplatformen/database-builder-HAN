@@ -1,15 +1,14 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+from starlette.responses import JSONResponse
 
+from api.errors import PublicError, log_api_failure
+from api.routes.documents.error_mapping import MetadataErrorMapper
 from dependencies import get_current_graph_user_id, get_group_drive_source
-from domain.exceptions.metadata_ingest_errors import MetadataSourceError
 from domain.ports.documents.group_drive_source import GroupDriveSource
-from domain.use_cases.group_drive_discovery import (
-    GroupNotAccessible,
-    get_user_group_drives,
-)
+from domain.use_cases.group_drive_discovery import get_user_group_drives
 
 router = APIRouter()
 
@@ -25,24 +24,33 @@ class GroupDrivesResponse(BaseModel):
     drives: list[DriveResponse]
 
 
-def _discovery_error(exc: Exception) -> HTTPException:
-    if isinstance(exc, GroupNotAccessible):
-        return HTTPException(status_code=404, detail=str(exc))
-    if isinstance(exc, MetadataSourceError):
-        status_code = exc.status_code if 400 <= exc.status_code < 500 else 502
-        return HTTPException(status_code=status_code, detail=str(exc))
-    return HTTPException(status_code=502, detail="Group discovery failed")
+def _discovery_error_response(public_error: PublicError) -> JSONResponse:
+    return JSONResponse(
+        status_code=public_error.http_status,
+        content={"error": public_error.as_dict()},
+    )
 
 
-@router.get("/groups/drives", summary="List the current user's group drives")
+@router.get(
+    "/groups/drives",
+    response_model=list[GroupDrivesResponse],
+    summary="List the current user's group drives",
+)
 async def get_group_drives_endpoint(
     user_id: Annotated[str, Depends(get_current_graph_user_id)],
     source: Annotated[GroupDriveSource, Depends(get_group_drive_source)],
-) -> list[GroupDrivesResponse]:
+) -> list[GroupDrivesResponse] | JSONResponse:
     try:
         groups = await get_user_group_drives(user_id, source)
-    except Exception as exc:
-        raise _discovery_error(exc) from exc
+    except Exception as exc:  # noqa: BLE001 - map all discovery failures to safe HTTP errors
+        public_error = MetadataErrorMapper.describe(exc)
+        log_api_failure(
+            "metadata",
+            exc,
+            public_error,
+            identifiers={"operation": "metadata.drive_discovery"},
+        )
+        return _discovery_error_response(public_error)
     return [
         GroupDrivesResponse(
             group_id=group.group_id,

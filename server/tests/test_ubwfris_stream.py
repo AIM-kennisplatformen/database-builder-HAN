@@ -111,14 +111,19 @@ def test_ubwfris_stream_preserves_invalid_workbook_error_payload(
     assert [event.event for event in events] == ["error"]
     assert events[0].data == {
         "status": "error",
-        "snapshot_id": sha256(b"").hexdigest(),
-        "processed_rows": 0,
-        "total_rows": 0,
-        "created_rows": 0,
-        "invalid_rows": 0,
-        "invalid_row_numbers": [],
-        "error_status": 422,
-        "detail": "The uploaded workbook is empty",
+        "error": {
+            "code": "ubwfris.invalid_workbook",
+            "http_status": 422,
+            "detail": "The uploaded workbook is empty",
+        },
+        "context": {"operation": "ubwfris.ingest", "snapshot_id": sha256(b"").hexdigest()},
+        "progress": {
+            "processed_rows": 0,
+            "total_rows": 0,
+            "created_rows": 0,
+            "invalid_rows": 0,
+            "invalid_row_numbers": [],
+        },
     }
 
 
@@ -152,19 +157,25 @@ def test_ubwfris_stream_preserves_duplicate_upload_error_payload(
     assert [event.event for event in events] == ["error"]
     assert events[0].data == {
         "status": "error",
-        "snapshot_id": sha256(b"workbook").hexdigest(),
-        "processed_rows": 0,
-        "total_rows": 0,
-        "created_rows": 0,
-        "invalid_rows": 0,
-        "invalid_row_numbers": [],
-        "error_status": 409,
-        "detail": "Workbook was already imported",
+        "error": {
+            "code": "ubwfris.duplicate_upload",
+            "http_status": 409,
+            "detail": "Workbook was already imported",
+        },
+        "context": {"operation": "ubwfris.ingest", "snapshot_id": sha256(b"workbook").hexdigest()},
+        "progress": {
+            "processed_rows": 0,
+            "total_rows": 0,
+            "created_rows": 0,
+            "invalid_rows": 0,
+            "invalid_row_numbers": [],
+        },
     }
 
 
 def test_ubwfris_stream_masks_unexpected_failure(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setenv("DEBUG", "true")
     monkeypatch.setattr(
@@ -200,16 +211,27 @@ def test_ubwfris_stream_masks_unexpected_failure(
     assert [event.event for event in events] == ["progress", "error"]
     assert events[-1].data == {
         "status": "error",
-        "snapshot_id": sha256(b"workbook").hexdigest(),
-        "processed_rows": 1,
-        "total_rows": 2,
-        "created_rows": 1,
-        "invalid_rows": 0,
-        "invalid_row_numbers": [],
-        "error_status": 500,
-        "detail": "UBWFRIS ingest failed",
+        "error": {
+            "code": "internal_error",
+            "http_status": 500,
+            "detail": "The operation failed",
+        },
+        "context": {"operation": "ubwfris.ingest", "snapshot_id": sha256(b"workbook").hexdigest()},
+        "progress": {
+            "processed_rows": 1,
+            "total_rows": 2,
+            "created_rows": 1,
+            "invalid_rows": 0,
+            "invalid_row_numbers": [],
+        },
     }
     assert "database password" not in str(events[-1].data)
+    failure_records = [record for record in caplog.records if record.exc_info]
+    assert len(failure_records) == 1
+    assert failure_records[0].exc_info is not None
+    assert isinstance(failure_records[0].exc_info[1], RuntimeError)
+    assert sum(record.name == "api.errors" for record in caplog.records) == 1
+    assert "database password" in caplog.text
 
 
 def test_ubwfris_known_error_subclass_inherits_status_without_traceback(
@@ -251,6 +273,7 @@ def test_ubwfris_known_error_subclass_inherits_status_without_traceback(
 
     events = asyncio.run(collect())
     assert [event.event for event in events] == ["progress", "error"]
-    assert events[-1].data["error_status"] == 422
-    assert events[-1].data["invalid_row_numbers"] == [2]
+    assert events[-1].data["error"]["code"] == "ubwfris.invalid_workbook"
+    assert events[-1].data["error"]["http_status"] == 422
+    assert events[-1].data["progress"]["invalid_row_numbers"] == [2]
     assert "traceback" not in events[-1].data

@@ -8,9 +8,14 @@ from typing import Annotated
 import anyio
 from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi.sse import EventSourceResponse, ServerSentEvent
-from frozendict import frozendict
 from pydantic import BaseModel
 
+from api.errors import (
+    PublicError,
+    internal_error,
+    log_api_failure,
+    log_missing_outcome,
+)
 from api.progress import ProgressEventLimiter
 from api.stream import StreamEvent, StreamEventKind, StreamLifecycle
 from config import config
@@ -41,15 +46,6 @@ from domain.use_cases.ubwfris_ingest import ingest_ubwfris_workbook
 
 router = APIRouter()
 
-UBWFRIS_ERROR_STATUS: frozendict[type[Exception], int] = frozendict(
-    {
-        InvalidWorkbook: 422,
-        DuplicateUpload: 409,
-        ParserFailure: 500,
-        StoreUnavailable: 503,
-    }
-)
-
 
 class UbwfrisIngestProgressStatus(StrEnum):
     PROGRESS = "progress"
@@ -65,8 +61,22 @@ class UbwfrisIngestProgressEvent(BaseModel):
     invalid_rows: int
     snapshot_id: str | None = None
     invalid_row_numbers: list[int] | None = None
-    error_status: int | None = None
-    detail: str | None = None
+
+
+class UbwfrisErrorMapper:
+    @staticmethod
+    def describe(exc: Exception) -> PublicError:
+        if isinstance(exc, InvalidWorkbook):
+            return PublicError("ubwfris.invalid_workbook", 422, str(exc))
+        if isinstance(exc, DuplicateUpload):
+            return PublicError("ubwfris.duplicate_upload", 409, str(exc))
+        if isinstance(exc, ParserFailure):
+            return PublicError("ubwfris.parser_failure", 500, "Workbook parsing failed")
+        if isinstance(exc, StoreUnavailable):
+            return PublicError(
+                "ubwfris.store_unavailable", 503, "UBWFRIS store is unavailable"
+            )
+        return internal_error()
 
 
 def _event(update: UbwfrisIngestEvent, snapshot_id: str) -> StreamEvent:
@@ -98,17 +108,11 @@ def _event(update: UbwfrisIngestEvent, snapshot_id: str) -> StreamEvent:
 
 
 def _failure_event(
+    public_error: PublicError,
     exc: Exception,
     snapshot_id: str,
     progress: UbwfrisIngestProgress | None,
 ) -> StreamEvent:
-    error_status = 500
-    detail = "UBWFRIS ingest failed"
-    for error_type, status in UBWFRIS_ERROR_STATUS.items():
-        if isinstance(exc, error_type):
-            error_status = status
-            detail = str(exc)
-            break
 
     invalid_row_numbers: list[int] | None = (
         [] if progress is None or progress.invalid_rows == 0 else None
@@ -116,20 +120,20 @@ def _failure_event(
     if isinstance(exc, InvalidWorkbook):
         invalid_row_numbers = list(exc.invalid_row_numbers)
 
-    event = UbwfrisIngestProgressEvent(
-        status=UbwfrisIngestProgressStatus.ERROR,
-        snapshot_id=snapshot_id,
-        processed_rows=progress.processed_rows if progress else 0,
-        total_rows=progress.total_rows if progress else 0,
-        created_rows=progress.created_rows if progress else 0,
-        invalid_rows=progress.invalid_rows if progress else 0,
-        invalid_row_numbers=invalid_row_numbers,
-        error_status=error_status,
-        detail=detail,
-    )
     return StreamEvent(
-        event.status.value,
-        event.model_dump(exclude_none=True),
+        UbwfrisIngestProgressStatus.ERROR.value,
+        {
+            "status": UbwfrisIngestProgressStatus.ERROR.value,
+            "error": public_error.as_dict(),
+            "context": {"operation": "ubwfris.ingest", "snapshot_id": snapshot_id},
+            "progress": {
+                "processed_rows": progress.processed_rows if progress else 0,
+                "total_rows": progress.total_rows if progress else 0,
+                "created_rows": progress.created_rows if progress else 0,
+                "invalid_rows": progress.invalid_rows if progress else 0,
+                "invalid_row_numbers": invalid_row_numbers,
+            },
+        },
         StreamEventKind.ERROR,
     )
 
@@ -143,7 +147,8 @@ async def _upload_ubwfris_workbook[T: UbwfrisRow](
     snapshot_id = sha256(workbook.file).hexdigest()
     last_progress: UbwfrisIngestProgress | None = None
     missing_outcome = _failure_event(
-        ParserFailure("UBWFRIS ingest ended without an outcome"),
+        internal_error(),
+        RuntimeError("UBWFRIS ingest ended without an outcome"),
         snapshot_id,
         None,
     )
@@ -164,8 +169,16 @@ async def _upload_ubwfris_workbook[T: UbwfrisRow](
             if response is not None:
                 yield response
     except Exception as exc:  # noqa: BLE001 - terminate the SSE stream on unexpected failures
+        public_error = UbwfrisErrorMapper.describe(exc)
+        log_api_failure(
+            "ubwfris",
+            exc,
+            public_error,
+            identifiers={"operation": "ubwfris.ingest", "snapshot_id": snapshot_id},
+        )
         response = lifecycle.encode(
             _failure_event(
+                public_error,
                 exc,
                 snapshot_id,
                 last_progress,
@@ -176,6 +189,10 @@ async def _upload_ubwfris_workbook[T: UbwfrisRow](
     else:
         response = lifecycle.finish()
         if response is not None:
+            log_missing_outcome(
+                "ubwfris",
+                identifiers={"operation": "ubwfris.ingest", "snapshot_id": snapshot_id},
+            )
             yield response
     finally:
         with anyio.CancelScope(shield=True):

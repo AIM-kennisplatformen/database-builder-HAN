@@ -410,6 +410,61 @@ def test_group_drives_route_lists_only_memberships_with_named_drives() -> None:
     assert old_group_drives.status_code == 404
 
 
+@pytest.mark.parametrize(
+    ("graph_status", "expected_status"),
+    [(403, 403), (404, 404), (429, 503), (500, 502)],
+)
+def test_group_drive_discovery_uses_safe_shared_error_mapping(
+    graph_status: int,
+    expected_status: int,
+) -> None:
+    class BrokenGroupDriveSource:
+        def stream_group_drive_ids(self, group_id: str) -> AsyncIterator[str]:
+            _ = group_id
+            raise AssertionError("Group drive IDs are not requested")
+
+        def stream_user_groups(self, user_id: str) -> AsyncIterator[UserGroup]:
+            _ = user_id
+            raise MetadataSourceError(
+                graph_status, "sensitive upstream response"
+            )
+
+        def stream_group_drive_locations(
+            self, group_id: str
+        ) -> AsyncIterator[GroupDriveLocation]:
+            _ = group_id
+            raise AssertionError("Drive locations are not requested")
+
+    app = FastAPI()
+    app.include_router(documents_router)
+
+    async def current_user_id() -> str:
+        return "user"
+
+    async def group_drive_source() -> GroupDriveSource:
+        return BrokenGroupDriveSource()
+
+    app.dependency_overrides[get_current_graph_user_id] = current_user_id
+    app.dependency_overrides[get_group_drive_source] = group_drive_source
+
+    async def request() -> Response:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            return await client.get("/api/v1/documents/groups/drives")
+
+    response = asyncio.run(request())
+    assert response.status_code == expected_status
+    assert response.json() == {
+        "error": {
+            "code": "metadata.source_error",
+            "http_status": expected_status,
+            "detail": "Metadata source request failed",
+        }
+    }
+    assert "sensitive upstream response" not in response.text
+
+
 def test_group_without_drive_is_skipped() -> None:
     drives = MagicMock()
     drives.with_url.return_value.get = AsyncMock(

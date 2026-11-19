@@ -95,20 +95,27 @@ def test_employee_sync_emits_one_error_terminal_after_source_failure() -> None:
     assert sum(event.event in {"complete", "error"} for event in events) == 1
     assert events[-1].data == {
         "status": "error",
-        "processed": 1,
-        "total": 3,
-        "available": 3,
-        "created": 1,
-        "updated": 0,
-        "unchanged": 0,
-        "error_status": 501,
-        "detail": "Employee source is unavailable",
+        "error": {
+            "code": "employee.source_unavailable",
+            "http_status": 501,
+            "detail": "Employee source is unavailable",
+        },
+        "context": {"operation": "employee.sync"},
+        "progress": {
+            "processed": 1,
+            "total": 3,
+            "available": 3,
+            "created": 1,
+            "updated": 0,
+            "unchanged": 0,
+        },
     }
     assert "traceback" not in events[-1].data
 
 
 def test_employee_sync_emits_generic_unexpected_error_payload(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     async def broken_sync(
         request: EmployeesSyncRequest,
@@ -136,16 +143,29 @@ def test_employee_sync_emits_generic_unexpected_error_payload(
     assert [event.event for event in events] == ["progress", "error"]
     assert events[-1].data == {
         "status": "error",
-        "processed": 1,
-        "total": 3,
-        "available": 5,
-        "created": 1,
-        "updated": 0,
-        "unchanged": 0,
-        "error_status": 500,
-        "detail": "Employee sync failed",
+        "error": {
+            "code": "internal_error",
+            "http_status": 500,
+            "detail": "The operation failed",
+        },
+        "context": {"operation": "employee.sync"},
+        "progress": {
+            "processed": 1,
+            "total": 3,
+            "available": 5,
+            "created": 1,
+            "updated": 0,
+            "unchanged": 0,
+        },
     }
     assert "traceback" not in events[-1].data
+    assert "unexpected backend failure" not in str(events[-1].data)
+    failure_records = [record for record in caplog.records if record.exc_info]
+    assert len(failure_records) == 1
+    assert failure_records[0].exc_info is not None
+    assert isinstance(failure_records[0].exc_info[1], RuntimeError)
+    assert sum(record.name == "api.errors" for record in caplog.records) == 1
+    assert "unexpected backend failure" in caplog.text
 
 
 def test_employee_sync_subclass_inherits_known_error_status(
@@ -177,5 +197,6 @@ def test_employee_sync_subclass_inherits_known_error_status(
 
     events = asyncio.run(collect())
     assert [event.event for event in events] == ["progress", "error"]
-    assert events[-1].data["error_status"] == 501
+    assert events[-1].data["error"]["code"] == "employee.source_unavailable"
+    assert events[-1].data["error"]["http_status"] == 501
     assert "traceback" not in events[-1].data

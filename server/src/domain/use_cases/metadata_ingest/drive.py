@@ -6,6 +6,7 @@ from uuid import UUID
 import anyio
 
 from domain.exceptions.metadata_ingest_errors import (
+    InvalidMetadataSelection,
     MetadataRunAlreadyActive,
     MetadataSourceError,
     SourceUnavailable,
@@ -36,9 +37,9 @@ class MetadataIngestDriveRequest:
 
     def __post_init__(self) -> None:
         if not self.drive_id.strip():
-            raise ValueError("drive_id is required")
+            raise InvalidMetadataSelection("drive_id is required")
         if not self.root_item_id.strip():
-            raise ValueError("root_item_id is required")
+            raise InvalidMetadataSelection("root_item_id is required")
 
         def normalize_extensions(extensions: list[str]) -> list[str]:
             normalized = [
@@ -48,7 +49,7 @@ class MetadataIngestDriveRequest:
                 not extension.isascii() or not extension.isalnum()
                 for extension in normalized
             ):
-                raise ValueError("extensions must be alphanumeric")
+                raise InvalidMetadataSelection("extensions must be alphanumeric")
             return normalized
 
         def normalize_paths(paths: list[str], field_name: str) -> list[str]:
@@ -59,7 +60,7 @@ class MetadataIngestDriveRequest:
                     not segment.strip() or segment in {".", ".."}
                     for segment in normalized_path.split("/")
                 ):
-                    raise ValueError(
+                    raise InvalidMetadataSelection(
                         f"{field_name} must contain folder paths relative to the scan root"
                     )
                 if normalized_path not in normalized_paths:

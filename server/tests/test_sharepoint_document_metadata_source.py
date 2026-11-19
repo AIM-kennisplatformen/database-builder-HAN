@@ -905,12 +905,13 @@ def test_graph_drive_error_is_reported_before_page_validation() -> None:
 
 @pytest.mark.parametrize(
     ("graph_status", "event_status"),
-    [(400, 400), (404, 404), (500, 502)],
+    [(403, 403), (404, 404), (429, 503), (400, 502), (500, 502)],
 )
 def test_metadata_endpoint_returns_graph_client_error(
     graph_status: int,
     event_status: int,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setenv("DEBUG", "true")
     monkeypatch.setattr(
@@ -974,12 +975,23 @@ def test_metadata_endpoint_returns_graph_client_error(
     assert events[0].event == "error"
     assert events[0].data == {
         "status": "error",
-        "group_id": "group",
-        "drive_id": "bad-drive",
-        "processed": 0,
-        "error_status": event_status,
-        "detail": "The supplied drive id is invalid",
+        "error": {
+            "code": "metadata.source_error",
+            "http_status": event_status,
+            "detail": "Metadata source request failed",
+        },
+        "context": {
+            "operation": "metadata.ingest",
+            "group_id": "group",
+            "drive_id": "bad-drive",
+        },
+        "progress": {"processed": 0},
     }
+    expected_logs = 1 if event_status >= 500 else 0
+    api_failure_records = [
+        record for record in caplog.records if record.name == "api.errors"
+    ]
+    assert len(api_failure_records) == expected_logs
 
 
 def test_metadata_endpoint_failure_reports_group_progress_count(
@@ -1056,11 +1068,17 @@ def test_metadata_endpoint_failure_reports_group_progress_count(
     assert events[0].data["processed"] == 1
     assert events[1].data == {
         "status": "error",
-        "group_id": "group",
-        "drive_id": "bad-drive",
-        "processed": 1,
-        "error_status": 502,
-        "detail": "Graph unavailable",
+        "error": {
+            "code": "metadata.source_error",
+            "http_status": 502,
+            "detail": "Metadata source request failed",
+        },
+        "context": {
+            "operation": "metadata.ingest",
+            "group_id": "group",
+            "drive_id": "bad-drive",
+        },
+        "progress": {"processed": 1},
     }
 
 
@@ -1103,11 +1121,17 @@ def test_metadata_known_error_subclass_inherits_status_and_hides_traceback(
     assert [event.event for event in events] == ["error"]
     assert events[0].data == {
         "status": "error",
-        "group_id": "group",
-        "drive_id": "bad-drive",
-        "processed": 0,
-        "error_status": 409,
-        "detail": "metadata run is already active",
+        "error": {
+            "code": "metadata.run_already_active",
+            "http_status": 409,
+            "detail": "A metadata run is already active",
+        },
+        "context": {
+            "operation": "metadata.ingest",
+            "group_id": "group",
+            "drive_id": "bad-drive",
+        },
+        "progress": {"processed": 0},
     }
 
 
@@ -1173,7 +1197,7 @@ def test_metadata_endpoint_skips_inaccessible_drive_and_completes() -> None:
         "drive_id": "bad-drive",
         "processed": 0,
         "error_status": 403,
-        "detail": "Access denied",
+        "detail": "Drive is not accessible",
     }
     assert events[1].data == {
         "status": "progress",
@@ -1233,8 +1257,12 @@ def test_metadata_endpoint_reports_explicitly_included_drive_denial() -> None:
 
     events = asyncio.run(collect())
     assert [event.event for event in events] == ["error"]
-    assert events[0].data["drive_id"] == "bad-drive"
-    assert events[0].data["error_status"] == 403
+    assert events[0].data["context"]["drive_id"] == "bad-drive"
+    assert events[0].data["error"] == {
+        "code": "metadata.source_error",
+        "http_status": 403,
+        "detail": "Metadata source request failed",
+    }
 
 
 def test_metadata_endpoint_reports_explicit_drive_filtered_by_discovery() -> None:
@@ -1255,12 +1283,47 @@ def test_metadata_endpoint_reports_explicit_drive_filtered_by_discovery() -> Non
 
     events = asyncio.run(collect())
     assert [event.event for event in events] == ["error"]
-    assert events[0].data["drive_id"] == "hidden-drive"
-    assert events[0].data["error_status"] == 403
-    assert events[0].data["processed"] == 0
+    assert events[0].data["context"]["drive_id"] == "hidden-drive"
+    assert events[0].data["error"] == {
+        "code": "metadata.source_error",
+        "http_status": 403,
+        "detail": "Metadata source request failed",
+    }
+    assert events[0].data["progress"]["processed"] == 0
 
 
-def test_metadata_endpoint_reports_unexpected_failure() -> None:
+def test_metadata_duplicate_selection_has_specific_public_error() -> None:
+    async def collect():
+        return [
+            event
+            async for event in ingest_group_metadata_endpoint(
+                "group",
+                MetadataIngestRequestBody(
+                    include=[
+                        DriveMetadataSelectorBody(drive_id="drive"),
+                        DriveMetadataSelectorBody(drive_id="drive"),
+                    ]
+                ),
+                "user",
+                OneGroupSource(),
+                cast(DocumentRefreshSource, cast(object, AsyncMock())),
+                MetadataRefreshStore(),
+            )
+        ]
+
+    events = asyncio.run(collect())
+    assert [event.event for event in events] == ["error"]
+    assert events[0].data["error"] == {
+        "code": "metadata.invalid_selection",
+        "http_status": 422,
+        "detail": "include and exclude must each have unique drive_id values",
+    }
+    assert events[0].data["progress"] == {"processed": 0}
+
+
+def test_metadata_endpoint_reports_and_logs_unexpected_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     class BrokenGroupSource:
         async def stream_user_groups(self, user_id: str) -> AsyncIterator[UserGroup]:
             if user_id:
@@ -1283,7 +1346,63 @@ def test_metadata_endpoint_reports_unexpected_failure() -> None:
     events = asyncio.run(collect())
     assert len(events) == 1
     assert events[0].event == "error"
-    assert events[0].data["error_status"] == 500
+    assert events[0].data == {
+        "status": "error",
+        "error": {
+            "code": "internal_error",
+            "http_status": 500,
+            "detail": "The operation failed",
+        },
+        "context": {
+            "operation": "metadata.ingest",
+            "group_id": "group",
+            "drive_id": None,
+        },
+        "progress": {"processed": 0},
+    }
+    assert "discovery failed" not in str(events[0].data)
+    failure_records = [record for record in caplog.records if record.exc_info]
+    assert len(failure_records) == 1
+    assert failure_records[0].exc_info is not None
+    assert isinstance(failure_records[0].exc_info[1], RuntimeError)
+    assert sum(record.name == "api.errors" for record in caplog.records) == 1
+    assert "discovery failed" in caplog.text
+
+
+def test_metadata_endpoint_logs_missing_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def empty_ingest(*args: object) -> AsyncIterator[object]:
+        if len(args) == 0:
+            yield object()
+
+    monkeypatch.setattr(metadata_route, "ingest_group_metadata", empty_ingest)
+
+    async def collect():
+        return [
+            event
+            async for event in ingest_group_metadata_endpoint(
+                "group",
+                MetadataIngestRequestBody(),
+                "user",
+                OneGroupSource(),
+                cast(DocumentRefreshSource, cast(object, AsyncMock())),
+                cast(DocumentRefreshStore, cast(object, AsyncMock())),
+            )
+        ]
+
+    events = asyncio.run(collect())
+    assert [event.event for event in events] == ["error"]
+    assert events[0].data["error"] == {
+        "code": "internal_error",
+        "http_status": 500,
+        "detail": "The operation failed",
+    }
+    failure_records = [record for record in caplog.records if record.exc_info]
+    assert not failure_records
+    assert sum(record.name == "api.errors" for record in caplog.records) == 1
+    assert "ended without an outcome" in caplog.text
 
 
 def test_metadata_endpoint_streams_progress_and_completion() -> None:

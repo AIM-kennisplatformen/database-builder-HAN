@@ -5,9 +5,14 @@ from typing import Annotated
 import anyio
 from fastapi import APIRouter, Depends
 from fastapi.sse import EventSourceResponse, ServerSentEvent
-from frozendict import frozendict
 from pydantic import BaseModel, Field
 
+from api.errors import (
+    PublicError,
+    internal_error,
+    log_api_failure,
+    log_missing_outcome,
+)
 from api.progress import ProgressEventLimiter
 from api.stream import StreamEvent, StreamEventKind, StreamLifecycle
 from config import config
@@ -29,15 +34,6 @@ from domain.use_cases.employee_sync import (
 
 router = APIRouter()
 
-EMPLOYEE_SYNC_ERROR_STATUS: frozendict[type[Exception], int] = frozendict(
-    {
-        InvalidLimit: 422,
-        NoEmployeesFound: 404,
-        SourceUnavailable: 501,
-        StoreUnavailable: 503,
-    }
-)
-
 
 class EmployeesSyncRequestBody(BaseModel):
     limit: int | None = Field(default=None, gt=0)
@@ -57,8 +53,24 @@ class EmployeesSyncProgressEvent(BaseModel):
     created: int
     updated: int
     unchanged: int
-    error_status: int | None = None
-    detail: str | None = None
+
+
+class EmployeeErrorMapper:
+    @staticmethod
+    def describe(exc: Exception) -> PublicError:
+        if isinstance(exc, InvalidLimit):
+            return PublicError("employee.invalid_limit", 422, str(exc))
+        if isinstance(exc, NoEmployeesFound):
+            return PublicError("employee.no_employees", 404, "No employees were found")
+        if isinstance(exc, SourceUnavailable):
+            return PublicError(
+                "employee.source_unavailable", 501, "Employee source is unavailable"
+            )
+        if isinstance(exc, StoreUnavailable):
+            return PublicError(
+                "employee.store_unavailable", 503, "Employee store is unavailable"
+            )
+        return internal_error()
 
 
 def _event(update: EmployeesSyncProgress | EmployeesSyncResult) -> StreamEvent:
@@ -86,30 +98,24 @@ def _event(update: EmployeesSyncProgress | EmployeesSyncResult) -> StreamEvent:
 
 
 def _failure_event(
-    exc: Exception,
+    public_error: PublicError,
     progress: EmployeesSyncProgress | None,
 ) -> StreamEvent:
-    error_status = 500
-    detail = "Employee sync failed"
-    for error_type, status in EMPLOYEE_SYNC_ERROR_STATUS.items():
-        if isinstance(exc, error_type):
-            error_status = status
-            detail = str(exc)
-            break
-    event = EmployeesSyncProgressEvent(
-        status=EmployeesSyncProgressStatus.ERROR,
-        processed=progress.processed if progress else 0,
-        total=progress.total if progress else None,
-        available=progress.available if progress else 0,
-        created=progress.created if progress else 0,
-        updated=progress.updated if progress else 0,
-        unchanged=progress.unchanged if progress else 0,
-        error_status=error_status,
-        detail=detail,
-    )
     return StreamEvent(
-        event.status.value,
-        event.model_dump(exclude_none=True),
+        EmployeesSyncProgressStatus.ERROR.value,
+        {
+            "status": EmployeesSyncProgressStatus.ERROR.value,
+            "error": public_error.as_dict(),
+            "context": {"operation": "employee.sync"},
+            "progress": {
+                "processed": progress.processed if progress else 0,
+                "total": progress.total if progress else None,
+                "available": progress.available if progress else 0,
+                "created": progress.created if progress else 0,
+                "updated": progress.updated if progress else 0,
+                "unchanged": progress.unchanged if progress else 0,
+            },
+        },
         StreamEventKind.ERROR,
     )
 
@@ -128,10 +134,7 @@ async def sync_employees_endpoint(
     source: Annotated[EmployeeSource, Depends(get_employee_source)],
     store: Annotated[EmployeeWriter, Depends(get_employee_store)],
 ) -> AsyncGenerator[ServerSentEvent]:
-    missing_outcome = _failure_event(
-        RuntimeError("Employee sync ended without an outcome"),
-        None,
-    )
+    missing_outcome = _failure_event(internal_error(), None)
     lifecycle = StreamLifecycle(
         ProgressEventLimiter(config.stream_progress_interval_seconds),
         missing_outcome,
@@ -147,12 +150,20 @@ async def sync_employees_endpoint(
             if response is not None:
                 yield response
     except Exception as exc:  # noqa: BLE001 - terminate the SSE stream on failures
-        response = lifecycle.encode(_failure_event(exc, last_progress))
+        public_error = EmployeeErrorMapper.describe(exc)
+        log_api_failure(
+            "employee",
+            exc,
+            public_error,
+            identifiers={"operation": "employee.sync"},
+        )
+        response = lifecycle.encode(_failure_event(public_error, last_progress))
         if response is not None:
             yield response
     else:
         response = lifecycle.finish()
         if response is not None:
+            log_missing_outcome("employee", identifiers={"operation": "employee.sync"})
             yield response
     finally:
         with anyio.CancelScope(shield=True):

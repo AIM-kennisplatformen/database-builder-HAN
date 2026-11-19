@@ -1,7 +1,10 @@
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 
-from domain.exceptions.metadata_ingest_errors import MetadataSourceError
+from domain.exceptions.metadata_ingest_errors import (
+    InvalidMetadataSelection,
+    MetadataSourceError,
+)
 from domain.ports.documents.document_metadata_source import DocumentRefreshSource
 from domain.ports.documents.document_store import DocumentRefreshStore
 from domain.ports.documents.group_drive_source import GroupDriveSource
@@ -95,7 +98,9 @@ async def ingest_group_metadata(
     included = {selector.drive_id: selector for selector in request.include}
     excluded = {selector.drive_id: selector for selector in request.exclude}
     if len(included) != len(request.include) or len(excluded) != len(request.exclude):
-        raise ValueError("include and exclude must each have unique drive_id values")
+        raise InvalidMetadataSelection(
+            "include and exclude must each have unique drive_id values"
+        )
     unavailable_included = [
         drive_id for drive_id in included if drive_id not in available
     ]
@@ -106,12 +111,12 @@ async def ingest_group_metadata(
         )
     unknown_excluded = set(excluded) - available
     if unknown_excluded:
-        raise ValueError(
+        raise InvalidMetadataSelection(
             "drive IDs are not available in this group: "
             + ", ".join(sorted(unknown_excluded))
         )
     if included and set(excluded) - set(included):
-        raise ValueError("excluded drives must also be included")
+        raise InvalidMetadataSelection("excluded drives must also be included")
     selected = tuple(
         drive_id
         for drive_id in group.drive_ids
