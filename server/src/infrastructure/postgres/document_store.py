@@ -26,6 +26,7 @@ from domain.ports.documents.document_store import (
 )
 
 _metadata_adapter = TypeAdapter(DocumentMetadata)
+_METADATA_RESET_LOCK = 7368369943385156103
 
 
 @asynccontextmanager
@@ -57,6 +58,33 @@ async def _staging_transaction(
 class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
     def __init__(self, pool: AsyncConnectionPool) -> None:
         self._pool: AsyncConnectionPool = pool
+
+    async def delete_all_metadata(self) -> bool:
+        async with _staging_transaction(self._pool) as connection:
+            _ = await connection.execute(
+                "SELECT pg_advisory_xact_lock(%s)", (_METADATA_RESET_LOCK,)
+            )
+            cursor = await connection.execute(
+                """SELECT id FROM operation_runs
+                   WHERE kind = 'metadata.ingest' AND status = 'running'
+                   FOR UPDATE"""
+            )
+            if await cursor.fetchone() is not None:
+                return False
+            cursor = await connection.execute(
+                """SELECT id FROM document_metadata_runs
+                   WHERE status = 'running' FOR UPDATE"""
+            )
+            if await cursor.fetchone() is not None:
+                return False
+            _ = await connection.execute("DELETE FROM document_metadata_cursors")
+            _ = await connection.execute("DELETE FROM document_metadata_observations")
+            _ = await connection.execute("DELETE FROM document_metadata_runs")
+            _ = await connection.execute("DELETE FROM document_ms_graph_sources")
+            _ = await connection.execute(
+                "DELETE FROM operation_runs WHERE kind = 'metadata.ingest'"
+            )
+            return True
 
     @override
     async def save_document(self, document: Document) -> None:
@@ -116,17 +144,30 @@ class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
         try:
             async with self._pool.connection() as connection:
                 cursor = await connection.execute(
-                    """SELECT selection, delta_link FROM document_metadata_cursors
-                       WHERE principal_id = %s AND drive_id = %s""",
-                    (principal_id, drive_id),
+                    """SELECT cursors.selection, cursors.delta_link
+                       FROM (SELECT pg_advisory_xact_lock(%s)) AS reset_lock
+                       LEFT JOIN document_metadata_cursors AS cursors
+                         ON cursors.principal_id = %s AND cursors.drive_id = %s""",
+                    (_METADATA_RESET_LOCK, principal_id, drive_id),
                 )
-                row = await cursor.fetchone()
-                same_selection = row is not None and row[0] == serialized_selection
+                row = cast(tuple[object, ...] | None, await cursor.fetchone())
+                if row is not None and row[0] is not None:
+                    same_selection = row[0] == serialized_selection
+                    delta_link = cast(str, row[1]) if same_selection else None
+                else:
+                    same_selection = False
+                    delta_link = None
                 _ = await connection.execute(
                     """INSERT INTO document_metadata_runs
                        (id, principal_id, drive_id, selection, status, operation_id)
                        VALUES (%s, %s, %s, %s, 'running', %s)""",
-                    (run_id, principal_id, drive_id, serialized_selection, operation_id),
+                    (
+                        run_id,
+                        principal_id,
+                        drive_id,
+                        serialized_selection,
+                        operation_id,
+                    ),
                 )
                 if operation_id is not None:
                     _ = await connection.execute(
@@ -143,7 +184,7 @@ class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
             ) from exc
         return MetadataIngestRun(
             run_id,
-            row[1] if same_selection and row is not None else None,
+            delta_link,
             same_selection,
         )
 
@@ -151,6 +192,9 @@ class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
     async def begin_group_operation(self, principal_id: str, group_id: str) -> UUID:
         operation_id = uuid4()
         async with self._pool.connection() as connection:
+            _ = await connection.execute(
+                "SELECT pg_advisory_xact_lock(%s)", (_METADATA_RESET_LOCK,)
+            )
             _ = await connection.execute(
                 """INSERT INTO operation_runs
                    (id, principal_id, kind, status, domain_ids)

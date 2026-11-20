@@ -3,7 +3,7 @@ from enum import StrEnum
 from typing import Annotated
 
 import anyio
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
 
@@ -18,8 +18,10 @@ from api.stream import StreamEvent, StreamEventKind, StreamLifecycle
 from config import config
 from dependencies import (
     get_current_graph_user_id,
+    get_employee_data_deleter,
     get_employee_source,
     get_employee_store,
+    require_employee_delete_enabled,
 )
 from domain.exceptions.employee_sync_errors import (
     InvalidLimit,
@@ -28,7 +30,7 @@ from domain.exceptions.employee_sync_errors import (
     StoreUnavailable,
 )
 from domain.ports.employees.employee_source import EmployeeSource
-from domain.ports.employees.employee_store import EmployeeWriter
+from domain.ports.employees.employee_store import EmployeeDataDeleter, EmployeeWriter
 from domain.use_cases.employee_sync import (
     EmployeesSyncProgress,
     EmployeesSyncRequest,
@@ -38,6 +40,24 @@ from domain.use_cases.employee_sync import (
 )
 
 router = APIRouter()
+
+
+@router.delete(
+    "/sync",
+    summary="Delete all synced employee data",
+    include_in_schema=config.delete_endpoints.employee,
+)
+async def delete_employee_data(
+    _delete_enabled: Annotated[None, Depends(require_employee_delete_enabled)],
+    _principal_id: Annotated[str, Depends(get_current_graph_user_id)],
+    store: Annotated[EmployeeDataDeleter, Depends(get_employee_data_deleter)],
+) -> dict[str, bool]:
+    if not await store.delete_all_employee_data():
+        raise HTTPException(
+            status_code=409,
+            detail="Employee data cannot be reset while a sync is active or overrides exist",
+        )
+    return {"deleted": True}
 
 
 class EmployeesSyncRequestBody(BaseModel):

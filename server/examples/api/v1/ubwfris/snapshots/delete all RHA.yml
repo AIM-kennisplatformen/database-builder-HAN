@@ -1,0 +1,17 @@
+info:
+  name: delete all RHA snapshots (global reset)
+  type: http
+  seq: 4
+  description: Destructive global reset of all RHA snapshots. Requires DELETE_ENDPOINTS__UBWFRIS=true and a server restart.
+
+http:
+  method: DELETE
+  url: "{{base_url}}/{{api_version}}/ubwfris/snapshots/rha"
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false

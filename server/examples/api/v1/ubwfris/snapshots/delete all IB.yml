@@ -1,0 +1,17 @@
+info:
+  name: delete all IB snapshots (global reset)
+  type: http
+  seq: 3
+  description: Destructive global reset of all IB snapshots. Requires DELETE_ENDPOINTS__UBWFRIS=true and a server restart.
+
+http:
+  method: DELETE
+  url: "{{base_url}}/{{api_version}}/ubwfris/snapshots/ib"
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false

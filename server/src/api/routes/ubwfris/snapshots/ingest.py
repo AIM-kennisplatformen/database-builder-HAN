@@ -4,17 +4,21 @@ from hashlib import sha256
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from api.errors import PublicError, internal_error, log_api_failure
+from config import config
 from dependencies import (
     get_current_graph_user_id,
+    get_ubwfris_ib_deleter,
     get_ubwfris_ib_parser,
     get_ubwfris_ib_writer,
+    get_ubwfris_rha_deleter,
     get_ubwfris_rha_parser,
     get_ubwfris_rha_writer,
+    require_ubwfris_delete_enabled,
 )
 from domain.exceptions.error import DomainError
 from domain.exceptions.ubwfris_ingest_errors import (
@@ -33,10 +37,44 @@ from domain.models.ubwfris import (
     UbwfrisWorkbook,
 )
 from domain.ports.ubwfris.ubwfris_parser import UbwfrisParser
-from domain.ports.ubwfris.ubwfris_store import UbwfrisWriter
+from domain.ports.ubwfris.ubwfris_store import UbwfrisSnapshotDeleter, UbwfrisWriter
 from domain.use_cases.ubwfris_ingest import ingest_ubwfris_workbook
 
 router = APIRouter()
+
+
+@router.delete(
+    "/ib",
+    summary="Delete all IB snapshots",
+    include_in_schema=config.delete_endpoints.ubwfris,
+)
+async def delete_ib_snapshots(
+    _delete_enabled: Annotated[None, Depends(require_ubwfris_delete_enabled)],
+    _principal_id: Annotated[str, Depends(get_current_graph_user_id)],
+    writer: Annotated[UbwfrisSnapshotDeleter, Depends(get_ubwfris_ib_deleter)],
+) -> dict[str, bool]:
+    if not await writer.delete_all_snapshots("ib"):
+        raise HTTPException(
+            status_code=409, detail="IB snapshots cannot be reset during import"
+        )
+    return {"deleted": True}
+
+
+@router.delete(
+    "/rha",
+    summary="Delete all RHA snapshots",
+    include_in_schema=config.delete_endpoints.ubwfris,
+)
+async def delete_rha_snapshots(
+    _delete_enabled: Annotated[None, Depends(require_ubwfris_delete_enabled)],
+    _principal_id: Annotated[str, Depends(get_current_graph_user_id)],
+    writer: Annotated[UbwfrisSnapshotDeleter, Depends(get_ubwfris_rha_deleter)],
+) -> dict[str, bool]:
+    if not await writer.delete_all_snapshots("rha"):
+        raise HTTPException(
+            status_code=409, detail="RHA snapshots cannot be reset during import"
+        )
+    return {"deleted": True}
 
 
 class UbwfrisIngestResponse(BaseModel):

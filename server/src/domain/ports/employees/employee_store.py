@@ -36,3 +36,7 @@ class EmployeeWriter(Protocol):
         failure_code: str = "employee.sync_failed",
         summary: dict[str, object] | None = None,
     ) -> None: ...
+
+
+class EmployeeDataDeleter(Protocol):
+    async def delete_all_employee_data(self) -> bool: ...

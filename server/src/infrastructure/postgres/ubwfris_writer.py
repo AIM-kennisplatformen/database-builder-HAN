@@ -45,6 +45,10 @@ _PUBLISH_RHA_SNAPSHOT: LiteralString = """
     FROM ubwfris_rha_rows_staging
     WHERE snapshot_id = %s
 """
+_UBWFRIS_RESET_LOCKS: dict[Literal["ib", "rha"], int] = {
+    "ib": 7368369943385156104,
+    "rha": 7368369943385156105,
+}
 
 
 @asynccontextmanager
@@ -155,6 +159,9 @@ async def _begin_operation(
 ) -> None:
     async with pool.connection() as connection:
         _ = await connection.execute(
+            "SELECT pg_advisory_xact_lock(%s)", (_UBWFRIS_RESET_LOCKS[row_type],)
+        )
+        _ = await connection.execute(
             """INSERT INTO operation_runs
                (id, principal_id, kind, status, domain_ids)
                VALUES (%s, %s, %s, 'running', %s::jsonb)""",
@@ -251,15 +258,57 @@ async def interrupt_ubwfris_snapshots(pool: AsyncConnectionPool) -> None:
             )
 
 
+async def _delete_all_snapshots(
+    pool: AsyncConnectionPool, row_type: Literal["ib", "rha"]
+) -> bool:
+    operation_kind = f"ubwfris.{row_type}"
+    rows_table = "ubwfris_ib_rows" if row_type == "ib" else "ubwfris_rha_rows"
+    staging_table = (
+        "ubwfris_ib_rows_staging" if row_type == "ib" else "ubwfris_rha_rows_staging"
+    )
+    async with _pool_transaction(pool) as connection:
+        _ = await connection.execute(
+            "SELECT pg_advisory_xact_lock(%s)", (_UBWFRIS_RESET_LOCKS[row_type],)
+        )
+        cursor = await connection.execute(
+            """SELECT id FROM operation_runs
+               WHERE kind = %s AND status = 'running' FOR UPDATE""",
+            (operation_kind,),
+        )
+        if await cursor.fetchone() is not None:
+            return False
+        cursor = await connection.execute(
+            """SELECT id FROM ubwfris_snapshots
+               WHERE row_type = %s AND status = 'running' FOR UPDATE""",
+            (row_type,),
+        )
+        if await cursor.fetchone() is not None:
+            return False
+        _ = await connection.execute(f"DELETE FROM {rows_table}")
+        _ = await connection.execute(f"DELETE FROM {staging_table}")
+        _ = await connection.execute(
+            "DELETE FROM ubwfris_snapshots WHERE row_type = %s", (row_type,)
+        )
+        _ = await connection.execute(
+            "DELETE FROM operation_runs WHERE kind = %s", (operation_kind,)
+        )
+        return True
+
+
 class PostgresIbWriter(UbwfrisWriter[IbRow]):
     def __init__(self, pool: AsyncConnectionPool) -> None:
         self._pool: AsyncConnectionPool = pool
+
+    async def delete_all_snapshots(self, row_type: Literal["ib", "rha"]) -> bool:
+        return await _delete_all_snapshots(self._pool, row_type)
 
     @override
     async def begin_operation(
         self, operation_id: UUID, principal_id: str, snapshot_id: str
     ) -> None:
-        await _begin_operation(self._pool, operation_id, principal_id, snapshot_id, "ib")
+        await _begin_operation(
+            self._pool, operation_id, principal_id, snapshot_id, "ib"
+        )
 
     @override
     async def fail_operation(
@@ -347,20 +396,23 @@ class PostgresIbWriter(UbwfrisWriter[IbRow]):
                     )
             return len(rows)
         except UniqueViolation as exc:
-            raise InvalidWorkbook(
-                "Workbook contains duplicate row numbers"
-            ) from exc
+            raise InvalidWorkbook("Workbook contains duplicate row numbers") from exc
 
 
 class PostgresRhaWriter(UbwfrisWriter[RhaRow]):
     def __init__(self, pool: AsyncConnectionPool) -> None:
         self._pool: AsyncConnectionPool = pool
 
+    async def delete_all_snapshots(self, row_type: Literal["ib", "rha"]) -> bool:
+        return await _delete_all_snapshots(self._pool, row_type)
+
     @override
     async def begin_operation(
         self, operation_id: UUID, principal_id: str, snapshot_id: str
     ) -> None:
-        await _begin_operation(self._pool, operation_id, principal_id, snapshot_id, "rha")
+        await _begin_operation(
+            self._pool, operation_id, principal_id, snapshot_id, "rha"
+        )
 
     @override
     async def fail_operation(
@@ -466,6 +518,4 @@ class PostgresRhaWriter(UbwfrisWriter[RhaRow]):
                     )
             return len(rows)
         except UniqueViolation as exc:
-            raise InvalidWorkbook(
-                "Workbook contains duplicate row numbers"
-            ) from exc
+            raise InvalidWorkbook("Workbook contains duplicate row numbers") from exc

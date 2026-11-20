@@ -1,0 +1,17 @@
+info:
+  name: delete all employee data (global reset)
+  type: http
+  seq: 3
+  description: Destructive global reset. Requires DELETE_ENDPOINTS__EMPLOYEE=true and a server restart.
+
+http:
+  method: DELETE
+  url: "{{base_url}}/{{api_version}}/employees/sync"
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false

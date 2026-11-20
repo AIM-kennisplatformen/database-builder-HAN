@@ -3,7 +3,7 @@ from enum import StrEnum
 from typing import Annotated, ClassVar
 
 import anyio
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,12 +19,17 @@ from api.stream import StreamEvent, StreamEventKind, StreamLifecycle
 from config import config
 from dependencies import (
     get_current_graph_user_id,
+    get_document_metadata_deleter,
     get_document_metadata_source,
     get_document_store,
     get_group_drive_source,
+    require_metadata_delete_enabled,
 )
 from domain.ports.documents.document_metadata_source import DocumentRefreshSource
-from domain.ports.documents.document_store import DocumentRefreshStore
+from domain.ports.documents.document_store import (
+    DocumentMetadataDeleter,
+    DocumentRefreshStore,
+)
 from domain.ports.documents.group_drive_source import GroupDriveSource
 from domain.use_cases.metadata_ingest import (
     DriveMetadataSelector,
@@ -38,6 +43,23 @@ from domain.use_cases.metadata_ingest import (
 )
 
 router = APIRouter()
+
+
+@router.delete(
+    path="/metadata",
+    summary="Delete all stored document metadata",
+    include_in_schema=config.delete_endpoints.metadata,
+)
+async def delete_document_metadata(
+    _delete_enabled: Annotated[None, Depends(require_metadata_delete_enabled)],
+    _principal_id: Annotated[str, Depends(get_current_graph_user_id)],
+    store: Annotated[DocumentMetadataDeleter, Depends(get_document_metadata_deleter)],
+) -> dict[str, bool]:
+    if not await store.delete_all_metadata():
+        raise HTTPException(
+            status_code=409, detail="Document metadata cannot be reset during ingestion"
+        )
+    return {"deleted": True}
 
 
 class DriveMetadataSelectorBody(BaseModel):

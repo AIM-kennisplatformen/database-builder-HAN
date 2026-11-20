@@ -5,15 +5,19 @@ from fastapi.requests import Request
 from msgraph.graph_service_client import GraphServiceClient
 from psycopg_pool import AsyncConnectionPool
 
+from config import config
 from domain.models.ubwfris import IbRow, RhaRow
 from domain.ports.documents.document_metadata_source import DocumentRefreshSource
-from domain.ports.documents.document_store import DocumentRefreshStore
+from domain.ports.documents.document_store import (
+    DocumentMetadataDeleter,
+    DocumentRefreshStore,
+)
 from domain.ports.documents.group_drive_source import GroupDriveSource
 from domain.ports.employees.employee_source import EmployeeSource
-from domain.ports.employees.employee_store import EmployeeWriter
+from domain.ports.employees.employee_store import EmployeeDataDeleter, EmployeeWriter
 from domain.ports.operation_run_store import OperationRunReader
 from domain.ports.ubwfris.ubwfris_parser import UbwfrisParser
-from domain.ports.ubwfris.ubwfris_store import UbwfrisWriter
+from domain.ports.ubwfris.ubwfris_store import UbwfrisSnapshotDeleter, UbwfrisWriter
 from infrastructure.excel.ubwfris_parser import (
     UbwfrisIbExcelParser,
     UbwfrisRhaExcelParser,
@@ -59,6 +63,12 @@ def get_employee_store(
     return EmployeePostgresWriter(pool)
 
 
+def get_employee_data_deleter(
+    pool: Annotated[AsyncConnectionPool, Depends(get_postgres_pool)],
+) -> EmployeeDataDeleter:
+    return EmployeePostgresWriter(pool)
+
+
 def get_ubwfris_ib_parser() -> UbwfrisParser[IbRow]:
     return UbwfrisIbExcelParser()
 
@@ -79,6 +89,18 @@ def get_ubwfris_rha_writer(
     return PostgresRhaWriter(pool)
 
 
+def get_ubwfris_ib_deleter(
+    pool: Annotated[AsyncConnectionPool, Depends(get_postgres_pool)],
+) -> UbwfrisSnapshotDeleter:
+    return PostgresIbWriter(pool)
+
+
+def get_ubwfris_rha_deleter(
+    pool: Annotated[AsyncConnectionPool, Depends(get_postgres_pool)],
+) -> UbwfrisSnapshotDeleter:
+    return PostgresRhaWriter(pool)
+
+
 def get_document_metadata_source(request: Request) -> DocumentRefreshSource:
     return _state(request).document_metadata_source
 
@@ -86,6 +108,12 @@ def get_document_metadata_source(request: Request) -> DocumentRefreshSource:
 def get_document_store(
     pool: Annotated[AsyncConnectionPool, Depends(get_postgres_pool)],
 ) -> DocumentRefreshStore:
+    return PostgresDocumentStore(pool)
+
+
+def get_document_metadata_deleter(
+    pool: Annotated[AsyncConnectionPool, Depends(get_postgres_pool)],
+) -> DocumentMetadataDeleter:
     return PostgresDocumentStore(pool)
 
 
@@ -109,3 +137,18 @@ async def get_current_graph_user_id(
     if user is None or not user.id:
         raise HTTPException(status_code=503, detail="Graph returned no current user ID")
     return user.id
+
+
+def require_employee_delete_enabled() -> None:
+    if not config.delete_endpoints.employee:
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+def require_metadata_delete_enabled() -> None:
+    if not config.delete_endpoints.metadata:
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+def require_ubwfris_delete_enabled() -> None:
+    if not config.delete_endpoints.ubwfris:
+        raise HTTPException(status_code=404, detail="Not found")

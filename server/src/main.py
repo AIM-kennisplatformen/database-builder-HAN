@@ -27,16 +27,16 @@ from infrastructure.postgres.ubwfris_writer import interrupt_ubwfris_snapshots
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     conninfo = make_conninfo(
-        dbname=config.postgres_db,
-        user=config.postgres_user,
-        password=config.postgres_password,
-        host=config.postgres_host,
-        port=config.postgres_port,
+        dbname=config.postgres.db,
+        user=config.postgres.user,
+        password=config.postgres.password,
+        host=config.postgres.host,
+        port=config.postgres.port,
     )
     credential = InteractiveBrowserCredential(
-        tenant_id=config.graph_tenant_id,
-        client_id=config.graph_client_id,
-        redirect_uri=config.graph_redirect_uri,
+        tenant_id=config.graph.tenant_id,
+        client_id=config.graph.client_id,
+        redirect_uri=config.graph.redirect_uri,
     )
     try:
         client = GraphServiceClient(
@@ -44,7 +44,9 @@ async def lifespan(app: FastAPI):
             scopes=[],
         )
 
-        app.state.employee_source = MsGraphEmployeeSource(client, config.group_id)
+        app.state.employee_source = MsGraphEmployeeSource(
+            client, config.graph.employee_group.id
+        )
         app.state.document_metadata_source = SharePointDocumentMetadataSource(client)
         app.state.group_drive_source = MsGraphGroupDriveSource(client)
         app.state.graph_client = client

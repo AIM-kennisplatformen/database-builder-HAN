@@ -35,6 +35,7 @@ _EMPLOYEE_PLACEHOLDERS = ", ".join("%s" for _ in _EMPLOYEE_FIELDS)
 _EMPLOYEE_UPDATE = ", ".join(
     f"{field} = EXCLUDED.{field}" for field in _EMPLOYEE_FIELDS
 )
+_EMPLOYEE_RESET_LOCK = 7368369943385156102
 
 
 @asynccontextmanager
@@ -139,10 +140,42 @@ class EmployeePostgresWriter(EmployeeWriter):
     def __init__(self, pool: AsyncConnectionPool) -> None:
         self._pool: AsyncConnectionPool = pool
 
+    async def delete_all_employee_data(self) -> bool:
+        async with _employee_transaction(self._pool) as (_, cursor):
+            _ = await cursor.execute(
+                "SELECT pg_advisory_xact_lock(%s)", (_EMPLOYEE_RESET_LOCK,)
+            )
+            _ = await cursor.execute(
+                """SELECT id FROM employee_sync_runs
+                   WHERE status = 'running' FOR UPDATE"""
+            )
+            if await cursor.fetchone() is not None:
+                return False
+            _ = await cursor.execute(
+                """SELECT id FROM operation_runs
+                   WHERE kind = 'employee.sync' AND status = 'running'
+                   FOR UPDATE"""
+            )
+            if await cursor.fetchone() is not None:
+                return False
+            _ = await cursor.execute("SELECT EXISTS (SELECT 1 FROM user_overrides)")
+            if await cursor.fetchone() != (False,):
+                return False
+            _ = await cursor.execute("DELETE FROM user_ms_graph_sources")
+            _ = await cursor.execute("DELETE FROM employee_sync_staging")
+            _ = await cursor.execute("DELETE FROM employee_sync_runs")
+            _ = await cursor.execute(
+                "DELETE FROM operation_runs WHERE kind = 'employee.sync'"
+            )
+            return True
+
     @override
     async def begin_sync(self, principal_id: str) -> UUID:
         run_id = uuid4()
         async with _employee_transaction(self._pool) as (connection, _):
+            _ = await connection.execute(
+                "SELECT pg_advisory_xact_lock(%s)", (_EMPLOYEE_RESET_LOCK,)
+            )
             _ = await connection.execute(
                 """INSERT INTO operation_runs
                    (id, principal_id, kind, status, domain_ids)
@@ -247,7 +280,9 @@ class EmployeePostgresWriter(EmployeeWriter):
                    summary = %s::jsonb, domain_ids = %s::jsonb
                    WHERE id = %s AND status = 'running'""",
                 (
-                    dumps({"created": created, "updated": updated, "unchanged": unchanged}),
+                    dumps(
+                        {"created": created, "updated": updated, "unchanged": unchanged}
+                    ),
                     dumps({"employee_sync_run_id": str(run_id)}),
                     run_id,
                 ),

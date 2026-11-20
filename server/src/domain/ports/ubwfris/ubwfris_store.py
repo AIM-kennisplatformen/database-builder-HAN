@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import UUID
 
 from domain.models.ubwfris import UbwfrisRow
@@ -28,3 +28,7 @@ class UbwfrisWriter[T: UbwfrisRow](Protocol):
     async def stage_ubwfris_rows(self, snapshot_id: str, rows: Sequence[T]) -> int: ...
 
     async def discard_snapshot(self, snapshot_id: str) -> None: ...
+
+
+class UbwfrisSnapshotDeleter(Protocol):
+    async def delete_all_snapshots(self, row_type: Literal["ib", "rha"]) -> bool: ...
