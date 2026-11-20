@@ -110,7 +110,7 @@ def test_metadata_selection_serialization_matches_persisted_cursor_key() -> None
     pool.connection.return_value.__aenter__.return_value = connection
 
     run = asyncio.run(
-        PostgresDocumentStore(cast(AsyncConnectionPool, pool)).start_metadata_run(
+        PostgresDocumentStore(cast(AsyncConnectionPool, pool)).begin_metadata_run(
             "operator",
             "drive",
             MetadataSelection(

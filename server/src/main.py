@@ -19,6 +19,8 @@ from infrastructure.msgraph.employee_source import (
 )
 from infrastructure.msgraph.group_drive_source import MsGraphGroupDriveSource
 from infrastructure.postgres.document_store import PostgresDocumentStore
+from infrastructure.postgres.employee_writer import EmployeePostgresWriter
+from infrastructure.postgres.ubwfris_writer import interrupt_ubwfris_snapshots
 
 
 @asynccontextmanager
@@ -52,6 +54,8 @@ async def lifespan(app: FastAPI):
             # Crash recovery clears only staging from unfinished runs.
             # The single-instance deployment makes prior running rows orphaned.
             await PostgresDocumentStore(pool).interrupt_metadata_runs()
+            await EmployeePostgresWriter(pool).interrupt_employee_sync_runs()
+            await interrupt_ubwfris_snapshots(pool)
             yield
     finally:
         credential.close()

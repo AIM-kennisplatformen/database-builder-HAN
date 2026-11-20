@@ -1,10 +1,15 @@
 """Persist document metadata, observations, and inventory cursors."""
 
+from collections.abc import AsyncGenerator
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import asdict
 from json import dumps
+from sys import exc_info
 from typing import cast, override
 from uuid import UUID, uuid4
 
+import anyio
+from psycopg import AsyncConnection
 from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
@@ -17,9 +22,36 @@ from domain.ports.documents.document_store import (
     DocumentRefreshStore,
     DocumentStore,
     MetadataIngestRun,
+    MetadataRunPublication,
 )
 
 _metadata_adapter = TypeAdapter(DocumentMetadata)
+
+
+@asynccontextmanager
+async def _staging_transaction(
+    pool: AsyncConnectionPool,
+) -> AsyncGenerator[AsyncConnection[tuple[object, ...]]]:
+    """Keep metadata staging SQL cancellable and shield transaction teardown."""
+    stack = AsyncExitStack()
+    try:
+        connection = await stack.enter_async_context(pool.connection())
+        _ = await stack.enter_async_context(connection.transaction())
+    except BaseException as exc:
+        with anyio.CancelScope(shield=True):
+            _ = await stack.__aexit__(type(exc), exc, exc.__traceback__)
+        raise
+
+    try:
+        yield connection
+        await anyio.lowlevel.checkpoint()
+    except BaseException as exc:
+        with anyio.CancelScope(shield=True):
+            _ = await stack.__aexit__(type(exc), exc, exc.__traceback__)
+        raise
+    else:
+        with anyio.CancelScope(shield=True):
+            _ = await stack.__aexit__(None, None, None)
 
 
 class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
@@ -72,7 +104,7 @@ class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
             )
 
     @override
-    async def start_metadata_run(
+    async def begin_metadata_run(
         self, principal_id: str, drive_id: str, selection: MetadataSelection
     ) -> MetadataIngestRun:
         run_id = uuid4()
@@ -105,7 +137,7 @@ class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
     @override
     async def stage_document(self, run_id: UUID, document: Document) -> None:
         file = document.file_metadata
-        async with self._pool.connection() as connection:
+        async with _staging_transaction(self._pool) as connection:
             _ = await connection.execute(
                 """INSERT INTO document_metadata_staging (
                      run_id, item_id, visible, name, mime_type, size_bytes,
@@ -139,8 +171,8 @@ class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
             )
 
     @override
-    async def stage_deleted(self, run_id: UUID, item_id: str) -> None:
-        async with self._pool.connection() as connection:
+    async def stage_deleted_item(self, run_id: UUID, item_id: str) -> None:
+        async with _staging_transaction(self._pool) as connection:
             _ = await connection.execute(
                 """INSERT INTO document_metadata_staging (run_id, item_id, visible)
                    VALUES (%s, %s, FALSE)
@@ -152,84 +184,128 @@ class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
     async def publish_metadata_run(
         self, run_id: UUID, delta_link: str, baseline: bool, reconcile: bool
     ) -> None:
-        # The source records, observations, cursor, and run status commit together.
-        async with self._pool.connection() as connection:
-            cursor = await connection.execute(
-                """SELECT principal_id, drive_id, selection FROM document_metadata_runs
-                   WHERE id = %s AND status = 'running' FOR UPDATE""",
-                (run_id,),
-            )
-            row = await cursor.fetchone()
-            if row is None:
-                raise ValueError("Metadata run is not active")
-            principal_id, drive_id, selection = cast(tuple[str, str, str], row)
-            _ = await connection.execute(
-                """INSERT INTO document_ms_graph_sources (
-                     drive_id, item_id, name, mime_type, size_bytes,
-                     content_version, source_url, sha1, sha256, quick_xor,
-                     document_metadata
-                   ) SELECT %s, item_id, name, mime_type, size_bytes,
-                     content_version, source_url, sha1, sha256, quick_xor,
-                     document_metadata
-                   FROM document_metadata_staging
-                   WHERE run_id = %s AND visible
-                   ON CONFLICT (drive_id, item_id) DO UPDATE SET
-                     name = EXCLUDED.name, mime_type = EXCLUDED.mime_type,
-                     size_bytes = EXCLUDED.size_bytes,
-                     content_version = EXCLUDED.content_version,
-                     source_url = EXCLUDED.source_url, sha1 = EXCLUDED.sha1,
-                     sha256 = EXCLUDED.sha256, quick_xor = EXCLUDED.quick_xor,
-                     document_metadata = EXCLUDED.document_metadata,
-                     updated_at = now()""",
-                (drive_id, run_id),
-            )
-            if baseline and reconcile:
-                _ = await connection.execute(
-                    """UPDATE document_metadata_observations AS observation
-                       SET visible = FALSE, observed_run_id = %s,
-                           observed_at = now()
-                       WHERE principal_id = %s AND drive_id = %s
-                         AND selection = %s
-                         AND visible AND NOT EXISTS (
-                           SELECT 1 FROM document_metadata_staging AS staged
-                           WHERE staged.run_id = %s
-                             AND staged.item_id = observation.item_id
-                             AND staged.visible
-                         )""",
-                    (run_id, principal_id, drive_id, selection, run_id),
-                )
-            _ = await connection.execute(
-                """INSERT INTO document_metadata_observations
-                   (principal_id, drive_id, item_id, selection, visible, observed_run_id)
-                   SELECT %s, %s, item_id, %s, visible, %s
-                   FROM document_metadata_staging WHERE run_id = %s
-                   ON CONFLICT (principal_id, drive_id, item_id) DO UPDATE SET
-                     selection = EXCLUDED.selection,
-                     visible = EXCLUDED.visible,
-                     observed_run_id = EXCLUDED.observed_run_id,
-                     observed_at = now()""",
-                (principal_id, drive_id, selection, run_id, run_id),
-            )
-            _ = await connection.execute(
-                """INSERT INTO document_metadata_cursors
-                   (principal_id, drive_id, selection, delta_link, published_run_id)
-                   VALUES (%s, %s, %s, %s, %s)
-                   ON CONFLICT (principal_id, drive_id) DO UPDATE SET
-                     selection = EXCLUDED.selection,
-                     delta_link = EXCLUDED.delta_link,
-                     published_run_id = EXCLUDED.published_run_id""",
-                (principal_id, drive_id, selection, delta_link, run_id),
-            )
-            _ = await connection.execute(
-                "UPDATE document_metadata_runs SET status = 'complete', finished_at = now() WHERE id = %s",
-                (run_id,),
-            )
-            _ = await connection.execute(
-                "DELETE FROM document_metadata_staging WHERE run_id = %s", (run_id,)
-            )
+        await self.publish_metadata_runs(
+            (MetadataRunPublication(run_id, delta_link, baseline, reconcile),)
+        )
 
     @override
-    async def fail_metadata_run(self, run_id: UUID) -> None:
+    async def publish_metadata_runs(
+        self, publications: tuple[MetadataRunPublication, ...]
+    ) -> None:
+        """Publish all prepared drives atomically in one database transaction."""
+        if not publications:
+            return
+        connection_context = self._pool.connection()
+        connection = await connection_context.__aenter__()
+        try:
+            transaction_context = connection.transaction()
+            _ = await transaction_context.__aenter__()
+            try:
+                for publication in publications:
+                    await self._publish_metadata_run(connection, publication)
+                # Deliver a pending cancellation before entering the short commit
+                # boundary. If cancelled, the transaction rolls back below.
+                await anyio.lowlevel.checkpoint()
+            except BaseException:
+                with anyio.CancelScope(shield=True):
+                    _ = await transaction_context.__aexit__(*exc_info())
+                raise
+            else:
+                # Finish the atomic commit without allowing cancellation to leave
+                # the connection in an unknown transaction state.
+                with anyio.CancelScope(shield=True):
+                    _ = await transaction_context.__aexit__(None, None, None)
+        finally:
+            # Pool release may roll back an open transaction, so protect it too.
+            with anyio.CancelScope(shield=True):
+                _ = await connection_context.__aexit__(*exc_info())
+
+    async def _publish_metadata_run(
+        self,
+        connection: AsyncConnection[tuple[object, ...]],
+        publication: MetadataRunPublication,
+    ) -> None:
+        run_id = publication.run_id
+        delta_link = publication.delta_link
+        baseline = publication.baseline
+        reconcile = publication.reconcile
+        # The source records, observations, cursor, and run status commit together.
+        cursor = await connection.execute(
+            """SELECT principal_id, drive_id, selection FROM document_metadata_runs
+               WHERE id = %s AND status = 'running' FOR UPDATE""",
+            (run_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            raise ValueError("Metadata run is not active")
+        principal_id, drive_id, selection = cast(tuple[str, str, str], row)
+        _ = await connection.execute(
+            """INSERT INTO document_ms_graph_sources (
+                 drive_id, item_id, name, mime_type, size_bytes,
+                 content_version, source_url, sha1, sha256, quick_xor,
+                 document_metadata
+               ) SELECT %s, item_id, name, mime_type, size_bytes,
+                 content_version, source_url, sha1, sha256, quick_xor,
+                 document_metadata
+               FROM document_metadata_staging
+               WHERE run_id = %s AND visible
+               ON CONFLICT (drive_id, item_id) DO UPDATE SET
+                 name = EXCLUDED.name, mime_type = EXCLUDED.mime_type,
+                 size_bytes = EXCLUDED.size_bytes,
+                 content_version = EXCLUDED.content_version,
+                 source_url = EXCLUDED.source_url, sha1 = EXCLUDED.sha1,
+                 sha256 = EXCLUDED.sha256, quick_xor = EXCLUDED.quick_xor,
+                 document_metadata = EXCLUDED.document_metadata,
+                 updated_at = now()""",
+            (drive_id, run_id),
+        )
+        if baseline and reconcile:
+            _ = await connection.execute(
+                """UPDATE document_metadata_observations AS observation
+                   SET visible = FALSE, observed_run_id = %s,
+                       observed_at = now()
+                   WHERE principal_id = %s AND drive_id = %s
+                     AND selection = %s
+                     AND visible AND NOT EXISTS (
+                       SELECT 1 FROM document_metadata_staging AS staged
+                       WHERE staged.run_id = %s
+                         AND staged.item_id = observation.item_id
+                         AND staged.visible
+                     )""",
+                (run_id, principal_id, drive_id, selection, run_id),
+            )
+        _ = await connection.execute(
+            """INSERT INTO document_metadata_observations
+               (principal_id, drive_id, item_id, selection, visible, observed_run_id)
+               SELECT %s, %s, item_id, %s, visible, %s
+               FROM document_metadata_staging WHERE run_id = %s
+               ON CONFLICT (principal_id, drive_id, item_id) DO UPDATE SET
+                 selection = EXCLUDED.selection,
+                 visible = EXCLUDED.visible,
+                 observed_run_id = EXCLUDED.observed_run_id,
+                 observed_at = now()""",
+            (principal_id, drive_id, selection, run_id, run_id),
+        )
+        _ = await connection.execute(
+            """INSERT INTO document_metadata_cursors
+               (principal_id, drive_id, selection, delta_link, published_run_id)
+               VALUES (%s, %s, %s, %s, %s)
+               ON CONFLICT (principal_id, drive_id) DO UPDATE SET
+                 selection = EXCLUDED.selection,
+                 delta_link = EXCLUDED.delta_link,
+                 published_run_id = EXCLUDED.published_run_id""",
+            (principal_id, drive_id, selection, delta_link, run_id),
+        )
+        _ = await connection.execute(
+            "UPDATE document_metadata_runs SET status = 'complete', finished_at = now() WHERE id = %s",
+            (run_id,),
+        )
+        _ = await connection.execute(
+            "DELETE FROM document_metadata_staging WHERE run_id = %s", (run_id,)
+        )
+
+    @override
+    async def discard_metadata_run(self, run_id: UUID) -> None:
         async with self._pool.connection() as connection:
             _ = await connection.execute(
                 "DELETE FROM document_metadata_staging WHERE run_id = %s", (run_id,)

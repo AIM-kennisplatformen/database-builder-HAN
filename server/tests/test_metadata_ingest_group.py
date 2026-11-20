@@ -15,7 +15,10 @@ from domain.models.documents.document import (
 )
 from domain.models.documents.metadata_selection import MetadataSelection
 from domain.ports.documents.document_metadata_source import DocumentMetadataScan
-from domain.ports.documents.document_store import MetadataIngestRun
+from domain.ports.documents.document_store import (
+    MetadataIngestRun,
+    MetadataRunPublication,
+)
 from domain.ports.documents.group_drive_source import GroupDriveLocation, UserGroup
 from domain.use_cases.group_drive_discovery import GroupNotAccessible
 from domain.use_cases.metadata_ingest import (
@@ -93,31 +96,38 @@ class Metadata:
 class Store:
     def __init__(self) -> None:
         self.saved: list[Document] = []
-        self.staged: list[Document] = []
+        self.staged: dict[UUID, list[Document]] = {}
+        self.published_batches: list[list[UUID]] = []
 
-    async def start_metadata_run(
+    async def begin_metadata_run(
         self, principal_id: str, drive_id: str, selection: MetadataSelection
     ) -> MetadataIngestRun:
         _ = (principal_id, drive_id, selection)
         return MetadataIngestRun(uuid4(), None, True)
 
     async def stage_document(self, run_id: UUID, document: Document) -> None:
-        _ = run_id
-        self.staged.append(document)
+        self.staged.setdefault(run_id, []).append(document)
 
-    async def stage_deleted(self, run_id: UUID, item_id: str) -> None:
-        _ = (run_id, item_id)
+    async def stage_deleted_item(self, run_id: UUID, item_id: str) -> None:
+        _ = item_id
+        self.staged.setdefault(run_id, [])
 
     async def publish_metadata_run(
         self, run_id: UUID, delta_link: str, baseline: bool, reconcile: bool
     ) -> None:
-        _ = (run_id, delta_link, baseline, reconcile)
-        self.saved.extend(self.staged)
-        self.staged.clear()
+        _ = (delta_link, baseline, reconcile)
+        self.saved.extend(self.staged.pop(run_id, []))
 
-    async def fail_metadata_run(self, run_id: UUID) -> None:
-        _ = run_id
-        self.staged.clear()
+    async def publish_metadata_runs(
+        self, publications: tuple[MetadataRunPublication, ...]
+    ) -> None:
+        run_ids = [publication.run_id for publication in publications]
+        self.published_batches.append(run_ids)
+        for run_id in run_ids:
+            self.saved.extend(self.staged.pop(run_id, []))
+
+    async def discard_metadata_run(self, run_id: UUID) -> None:
+        self.staged.pop(run_id, None)
 
 
 def _drive_ids(updates: Sequence[object]) -> list[str]:
@@ -318,6 +328,8 @@ def test_inaccessible_drive_is_skipped_and_later_drive_continues() -> None:
         "team-drive",
         "other-drive",
     ]
+    assert len(store.published_batches) == 1
+    assert len(store.published_batches[0]) == 2
 
 
 def test_explicitly_included_drive_denial_stops_run() -> None:
@@ -347,10 +359,30 @@ def test_explicitly_included_drive_denial_stops_run() -> None:
     assert error.value.drive_id == "private-drive"
     assert isinstance(error.value.cause, MetadataSourceError)
     assert error.value.cause.status_code == 403
-    assert [document.id.id[0] for document in store.saved] == ["team-drive"]
+    assert store.saved == []
+    assert store.staged == {}
+    assert store.published_batches == []
 
 
-def test_later_drive_failure_reports_drive_and_keeps_earlier_writes() -> None:
+def test_cancellation_before_group_completion_discards_all_staged_drives() -> None:
+    metadata, store = Metadata(), Store()
+
+    async def cancel_after_first_progress() -> None:
+        updates = ingest_group_metadata(
+            "user", MetadataIngestRequest("group"), Groups(), metadata, store
+        )
+        first = await anext(updates)
+        assert isinstance(first, MetadataIngestProgress)
+        await updates.aclose()
+
+    asyncio.run(cancel_after_first_progress())
+
+    assert store.saved == []
+    assert store.staged == {}
+    assert store.published_batches == []
+
+
+def test_later_drive_failure_discards_all_staged_drives() -> None:
     metadata, store = Metadata("private-drive", 503), Store()
     seen: list[str] = []
 
@@ -366,7 +398,9 @@ def test_later_drive_failure_reports_drive_and_keeps_earlier_writes() -> None:
     assert error.value.drive_id == "private-drive"
     assert isinstance(error.value.cause, MetadataSourceError)
     assert seen == ["team-drive"]
-    assert [document.id.id[0] for document in store.saved] == ["team-drive"]
+    assert store.saved == []
+    assert store.staged == {}
+    assert store.published_batches == []
 
 
 def test_nonmember_group_is_rejected_before_drive_listing() -> None:

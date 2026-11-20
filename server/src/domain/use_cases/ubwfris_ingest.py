@@ -3,6 +3,8 @@ from dataclasses import replace
 from datetime import date
 from typing import assert_never, cast
 
+import anyio
+
 from domain.exceptions.ubwfris_ingest_errors import (
     DuplicateUpload,
     InvalidWorkbook,
@@ -37,11 +39,11 @@ async def _stream_ubwfris_parser[T: UbwfrisRow](
         raise ParserFailure("Failed to parse uploaded workbook") from exc
 
 
-async def _write_ubwfris_rows[T: UbwfrisRow](
+async def _stage_ubwfris_rows[T: UbwfrisRow](
     writer: UbwfrisWriter[T], snapshot_id: str, rows: list[T]
 ) -> int:
     try:
-        return await writer.write_ubwfris_rows(snapshot_id, rows)
+        return await writer.stage_ubwfris_rows(snapshot_id, rows)
     except DuplicateUpload:
         raise
     except Exception as exc:
@@ -68,6 +70,15 @@ async def _discard_snapshot[T: UbwfrisRow](
         await writer.discard_snapshot(snapshot_id)
     except Exception as exc:
         raise StoreUnavailable("Failed to remove the incomplete snapshot") from exc
+
+
+async def _publish_snapshot[T: UbwfrisRow](
+    writer: UbwfrisWriter[T], snapshot_id: str
+) -> None:
+    try:
+        await writer.publish_snapshot(snapshot_id)
+    except Exception as exc:
+        raise StoreUnavailable("Failed to complete the workbook snapshot") from exc
 
 
 def _validate_ubwfris_row(row: UbwfrisRow) -> tuple[UbwfrisRow, bool]:
@@ -197,7 +208,7 @@ async def ingest_ubwfris_workbook[T: UbwfrisRow](
                 else:
                     batch.append(cast(T, normalized_row))
                     if len(batch) >= 1000:
-                        created_rows += await _write_ubwfris_rows(
+                        created_rows += await _stage_ubwfris_rows(
                             writer, snapshot_id, batch
                         )
                         batch.clear()
@@ -211,7 +222,7 @@ async def ingest_ubwfris_workbook[T: UbwfrisRow](
             )
 
         if batch:
-            created_rows += await _write_ubwfris_rows(writer, snapshot_id, batch)
+            created_rows += await _stage_ubwfris_rows(writer, snapshot_id, batch)
 
         if processed_rows == 0:
             raise InvalidWorkbook("The uploaded workbook is empty")
@@ -221,6 +232,8 @@ async def ingest_ubwfris_workbook[T: UbwfrisRow](
                 invalid_row_numbers=tuple(invalid_row_numbers),
             )
 
+        await anyio.lowlevel.checkpoint()
+        await _publish_snapshot(writer, snapshot_id)
         completed = True
         yield UbwfrisIngestResult(
             status=UbwfrisIngestStatus.COMPLETED,
@@ -232,4 +245,5 @@ async def ingest_ubwfris_workbook[T: UbwfrisRow](
         )
     finally:
         if not completed:
-            await _discard_snapshot(writer, snapshot_id)
+            with anyio.CancelScope(shield=True):
+                await _discard_snapshot(writer, snapshot_id)

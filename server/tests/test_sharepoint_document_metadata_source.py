@@ -44,6 +44,7 @@ from domain.ports.documents.document_metadata_source import (
 from domain.ports.documents.document_store import (
     DocumentRefreshStore,
     MetadataIngestRun,
+    MetadataRunPublication,
 )
 from domain.ports.documents.group_drive_source import (
     GroupDriveLocation,
@@ -96,7 +97,7 @@ class MetadataRefreshStore:
         self.staged: list[Document] = []
         self.published: list[Document] = []
 
-    async def start_metadata_run(
+    async def begin_metadata_run(
         self, principal_id: str, drive_id: str, selection: MetadataSelection
     ) -> MetadataIngestRun:
         _ = (principal_id, drive_id, selection)
@@ -106,7 +107,7 @@ class MetadataRefreshStore:
         _ = run_id
         self.staged.append(document)
 
-    async def stage_deleted(self, run_id: UUID, item_id: str) -> None:
+    async def stage_deleted_item(self, run_id: UUID, item_id: str) -> None:
         _ = (run_id, item_id)
 
     async def publish_metadata_run(
@@ -117,7 +118,15 @@ class MetadataRefreshStore:
         self.staged.clear()
         self.cursor = delta_link
 
-    async def fail_metadata_run(self, run_id: UUID) -> None:
+    async def publish_metadata_runs(
+        self, publications: tuple[MetadataRunPublication, ...]
+    ) -> None:
+        self.published.extend(self.staged)
+        self.staged.clear()
+        if publications:
+            self.cursor = publications[-1].delta_link
+
+    async def discard_metadata_run(self, run_id: UUID) -> None:
         _ = run_id
         self.staged.clear()
 
@@ -1092,7 +1101,7 @@ def test_metadata_known_error_subclass_inherits_status_and_hides_traceback(
 
     class AlreadyActiveStore(MetadataRefreshStore):
         @override
-        async def start_metadata_run(
+        async def begin_metadata_run(
             self, principal_id: str, drive_id: str, selection: MetadataSelection
         ) -> MetadataIngestRun:
             _ = (principal_id, drive_id, selection)
@@ -1459,7 +1468,7 @@ def test_metadata_endpoint_streams_progress_and_completion() -> None:
         return OneDocumentSource()
 
     class Store:
-        async def start_metadata_run(
+        async def begin_metadata_run(
             self, principal_id: str, drive_id: str, selection: MetadataSelection
         ) -> MetadataIngestRun:
             _ = (principal_id, drive_id, selection)
@@ -1469,7 +1478,7 @@ def test_metadata_endpoint_streams_progress_and_completion() -> None:
             _ = run_id
             saved.append(document)
 
-        async def stage_deleted(self, run_id: UUID, item_id: str) -> None:
+        async def stage_deleted_item(self, run_id: UUID, item_id: str) -> None:
             _ = (run_id, item_id)
 
         async def publish_metadata_run(
@@ -1477,7 +1486,12 @@ def test_metadata_endpoint_streams_progress_and_completion() -> None:
         ) -> None:
             _ = (run_id, delta_link, baseline, reconcile)
 
-        async def fail_metadata_run(self, run_id: UUID) -> None:
+        async def publish_metadata_runs(
+            self, publications: tuple[MetadataRunPublication, ...]
+        ) -> None:
+            _ = publications
+
+        async def discard_metadata_run(self, run_id: UUID) -> None:
             _ = run_id
             saved.clear()
 
@@ -1618,7 +1632,7 @@ def test_metadata_endpoint_close_discards_staged_refresh() -> None:
             self.cursor: str | None = "old-cursor"
             self.failed: bool = False
 
-        async def start_metadata_run(
+        async def begin_metadata_run(
             self, principal_id: str, drive_id: str, selection: MetadataSelection
         ) -> MetadataIngestRun:
             _ = (principal_id, drive_id, selection)
@@ -1628,7 +1642,7 @@ def test_metadata_endpoint_close_discards_staged_refresh() -> None:
             _ = run_id
             self.staged[document.id.id[1]] = document
 
-        async def stage_deleted(self, run_id: object, item_id: str) -> None:
+        async def stage_deleted_item(self, run_id: object, item_id: str) -> None:
             _ = (run_id, item_id)
 
         async def publish_metadata_run(
@@ -1638,7 +1652,13 @@ def test_metadata_endpoint_close_discards_staged_refresh() -> None:
             self.published.update(self.staged)
             self.cursor = delta_link
 
-        async def fail_metadata_run(self, run_id: object) -> None:
+        async def publish_metadata_runs(
+            self, publications: tuple[MetadataRunPublication, ...]
+        ) -> None:
+            self.published.update(self.staged)
+            self.cursor = publications[-1].delta_link
+
+        async def discard_metadata_run(self, run_id: object) -> None:
             _ = run_id
             self.staged.clear()
             self.failed = True

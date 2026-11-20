@@ -47,12 +47,26 @@ class EmployeesSyncProgressStatus(StrEnum):
 
 class EmployeesSyncProgressEvent(BaseModel):
     status: EmployeesSyncProgressStatus
-    processed: int
+    processed: int = Field(
+        description="Employees staged so far; progress does not mean they are committed."
+    )
     total: int | None = None
     available: int
-    created: int
-    updated: int
-    unchanged: int
+    created: int = Field(
+        description=(
+            "Provisional count so far. Counts become committed only in the complete event."
+        )
+    )
+    updated: int = Field(
+        description=(
+            "Provisional count so far. Counts become committed only in the complete event."
+        )
+    )
+    unchanged: int = Field(
+        description=(
+            "Provisional count so far. Counts become committed only in the complete event."
+        )
+    )
 
 
 class EmployeeErrorMapper:
@@ -125,8 +139,10 @@ def _failure_event(
     response_class=EventSourceResponse,
     summary="Sync employees from external source",
     description=(
-        "Stream rate-limited progress events as employees are saved, followed by "
-        "a complete or error event. The total respects the requested limit."
+        "Stream rate-limited progress as employees are staged, followed by a "
+        "complete or error event. Progress counts are provisional; only the "
+        "complete event reports committed counts. The total respects the "
+        "requested limit."
     ),
 )
 async def sync_employees_endpoint(

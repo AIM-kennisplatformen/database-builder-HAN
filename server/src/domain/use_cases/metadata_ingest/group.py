@@ -1,18 +1,26 @@
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 
+import anyio
+
 from domain.exceptions.metadata_ingest_errors import (
     InvalidMetadataSelection,
     MetadataSourceError,
 )
 from domain.ports.documents.document_metadata_source import DocumentRefreshSource
-from domain.ports.documents.document_store import DocumentRefreshStore
+from domain.ports.documents.document_store import (
+    DocumentRefreshStore,
+    MetadataRunPublication,
+)
 from domain.ports.documents.group_drive_source import GroupDriveSource
 from domain.use_cases.group_drive_discovery import get_group_drives
 from domain.use_cases.metadata_ingest.drive import (
     MetadataIngestDriveProgress,
     MetadataIngestDriveRequest,
-    ingest_metadata,
+    MetadataIngestPrepared,
+    discard_metadata_runs,
+    prepare_metadata,
+    publish_metadata_runs,
 )
 
 
@@ -64,12 +72,17 @@ async def _ingest_drive(
     store: DocumentRefreshStore,
     *,
     allow_skip: bool,
-) -> AsyncGenerator[MetadataIngestProgress | MetadataIngestSkipped]:
-    updates = ingest_metadata(user_id, request, metadata_source, store)
+) -> AsyncGenerator[
+    MetadataIngestProgress | MetadataIngestSkipped | MetadataIngestPrepared
+]:
+    updates = prepare_metadata(user_id, request, metadata_source, store)
     try:
         try:
             async for update in updates:
-                yield MetadataIngestProgress(request.drive_id, update)
+                if isinstance(update, MetadataIngestPrepared):
+                    yield update
+                else:
+                    yield MetadataIngestProgress(request.drive_id, update)
         except MetadataSourceError as exc:
             if exc.status_code == 403 and allow_skip:
                 yield MetadataIngestSkipped(request.drive_id, str(exc))
@@ -79,7 +92,8 @@ async def _ingest_drive(
             raise MetadataIngestDriveFailure(request.drive_id, exc) from exc
     finally:
         # Propagate request cancellation through the per-drive use case.
-        await updates.aclose()
+        with anyio.CancelScope(shield=True):
+            await updates.aclose()
 
 
 async def ingest_group_metadata(
@@ -141,31 +155,43 @@ async def ingest_group_metadata(
     ]
     processed = 0
     skipped_drive_ids: list[str] = []
-    for drive_request in requests:
-        updates = _ingest_drive(
-            user_id,
-            drive_request,
-            metadata_source,
-            store,
-            allow_skip=not included,
+    publications: list[MetadataRunPublication] = []
+    try:
+        for drive_request in requests:
+            updates = _ingest_drive(
+                user_id,
+                drive_request,
+                metadata_source,
+                store,
+                allow_skip=not included,
+            )
+            try:
+                async for update in updates:
+                    if isinstance(update, MetadataIngestSkipped):
+                        skipped_drive_ids.append(update.drive_id)
+                        yield MetadataIngestSkipped(
+                            update.drive_id,
+                            update.reason,
+                            processed,
+                        )
+                    elif isinstance(update, MetadataIngestPrepared):
+                        publications.append(update.publication)
+                    else:
+                        processed += 1
+                        yield MetadataIngestProgress(
+                            update.drive_id,
+                            update.update,
+                            processed,
+                        )
+            finally:
+                with anyio.CancelScope(shield=True):
+                    await updates.aclose()
+
+        await publish_metadata_runs(store, tuple(publications))
+    except BaseException:
+        await discard_metadata_runs(
+            store, tuple(publication.run_id for publication in publications)
         )
-        try:
-            async for update in updates:
-                if isinstance(update, MetadataIngestSkipped):
-                    skipped_drive_ids.append(update.drive_id)
-                    yield MetadataIngestSkipped(
-                        update.drive_id,
-                        update.reason,
-                        processed,
-                    )
-                else:
-                    processed += 1
-                    yield MetadataIngestProgress(
-                        update.drive_id,
-                        update.update,
-                        processed,
-                    )
-        finally:
-            await updates.aclose()
+        raise
 
     yield MetadataIngestResult(processed, tuple(skipped_drive_ids))

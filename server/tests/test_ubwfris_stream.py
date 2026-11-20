@@ -6,12 +6,17 @@ from io import BytesIO
 from types import SimpleNamespace
 from typing import override
 
+import anyio
 import pytest
 from fastapi import UploadFile
 
 from api.routes.ubwfris.snapshots import ingest as ubwfris_route
 from api.routes.ubwfris.snapshots.ingest import upload_ib_workbook
-from domain.exceptions.ubwfris_ingest_errors import DuplicateUpload, InvalidWorkbook
+from domain.exceptions.ubwfris_ingest_errors import (
+    DuplicateUpload,
+    InvalidWorkbook,
+    ParserFailure,
+)
 from domain.models.ubwfris import (
     IbRow,
     UbwfrisIngestEvent,
@@ -21,6 +26,7 @@ from domain.models.ubwfris import (
 )
 from domain.ports.ubwfris.ubwfris_parser import ParsedUbwfrisRow, UbwfrisParser
 from domain.ports.ubwfris.ubwfris_store import UbwfrisWriter
+from domain.use_cases.ubwfris_ingest import ingest_ubwfris_workbook
 
 
 class Parser:
@@ -50,18 +56,27 @@ class Writer:
     def __init__(self) -> None:
         self.snapshot_id: str | None = None
         self.rows: list[IbRow] = []
+        self.completed: bool = False
+        self.discarded: bool = False
 
     async def begin_snapshot(self, snapshot_id: str) -> None:
         self.snapshot_id = snapshot_id
 
-    async def write_ubwfris_rows(self, snapshot_id: str, rows: Sequence[IbRow]) -> int:
+    async def stage_ubwfris_rows(self, snapshot_id: str, rows: Sequence[IbRow]) -> int:
         assert snapshot_id == self.snapshot_id
         self.rows.extend(rows)
         return len(rows)
 
     async def discard_snapshot(self, snapshot_id: str) -> None:
         assert snapshot_id == self.snapshot_id
+        if self.completed:
+            return
         self.rows.clear()
+        self.discarded = True
+
+    async def publish_snapshot(self, snapshot_id: str) -> None:
+        assert snapshot_id == self.snapshot_id
+        self.completed = True
 
 
 def test_ubwfris_stream_emits_progress_then_one_complete() -> None:
@@ -85,6 +100,71 @@ def test_ubwfris_stream_emits_progress_then_one_complete() -> None:
     assert events[-1].data["processed_rows"] == 1
     assert events[-1].data["created_rows"] == 1
     assert len(writer.rows) == 1
+    assert writer.completed
+    assert not writer.discarded
+
+
+def test_ubwfris_cancellation_shields_snapshot_discard() -> None:
+    class CheckpointingWriter(Writer):
+        def __init__(self) -> None:
+            super().__init__()
+            self.discard_completed: bool = False
+
+        @override
+        async def discard_snapshot(self, snapshot_id: str) -> None:
+            await anyio.lowlevel.checkpoint()
+            await super().discard_snapshot(snapshot_id)
+            self.discard_completed = True
+
+    writer = CheckpointingWriter()
+
+    async def cancel_after_progress() -> None:
+        with anyio.CancelScope() as cancel_scope:
+            updates = ingest_ubwfris_workbook(
+                UbwfrisIngestRequest(UbwfrisWorkbook[IbRow](b"workbook")),
+                Parser(),
+                writer,
+                "snapshot",
+            )
+            event = await anext(updates)
+            assert isinstance(event, UbwfrisIngestProgress)
+            cancel_scope.cancel()
+            await updates.aclose()
+
+    anyio.run(cancel_after_progress)
+
+    assert writer.snapshot_id == "snapshot"
+    assert writer.discard_completed
+    assert writer.rows == []
+
+
+def test_ubwfris_failure_discards_snapshot() -> None:
+    class BrokenParser(Parser):
+        @override
+        async def stream_ubwfris_rows(
+            self, workbook: UbwfrisWorkbook[IbRow]
+        ) -> AsyncIterator[ParsedUbwfrisRow[IbRow]]:
+            async for item in super().stream_ubwfris_rows(workbook):
+                yield item
+            raise RuntimeError("parser failed")
+
+    writer = Writer()
+
+    async def ingest() -> None:
+        async for _ in ingest_ubwfris_workbook(
+            UbwfrisIngestRequest(UbwfrisWorkbook[IbRow](b"workbook")),
+            BrokenParser(),
+            writer,
+            "snapshot",
+        ):
+            pass
+
+    with pytest.raises(ParserFailure):
+        asyncio.run(ingest())
+
+    assert writer.snapshot_id == "snapshot"
+    assert writer.discarded
+    assert not writer.completed
 
 
 def test_ubwfris_stream_preserves_invalid_workbook_error_payload(

@@ -21,6 +21,7 @@ from domain.ports.documents.document_metadata_source import (
 from domain.ports.documents.document_store import (
     DocumentRefreshStore,
     MetadataIngestRun,
+    MetadataRunPublication,
 )
 
 logger = logging.getLogger(__name__)
@@ -86,7 +87,12 @@ class MetadataIngestDriveProgress:
     available: int
 
 
-async def _start_metadata_run(
+@dataclass(frozen=True)
+class MetadataIngestPrepared:
+    publication: MetadataRunPublication
+
+
+async def _begin_metadata_run(
     store: DocumentRefreshStore,
     principal_id: str,
     req: MetadataIngestDriveRequest,
@@ -99,7 +105,7 @@ async def _start_metadata_run(
         exclude_extensions=tuple(sorted(set(req.exclude_extensions))),
     )
     try:
-        return await store.start_metadata_run(principal_id, req.drive_id, selection)
+        return await store.begin_metadata_run(principal_id, req.drive_id, selection)
     except MetadataRunAlreadyActive:
         raise
     except Exception as exc:
@@ -136,24 +142,35 @@ async def _stage_document(
         raise StoreUnavailable("Document metadata store is unavailable") from exc
 
 
-async def _stage_deleted(
+async def _stage_deleted_item(
     store: DocumentRefreshStore, run_id: UUID, item_id: str
 ) -> None:
     try:
-        await store.stage_deleted(run_id, item_id)
+        await store.stage_deleted_item(run_id, item_id)
+    except Exception as exc:
+        raise StoreUnavailable("Document metadata store is unavailable") from exc
+
+
+async def publish_metadata_runs(
+    store: DocumentRefreshStore,
+    publications: tuple[MetadataRunPublication, ...],
+) -> None:
+    try:
+        await store.publish_metadata_runs(publications)
     except Exception as exc:
         raise StoreUnavailable("Document metadata store is unavailable") from exc
 
 
 async def _publish_metadata_run(
     store: DocumentRefreshStore,
-    run_id: UUID,
-    scan: DocumentMetadataScan,
-    reconcile: bool,
+    publication: MetadataRunPublication,
 ) -> None:
     try:
         await store.publish_metadata_run(
-            run_id, scan.delta_link, scan.baseline, reconcile
+            publication.run_id,
+            publication.delta_link,
+            publication.baseline,
+            publication.reconcile,
         )
     except Exception as exc:
         raise StoreUnavailable("Document metadata store is unavailable") from exc
@@ -170,18 +187,60 @@ async def _stage_metadata(
         await _stage_document(store, run_id, document)
         yield MetadataIngestDriveProgress(document, total, total)
     for item_id in scan.deleted_item_ids:
-        await _stage_deleted(store, run_id, item_id)
+        await _stage_deleted_item(store, run_id, item_id)
 
 
-async def _fail_metadata_run(store: DocumentRefreshStore, run_id: UUID) -> None:
+async def _discard_metadata_run(
+    store: DocumentRefreshStore, run_id: UUID
+) -> None:
     """Clear staging; log cleanup failures so they do not mask the scan failure."""
+    with anyio.CancelScope(shield=True):
+        try:
+            await store.discard_metadata_run(run_id)
+        except KeyboardInterrupt, SystemExit:
+            raise
+        except BaseException:
+            # Startup recovery will clear staging left behind by an unsuccessful cleanup.
+            logger.exception("Could not clear staging for metadata run %s", run_id)
+
+
+async def discard_metadata_runs(
+    store: DocumentRefreshStore, run_ids: tuple[UUID, ...]
+) -> None:
+    """Clear every staged drive in one cancelled or failed group request."""
+    with anyio.CancelScope(shield=True):
+        for run_id in run_ids:
+            await _discard_metadata_run(store, run_id)
+
+
+async def prepare_metadata(
+    principal_id: str,
+    req: MetadataIngestDriveRequest,
+    source: DocumentRefreshSource,
+    store: DocumentRefreshStore,
+) -> AsyncGenerator[MetadataIngestDriveProgress | MetadataIngestPrepared]:
+    """Scan and stage one drive without publishing it."""
+    run: MetadataIngestRun | None = None
+    with anyio.CancelScope(shield=True):
+        run = await _begin_metadata_run(store, principal_id, req)
+    assert run is not None
     try:
-        await store.fail_metadata_run(run_id)
-    except KeyboardInterrupt, SystemExit:
-        raise
+        scan = await _scan_metadata_source(source, req, run.cursor)
+        updates = _stage_metadata(store, run.id, scan)
+        try:
+            async for update in updates:
+                yield update
+        finally:
+            with anyio.CancelScope(shield=True):
+                await updates.aclose()
+        yield MetadataIngestPrepared(
+            MetadataRunPublication(
+                run.id, scan.delta_link, scan.baseline, run.same_selection
+            )
+        )
     except BaseException:
-        # Startup recovery will clear staging left behind by an unsuccessful cleanup.
-        logger.exception("Could not clear staging for metadata run %s", run_id)
+        await _discard_metadata_run(store, run.id)
+        raise
 
 
 async def ingest_metadata(
@@ -191,19 +250,22 @@ async def ingest_metadata(
     store: DocumentRefreshStore,
 ) -> AsyncGenerator[MetadataIngestDriveProgress]:
     """Scan, stage, then publish one drive's metadata and cursor atomically."""
-    run = await _start_metadata_run(store, principal_id, req)
+    publication: MetadataRunPublication | None = None
     try:
-        scan = await _scan_metadata_source(source, req, run.cursor)
-        updates = _stage_metadata(store, run.id, scan)
+        updates = prepare_metadata(principal_id, req, source, store)
         try:
             async for update in updates:
-                yield update
+                if isinstance(update, MetadataIngestPrepared):
+                    publication = update.publication
+                else:
+                    yield update
         finally:
-            await updates.aclose()
-        await _publish_metadata_run(store, run.id, scan, run.same_selection)
+            with anyio.CancelScope(shield=True):
+                await updates.aclose()
+        if publication is None:
+            raise RuntimeError("Metadata preparation ended without a run")
+        await _publish_metadata_run(store, publication)
     except BaseException:
-        # AnyIO cancellation is level-triggered; shield cleanup so staging is
-        # cleared even when the request task is being cancelled repeatedly.
-        with anyio.CancelScope(shield=True):
-            await _fail_metadata_run(store, run.id)
+        if publication is not None:
+            await discard_metadata_runs(store, (publication.run_id,))
         raise

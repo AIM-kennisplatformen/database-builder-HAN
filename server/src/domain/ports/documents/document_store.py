@@ -13,21 +13,33 @@ class MetadataIngestRun:
     same_selection: bool
 
 
+@dataclass(frozen=True)
+class MetadataRunPublication:
+    run_id: UUID
+    delta_link: str
+    baseline: bool
+    reconcile: bool
+
+
 class DocumentStore(Protocol):
     async def save_document(self, document: Document) -> None: ...
 
 
 class DocumentRefreshStore(Protocol):
-    async def start_metadata_run(
+    async def begin_metadata_run(
         self, principal_id: str, drive_id: str, selection: MetadataSelection
     ) -> MetadataIngestRun: ...
 
     async def stage_document(self, run_id: UUID, document: Document) -> None: ...
 
-    async def stage_deleted(self, run_id: UUID, item_id: str) -> None: ...
+    async def stage_deleted_item(self, run_id: UUID, item_id: str) -> None: ...
 
     async def publish_metadata_run(
         self, run_id: UUID, delta_link: str, baseline: bool, reconcile: bool
     ) -> None: ...
 
-    async def fail_metadata_run(self, run_id: UUID) -> None: ...
+    async def publish_metadata_runs(
+        self, publications: tuple[MetadataRunPublication, ...]
+    ) -> None: ...
+
+    async def discard_metadata_run(self, run_id: UUID) -> None: ...

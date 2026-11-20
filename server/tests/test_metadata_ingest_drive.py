@@ -13,7 +13,10 @@ from domain.models.documents.document import (
 )
 from domain.models.documents.metadata_selection import MetadataSelection
 from domain.ports.documents.document_metadata_source import DocumentMetadataScan
-from domain.ports.documents.document_store import MetadataIngestRun
+from domain.ports.documents.document_store import (
+    MetadataIngestRun,
+    MetadataRunPublication,
+)
 from domain.use_cases.metadata_ingest import (
     MetadataIngestDriveRequest,
     ingest_metadata,
@@ -57,7 +60,7 @@ def test_inventory_saves_each_document_before_reporting_progress() -> None:
             return DocumentMetadataScan((document,), (), "next", False)
 
     class Store:
-        async def start_metadata_run(
+        async def begin_metadata_run(
             self, principal_id: str, drive_id: str, selection: MetadataSelection
         ) -> MetadataIngestRun:
             _ = (principal_id, drive_id, selection)
@@ -67,7 +70,7 @@ def test_inventory_saves_each_document_before_reporting_progress() -> None:
             _ = run_id
             saved.append(document)
 
-        async def stage_deleted(self, run_id: UUID, item_id: str) -> None:
+        async def stage_deleted_item(self, run_id: UUID, item_id: str) -> None:
             _ = (run_id, item_id)
 
         async def publish_metadata_run(
@@ -75,7 +78,12 @@ def test_inventory_saves_each_document_before_reporting_progress() -> None:
         ) -> None:
             _ = (run_id, delta_link, baseline, reconcile)
 
-        async def fail_metadata_run(self, run_id: UUID) -> None:
+        async def publish_metadata_runs(
+            self, publications: tuple[MetadataRunPublication, ...]
+        ) -> None:
+            _ = publications
+
+        async def discard_metadata_run(self, run_id: UUID) -> None:
             _ = run_id
             saved.clear()
 
@@ -136,7 +144,7 @@ def test_inventory_does_not_report_progress_when_save_fails() -> None:
             )
 
     class BrokenStore:
-        async def start_metadata_run(
+        async def begin_metadata_run(
             self, principal_id: str, drive_id: str, selection: MetadataSelection
         ) -> MetadataIngestRun:
             _ = (principal_id, drive_id, selection)
@@ -147,7 +155,7 @@ def test_inventory_does_not_report_progress_when_save_fails() -> None:
             assert document.id.id == ("drive", "item")
             raise RuntimeError("database unavailable")
 
-        async def stage_deleted(self, run_id: UUID, item_id: str) -> None:
+        async def stage_deleted_item(self, run_id: UUID, item_id: str) -> None:
             _ = (run_id, item_id)
 
         async def publish_metadata_run(
@@ -155,7 +163,12 @@ def test_inventory_does_not_report_progress_when_save_fails() -> None:
         ) -> None:
             _ = (run_id, delta_link, baseline, reconcile)
 
-        async def fail_metadata_run(self, run_id: UUID) -> None:
+        async def publish_metadata_runs(
+            self, publications: tuple[MetadataRunPublication, ...]
+        ) -> None:
+            _ = publications
+
+        async def discard_metadata_run(self, run_id: UUID) -> None:
             _ = run_id
 
     async def collect() -> list[Document]:

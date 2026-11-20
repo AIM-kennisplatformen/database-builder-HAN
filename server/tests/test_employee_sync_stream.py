@@ -1,5 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator
+from typing import override
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -8,7 +10,11 @@ from api.routes.employees.sync import EmployeesSyncRequestBody, sync_employees_e
 from domain.exceptions.employee_sync_errors import SourceUnavailable
 from domain.models.employee import Employee
 from domain.ports.employees.employee_source import EmployeeStreamItem
-from domain.ports.employees.employee_store import EmployeeWriter, WriteEmployeeOutcome
+from domain.ports.employees.employee_store import (
+    EmployeeSyncCounts,
+    EmployeeWriter,
+    WriteEmployeeOutcome,
+)
 from domain.use_cases.employee_sync import (
     EmployeesSyncProgress,
     EmployeesSyncRequest,
@@ -32,17 +38,38 @@ class EmployeeSource:
 
 
 class EmployeeStore:
-    async def write_employee(self, employee: Employee) -> WriteEmployeeOutcome:
-        _ = employee
+    def __init__(self) -> None:
+        self.committed: list[Employee] = []
+        self.staged: dict[UUID, list[Employee]] = {}
+
+    async def begin_sync(self) -> UUID:
+        run_id = uuid4()
+        self.staged[run_id] = []
+        return run_id
+
+    async def stage_employee(
+        self, run_id: UUID, employee: Employee
+    ) -> WriteEmployeeOutcome:
+        self.staged[run_id].append(employee)
         return WriteEmployeeOutcome.CREATED
+
+    async def publish_sync(self, run_id: UUID) -> EmployeeSyncCounts:
+        employees = self.staged.pop(run_id)
+        self.committed.extend(employees)
+        return EmployeeSyncCounts(len(employees), 0, 0)
+
+    async def discard_sync(self, run_id: UUID) -> None:
+        self.staged.pop(run_id, None)
 
 
 def test_employee_sync_yields_success_result_after_progress() -> None:
+    store = EmployeeStore()
+
     async def collect():
         return [
             update
             async for update in sync_employees(
-                EmployeesSyncRequest(), EmployeeSource(), EmployeeStore()
+                EmployeesSyncRequest(), EmployeeSource(), store
             )
         ]
 
@@ -51,6 +78,74 @@ def test_employee_sync_yields_success_result_after_progress() -> None:
     assert isinstance(updates[-1], EmployeesSyncResult)
     assert updates[-1].processed == 3
     assert updates[-1].total == 3
+    assert len(store.committed) == 3
+    assert store.staged == {}
+
+
+def test_employee_sync_failure_discards_all_staged_employees() -> None:
+    store = EmployeeStore()
+
+    async def collect() -> None:
+        async for _ in sync_employees(
+            EmployeesSyncRequest(), EmployeeSource(fail_after=1), store
+        ):
+            pass
+
+    with pytest.raises(SourceUnavailable):
+        asyncio.run(collect())
+
+    assert store.committed == []
+    assert store.staged == {}
+
+
+def test_employee_sync_cancellation_discards_all_staged_employees() -> None:
+    store = EmployeeStore()
+    source = EmployeeSource()
+
+    async def cancel_after_progress() -> None:
+        updates = sync_employees(EmployeesSyncRequest(), source, store)
+        first = await anext(updates)
+        assert isinstance(first, EmployeesSyncProgress)
+        assert store.committed == []
+        assert sum(map(len, store.staged.values())) == 1
+        await updates.aclose()
+
+    asyncio.run(cancel_after_progress())
+
+    assert store.committed == []
+    assert store.staged == {}
+
+
+def test_employee_sync_cancellation_closes_source_iterator() -> None:
+    class CloseTrackingSource(EmployeeSource):
+        def __init__(self) -> None:
+            super().__init__()
+            self.closed: bool = False
+
+        @override
+        async def stream_employees(
+            self, limit: int | None
+        ) -> AsyncIterator[EmployeeStreamItem]:
+            assert limit is None
+            try:
+                yield EmployeeStreamItem(Employee("0"), total=3, available=3)
+                await asyncio.Event().wait()
+            finally:
+                self.closed = True
+
+    store, source = EmployeeStore(), CloseTrackingSource()
+
+    async def cancel_after_progress() -> None:
+        updates = sync_employees(EmployeesSyncRequest(), source, store)
+        first = await anext(updates)
+        assert isinstance(first, EmployeesSyncProgress)
+        await updates.aclose()
+
+    asyncio.run(cancel_after_progress())
+
+    assert source.closed
+    assert store.committed == []
+    assert store.staged == {}
 
 
 def test_employee_sync_emits_rate_limited_progress_then_one_complete() -> None:

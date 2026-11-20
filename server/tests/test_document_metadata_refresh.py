@@ -78,7 +78,7 @@ class Store:
         self.completed: bool = False
         self.selection: MetadataSelection | None = None
 
-    async def start_metadata_run(
+    async def begin_metadata_run(
         self, principal_id: str, drive_id: str, selection: MetadataSelection
     ) -> MetadataIngestRun:
         assert (principal_id, drive_id) == ("operator", "drive")
@@ -89,7 +89,7 @@ class Store:
         _ = run_id
         self.staged[document.id.id[1]] = document
 
-    async def stage_deleted(self, run_id: object, item_id: str) -> None:
+    async def stage_deleted_item(self, run_id: object, item_id: str) -> None:
         _ = run_id
         self.deleted.add(item_id)
 
@@ -103,7 +103,7 @@ class Store:
         self.cursor = delta_link
         self.completed = True
 
-    async def fail_metadata_run(self, run_id: object) -> None:
+    async def discard_metadata_run(self, run_id: object) -> None:
         _ = run_id
         self.staged.clear()
         self.deleted.clear()
@@ -168,7 +168,7 @@ def test_cleanup_failure_is_logged_without_masking_scan_failure(
             self.cleanup_attempted: bool = False
 
         @override
-        async def fail_metadata_run(self, run_id: object) -> None:
+        async def discard_metadata_run(self, run_id: object) -> None:
             _ = run_id
             self.cleanup_attempted = True
             raise RuntimeError("cleanup failed")
