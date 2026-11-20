@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import override
 from uuid import UUID, uuid4
 
@@ -7,6 +8,7 @@ import pytest
 
 from api.routes.employees import sync as employee_sync_route
 from api.routes.employees.sync import EmployeesSyncRequestBody, sync_employees_endpoint
+from api.routes.operations import get_operation_run
 from domain.exceptions.employee_sync_errors import SourceUnavailable
 from domain.models.employee import Employee
 from domain.ports.employees.employee_source import EmployeeStreamItem
@@ -15,6 +17,7 @@ from domain.ports.employees.employee_store import (
     EmployeeWriter,
     WriteEmployeeOutcome,
 )
+from domain.ports.operation_run_store import OperationRun
 from domain.use_cases.employee_sync import (
     EmployeesSyncProgress,
     EmployeesSyncRequest,
@@ -43,12 +46,18 @@ class EmployeeStore:
         self.committed: list[Employee] = []
         self.staged: dict[UUID, list[Employee]] = {}
         self.statuses: dict[UUID, str] = {}
+        self.summaries: dict[UUID, dict[str, object]] = {}
+        self.failure_codes: dict[UUID, str | None] = {}
+        self.owners: dict[UUID, str] = {}
+        self.started_at: dict[UUID, datetime] = {}
 
     async def begin_sync(self, principal_id: str) -> UUID:
         assert principal_id == "operator"
         run_id = uuid4()
         self.staged[run_id] = []
         self.statuses[run_id] = "running"
+        self.owners[run_id] = principal_id
+        self.started_at[run_id] = datetime.now(UTC)
         return run_id
 
     async def stage_employee(
@@ -61,11 +70,46 @@ class EmployeeStore:
         employees = self.staged.pop(run_id)
         self.committed.extend(employees)
         self.statuses[run_id] = "complete"
+        self.summaries[run_id] = {
+            "processed": len(employees),
+            "created": len(employees),
+            "updated": 0,
+            "unchanged": 0,
+            "published": True,
+        }
+        self.failure_codes[run_id] = None
         return EmployeeSyncCounts(len(employees), 0, 0)
 
-    async def discard_sync(self, run_id: UUID, *, interrupted: bool = False) -> None:
+    async def discard_sync(
+        self,
+        run_id: UUID,
+        *,
+        interrupted: bool = False,
+        failure_code: str = "employee.sync_failed",
+        summary: dict[str, object] | None = None,
+    ) -> None:
         self.staged.pop(run_id, None)
         self.statuses[run_id] = "interrupted" if interrupted else "failed"
+        self.summaries[run_id] = summary or {}
+        self.failure_codes[run_id] = failure_code
+
+    async def get_operation_run(
+        self, operation_id: UUID, principal_id: str
+    ) -> OperationRun | None:
+        if operation_id not in self.statuses or self.owners[operation_id] != principal_id:
+            return None
+        return OperationRun(
+            id=operation_id,
+            kind="employee.sync",
+            status=self.statuses[operation_id],
+            started_at=self.started_at[operation_id],
+            finished_at=datetime.now(UTC)
+            if self.statuses[operation_id] != "running"
+            else None,
+            summary=self.summaries.get(operation_id, {}),
+            failure_code=self.failure_codes.get(operation_id),
+            domain_ids={},
+        )
 
 
 def test_employee_sync_yields_success_result_after_progress() -> None:
@@ -190,6 +234,8 @@ def test_employee_sync_emits_rate_limited_progress_then_one_complete() -> None:
 
 
 def test_employee_sync_emits_one_error_terminal_after_source_failure() -> None:
+    store = EmployeeStore()
+
     async def collect():
         return [
             event
@@ -197,7 +243,7 @@ def test_employee_sync_emits_one_error_terminal_after_source_failure() -> None:
                 EmployeesSyncRequestBody(),
                 "operator",
                 EmployeeSource(fail_after=1),
-                EmployeeStore(),
+                store,
             )
         ]
 
@@ -224,6 +270,21 @@ def test_employee_sync_emits_one_error_terminal_after_source_failure() -> None:
         },
     }
     assert "traceback" not in events[-1].data
+    operation_id = UUID(events[-1].data["operation_id"])
+    status = asyncio.run(get_operation_run(operation_id, "operator", store))
+    assert status.status == "failed"
+    assert status.failure_code == "employee.source_unavailable"
+    assert status.summary == {
+        "processed": 1,
+        "total": 3,
+        "available": 3,
+        "created": 1,
+        "updated": 0,
+        "unchanged": 0,
+        "published": False,
+        "reason": "Employee source is unavailable",
+    }
+    assert "source unavailable" not in str(status.summary)
 
 
 def test_employee_sync_emits_generic_unexpected_error_payload(

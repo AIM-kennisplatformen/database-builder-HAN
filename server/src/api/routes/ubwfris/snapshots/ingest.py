@@ -1,30 +1,22 @@
 """Upload IB and RHA workbooks as UBWFRIS snapshots."""
 
-from collections.abc import AsyncGenerator
-from enum import StrEnum
 from hashlib import sha256
-from typing import Annotated
+from typing import Annotated, Literal
+from uuid import UUID, uuid4
 
-import anyio
 from fastapi import APIRouter, Depends, File, UploadFile
-from fastapi.sse import EventSourceResponse, ServerSentEvent
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from api.errors import (
-    PublicError,
-    internal_error,
-    log_api_failure,
-    log_missing_outcome,
-)
-from api.progress import ProgressEventLimiter
-from api.stream import StreamEvent, StreamEventKind, StreamLifecycle
-from config import config
+from api.errors import PublicError, internal_error, log_api_failure
 from dependencies import (
+    get_current_graph_user_id,
     get_ubwfris_ib_parser,
     get_ubwfris_ib_writer,
     get_ubwfris_rha_parser,
     get_ubwfris_rha_writer,
 )
+from domain.exceptions.error import DomainError
 from domain.exceptions.ubwfris_ingest_errors import (
     DuplicateUpload,
     InvalidWorkbook,
@@ -34,9 +26,9 @@ from domain.exceptions.ubwfris_ingest_errors import (
 from domain.models.ubwfris import (
     IbRow,
     RhaRow,
-    UbwfrisIngestEvent,
     UbwfrisIngestProgress,
     UbwfrisIngestRequest,
+    UbwfrisIngestResult,
     UbwfrisRow,
     UbwfrisWorkbook,
 )
@@ -47,29 +39,26 @@ from domain.use_cases.ubwfris_ingest import ingest_ubwfris_workbook
 router = APIRouter()
 
 
-class UbwfrisIngestProgressStatus(StrEnum):
-    PROGRESS = "progress"
-    COMPLETE = "complete"
-    ERROR = "error"
-
-
-class UbwfrisIngestProgressEvent(BaseModel):
-    status: UbwfrisIngestProgressStatus
-    processed_rows: int
+class UbwfrisIngestResponse(BaseModel):
+    operation_id: UUID
+    snapshot_id: str
+    row_type: Literal["ib", "rha"]
     total_rows: int
+    processed_rows: int
     created_rows: int
     invalid_rows: int
-    snapshot_id: str | None = None
-    invalid_row_numbers: list[int] | None = None
+    invalid_row_numbers: list[int]
 
 
 class UbwfrisErrorMapper:
     @staticmethod
     def describe(exc: Exception) -> PublicError:
         if isinstance(exc, InvalidWorkbook):
-            return PublicError("ubwfris.invalid_workbook", 422, str(exc))
+            return PublicError("ubwfris.invalid_workbook", 422, "Workbook is invalid")
         if isinstance(exc, DuplicateUpload):
-            return PublicError("ubwfris.duplicate_upload", 409, str(exc))
+            return PublicError(
+                "ubwfris.duplicate_upload", 409, "This workbook was already imported"
+            )
         if isinstance(exc, ParserFailure):
             return PublicError("ubwfris.parser_failure", 500, "Workbook parsing failed")
         if isinstance(exc, StoreUnavailable):
@@ -79,161 +68,110 @@ class UbwfrisErrorMapper:
         return internal_error()
 
 
-def _event(update: UbwfrisIngestEvent, snapshot_id: str) -> StreamEvent:
-    if isinstance(update, UbwfrisIngestProgress):
-        status = UbwfrisIngestProgressStatus.PROGRESS
-        kind = StreamEventKind.PROGRESS
-        snapshot: str | None = None
-        invalid_row_numbers: list[int] | None = None
-    else:
-        status = UbwfrisIngestProgressStatus.COMPLETE
-        kind = StreamEventKind.COMPLETE
-        snapshot = snapshot_id
-        invalid_row_numbers = list(update.invalid_row_numbers)
-
-    event = UbwfrisIngestProgressEvent(
-        status=status,
-        processed_rows=update.processed_rows,
-        total_rows=update.total_rows,
-        created_rows=update.created_rows,
-        invalid_rows=update.invalid_rows,
-        snapshot_id=snapshot,
-        invalid_row_numbers=invalid_row_numbers,
-    )
-    return StreamEvent(
-        event.status.value,
-        event.model_dump(exclude_none=True),
-        kind,
-    )
-
-
-def _failure_event(
-    public_error: PublicError,
-    exc: Exception,
-    snapshot_id: str,
-    progress: UbwfrisIngestProgress | None,
-) -> StreamEvent:
-
-    invalid_row_numbers: list[int] | None = (
-        [] if progress is None or progress.invalid_rows == 0 else None
-    )
-    if isinstance(exc, InvalidWorkbook):
-        invalid_row_numbers = list(exc.invalid_row_numbers)
-
-    return StreamEvent(
-        UbwfrisIngestProgressStatus.ERROR.value,
-        {
-            "status": UbwfrisIngestProgressStatus.ERROR.value,
-            "error": public_error.as_dict(),
-            "context": {"operation": "ubwfris.ingest", "snapshot_id": snapshot_id},
-            "progress": {
-                "processed_rows": progress.processed_rows if progress else 0,
-                "total_rows": progress.total_rows if progress else 0,
-                "created_rows": progress.created_rows if progress else 0,
-                "invalid_rows": progress.invalid_rows if progress else 0,
-                "invalid_row_numbers": invalid_row_numbers,
-            },
-        },
-        StreamEventKind.ERROR,
-    )
-
-
 async def _upload_ubwfris_workbook[T: UbwfrisRow](
     file: UploadFile,
     parser: UbwfrisParser[T],
     writer: UbwfrisWriter[T],
-) -> AsyncGenerator[ServerSentEvent]:
+    principal_id: str,
+    row_type: Literal["ib", "rha"],
+) -> UbwfrisIngestResponse | JSONResponse:
     workbook = UbwfrisWorkbook[T](await file.read())
     snapshot_id = sha256(workbook.file).hexdigest()
+    operation_id = uuid4()
     last_progress: UbwfrisIngestProgress | None = None
-    missing_outcome = _failure_event(
-        internal_error(),
-        RuntimeError("UBWFRIS ingest ended without an outcome"),
-        snapshot_id,
-        None,
-    )
-    lifecycle = StreamLifecycle(
-        ProgressEventLimiter(config.stream_progress_interval_seconds),
-        missing_outcome,
-    )
-
     updates = ingest_ubwfris_workbook(
-        UbwfrisIngestRequest(workbook), parser, writer, snapshot_id
+        UbwfrisIngestRequest(workbook),
+        parser,
+        writer,
+        snapshot_id,
+        operation_id,
+        principal_id,
     )
 
     try:
+        result: UbwfrisIngestResult | None = None
         async for update in updates:
             if isinstance(update, UbwfrisIngestProgress):
                 last_progress = update
-            response = lifecycle.encode(_event(update, snapshot_id))
-            if response is not None:
-                yield response
-    except Exception as exc:  # noqa: BLE001 - terminate the SSE stream on unexpected failures
+            else:
+                result = update
+        if result is None:
+            raise RuntimeError("UBWFRIS ingest ended without a result")
+    except Exception as exc:  # noqa: BLE001 - map ingest failures to safe HTTP errors
         public_error = UbwfrisErrorMapper.describe(exc)
         log_api_failure(
             "ubwfris",
             exc,
             public_error,
-            identifiers={"operation": "ubwfris.ingest", "snapshot_id": snapshot_id},
+            identifiers={
+                "operation": "ubwfris.ingest",
+                "operation_id": str(operation_id),
+                "snapshot_id": snapshot_id,
+            },
         )
-        response = lifecycle.encode(
-            _failure_event(
-                public_error,
-                exc,
-                snapshot_id,
-                last_progress,
-            )
+        failure_summary: dict[str, object] = (
+            dict(exc.failure_summary)
+            if isinstance(exc, DomainError) and exc.failure_summary is not None
+            else {
+                "processed_rows": last_progress.processed_rows
+                if last_progress
+                else 0,
+                "staged_rows": last_progress.created_rows if last_progress else 0,
+                "published_rows": 0,
+                "invalid_rows": 0,
+                "invalid_row_numbers": [],
+            }
         )
-        if response is not None:
-            yield response
-    else:
-        response = lifecycle.finish()
-        if response is not None:
-            log_missing_outcome(
-                "ubwfris",
-                identifiers={"operation": "ubwfris.ingest", "snapshot_id": snapshot_id},
-            )
-            yield response
+        failure_summary["published_rows"] = 0
+        return JSONResponse(
+            status_code=public_error.http_status,
+            content={
+                "operation_id": str(operation_id),
+                "snapshot_id": snapshot_id,
+                "error": public_error.as_dict(),
+                "summary": failure_summary,
+            },
+        )
     finally:
-        with anyio.CancelScope(shield=True):
-            await updates.aclose()
+        await updates.aclose()
+
+    return UbwfrisIngestResponse(
+        operation_id=operation_id,
+        snapshot_id=snapshot_id,
+        row_type=row_type,
+        total_rows=result.total_rows,
+        processed_rows=result.processed_rows,
+        created_rows=result.created_rows,
+        invalid_rows=result.invalid_rows,
+        invalid_row_numbers=list(result.invalid_row_numbers),
+    )
 
 
 @router.post(
     "/ib",
-    response_class=EventSourceResponse,
+    response_model=UbwfrisIngestResponse,
     summary="Import an IB workbook snapshot",
-    description="Stream progress, then a complete or error event for the IB upload.",
+    description="Import an IB workbook and return its completed snapshot and operation IDs.",
 )
 async def upload_ib_workbook(
     file: Annotated[UploadFile, File(description="IB Excel workbook")],
+    principal_id: Annotated[str, Depends(get_current_graph_user_id)],
     parser: Annotated[UbwfrisParser[IbRow], Depends(get_ubwfris_ib_parser)],
     writer: Annotated[UbwfrisWriter[IbRow], Depends(get_ubwfris_ib_writer)],
-) -> AsyncGenerator[ServerSentEvent]:
-    events = _upload_ubwfris_workbook(file, parser, writer)
-    try:
-        async for event in events:
-            yield event
-    finally:
-        with anyio.CancelScope(shield=True):
-            await events.aclose()
+) -> UbwfrisIngestResponse | JSONResponse:
+    return await _upload_ubwfris_workbook(file, parser, writer, principal_id, "ib")
 
 
 @router.post(
     "/rha",
-    response_class=EventSourceResponse,
+    response_model=UbwfrisIngestResponse,
     summary="Import an RHA workbook snapshot",
-    description="Stream progress, then a complete or error event for the RHA upload.",
+    description="Import an RHA workbook and return its completed snapshot and operation IDs.",
 )
 async def upload_rha_workbook(
     file: Annotated[UploadFile, File(description="RHA Excel workbook")],
+    principal_id: Annotated[str, Depends(get_current_graph_user_id)],
     parser: Annotated[UbwfrisParser[RhaRow], Depends(get_ubwfris_rha_parser)],
     writer: Annotated[UbwfrisWriter[RhaRow], Depends(get_ubwfris_rha_writer)],
-) -> AsyncGenerator[ServerSentEvent]:
-    events = _upload_ubwfris_workbook(file, parser, writer)
-    try:
-        async for event in events:
-            yield event
-    finally:
-        with anyio.CancelScope(shield=True):
-            await events.aclose()
+) -> UbwfrisIngestResponse | JSONResponse:
+    return await _upload_ubwfris_workbook(file, parser, writer, principal_id, "rha")

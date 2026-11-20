@@ -1,25 +1,14 @@
 import asyncio
-from collections.abc import AsyncIterator, Sequence
-from decimal import Decimal
-from hashlib import sha256
-from typing import cast
+from collections.abc import AsyncIterator
 from uuid import UUID, uuid4
 
 import anyio
-import pytest
-from fastapi import FastAPI
-from starlette.types import Message, Scope
 
 from api.routes.documents.metadata import (
     MetadataIngestRequestBody,
     ingest_group_metadata_endpoint,
 )
 from api.routes.employees.sync import EmployeesSyncRequestBody, sync_employees_endpoint
-from api.routes.ubwfris.snapshots.router import router as ubwfris_snapshots_router
-from dependencies import (
-    get_ubwfris_ib_parser,
-    get_ubwfris_ib_writer,
-)
 from domain.models.documents.content_version import ContentVersion
 from domain.models.documents.document import (
     Document,
@@ -29,7 +18,6 @@ from domain.models.documents.document import (
 )
 from domain.models.documents.metadata_selection import MetadataSelection
 from domain.models.employee import Employee
-from domain.models.ubwfris import IbRow, UbwfrisWorkbook
 from domain.ports.documents.document_metadata_source import DocumentMetadataScan
 from domain.ports.documents.document_store import (
     MetadataIngestRun,
@@ -41,63 +29,6 @@ from domain.ports.employees.employee_store import (
     EmployeeSyncCounts,
     WriteEmployeeOutcome,
 )
-from domain.ports.ubwfris.ubwfris_parser import ParsedUbwfrisRow
-
-
-async def _disconnect_during_stream(
-    app: FastAPI,
-    path: str,
-    body: bytes,
-    content_type: str,
-    spec_version: str,
-) -> tuple[int, bytes]:
-    event_chunks: list[bytes] = []
-    first_event_sent = anyio.Event()
-    request_received = False
-
-    async def receive() -> Message:
-        nonlocal request_received
-        if not request_received:
-            request_received = True
-            return {"type": "http.request", "body": body, "more_body": False}
-        await first_event_sent.wait()
-        return {"type": "http.disconnect"}
-
-    async def send(message: Message) -> None:
-        if message["type"] == "http.response.body":
-            chunk = cast(bytes, message.get("body", b""))
-            if chunk:
-                event_chunks.append(chunk)
-                first_event_sent.set()
-                if spec_version == "2.4":
-                    raise OSError("client disconnected")
-
-    scope: Scope = {
-        "type": "http",
-        "asgi": {"version": "3.0", "spec_version": spec_version},
-        "http_version": "1.1",
-        "method": "POST",
-        "scheme": "http",
-        "path": path,
-        "raw_path": path.encode(),
-        "query_string": b"",
-        "headers": [
-            (b"content-type", content_type.encode()),
-            (b"content-length", str(len(body)).encode()),
-        ],
-        "client": ("127.0.0.1", 12345),
-        "server": ("test", 80),
-        "root_path": "",
-        "state": {},
-    }
-
-    if spec_version == "2.4":
-        with pytest.raises(ExceptionGroup) as error:
-            await app(scope, receive, send)
-        assert "ClientDisconnect" in repr(error.value)
-    else:
-        await app(scope, receive, send)
-    return len(event_chunks), b"".join(event_chunks)
 
 
 class BlockingEmployeeSource:
@@ -136,8 +67,16 @@ class EmployeeStore:
         self.staged.clear()
         return EmployeeSyncCounts(len(self.committed), 0, 0)
 
-    async def discard_sync(self, run_id: UUID, *, interrupted: bool = False) -> None:
+    async def discard_sync(
+        self,
+        run_id: UUID,
+        *,
+        interrupted: bool = False,
+        failure_code: str = "employee.sync_failed",
+        summary: dict[str, object] | None = None,
+    ) -> None:
         _ = run_id
+        _ = (failure_code, summary)
         await anyio.lowlevel.checkpoint()
         self.staged.clear()
         self.discarded = True
@@ -306,89 +245,3 @@ def test_metadata_endpoint_close_marks_operation_interrupted() -> None:
     assert store.operation_status == "interrupted"
     assert store.staged == []
     assert store.published == []
-
-
-class BlockingParser:
-    async def stream_ubwfris_rows(
-        self, workbook: UbwfrisWorkbook[IbRow]
-    ) -> AsyncIterator[ParsedUbwfrisRow[IbRow]]:
-        assert workbook.file == b"workbook"
-        yield ParsedUbwfrisRow(
-            IbRow(
-                row_number=1,
-                project_id="project",
-                project_name="Project",
-                employee_name="Employee",
-                budgeted_hours=Decimal(1),
-                projected_hours=Decimal(1),
-                booked_hours=Decimal(1),
-                period=202601,
-                remaining_hours=Decimal(0),
-                cost_center="center",
-            ),
-            row_number=1,
-            total_rows=2,
-        )
-        await anyio.Event().wait()
-
-
-class SnapshotWriter:
-    def __init__(self) -> None:
-        self.snapshot_id: str | None = None
-        self.completed: bool = False
-        self.discarded: bool = False
-
-    async def begin_snapshot(self, snapshot_id: str) -> None:
-        self.snapshot_id = snapshot_id
-
-    async def publish_snapshot(self, snapshot_id: str) -> None:
-        assert snapshot_id == self.snapshot_id
-        self.completed = True
-
-    async def stage_ubwfris_rows(self, snapshot_id: str, rows: Sequence[IbRow]) -> int:
-        assert snapshot_id == self.snapshot_id
-        return len(rows)
-
-    async def discard_snapshot(self, snapshot_id: str) -> None:
-        assert snapshot_id == self.snapshot_id
-        await anyio.lowlevel.checkpoint()
-        self.discarded = True
-
-
-@pytest.mark.parametrize("spec_version", ["2.3", "2.4"])
-def test_ubwfris_route_disconnect_discards_snapshot_without_error_sse(
-    spec_version: str,
-) -> None:
-    app = FastAPI()
-    app.include_router(ubwfris_snapshots_router)
-    writer = SnapshotWriter()
-    app.dependency_overrides[get_ubwfris_ib_parser] = BlockingParser
-    app.dependency_overrides[get_ubwfris_ib_writer] = lambda: writer
-    boundary = "stream-disconnect-boundary"
-    body = (
-        (
-            f"--{boundary}\r\n"
-            'Content-Disposition: form-data; name="file"; filename="upload.xlsx"\r\n'
-            "Content-Type: application/octet-stream\r\n\r\n"
-        ).encode()
-        + b"workbook\r\n"
-        + f"--{boundary}--\r\n".encode()
-    )
-
-    async def exercise() -> tuple[int, bytes]:
-        return await _disconnect_during_stream(
-            app,
-            "/api/v1/ubwfris/snapshots/ib",
-            body,
-            f"multipart/form-data; boundary={boundary}",
-            spec_version,
-        )
-
-    attempts, response_body = asyncio.run(exercise())
-    app.dependency_overrides.clear()
-
-    assert attempts == 1
-    assert b"event: error" not in response_body
-    assert writer.snapshot_id == sha256(b"workbook").hexdigest()
-    assert writer.discarded
-    assert not writer.completed

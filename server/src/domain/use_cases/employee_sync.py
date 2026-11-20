@@ -102,10 +102,20 @@ async def _publish_sync(store: EmployeeWriter, run_id: UUID) -> EmployeeSyncCoun
 
 
 async def _discard_sync(
-    store: EmployeeWriter, run_id: UUID, *, interrupted: bool = False
+    store: EmployeeWriter,
+    run_id: UUID,
+    *,
+    interrupted: bool = False,
+    failure_code: str = "employee.sync_failed",
+    summary: dict[str, object] | None = None,
 ) -> None:
     try:
-        await store.discard_sync(run_id, interrupted=interrupted)
+        await store.discard_sync(
+            run_id,
+            interrupted=interrupted,
+            failure_code=failure_code,
+            summary=summary,
+        )
     except Exception as exc:
         raise StoreUnavailable("Employee store is unavailable") from exc
 
@@ -130,6 +140,8 @@ async def sync_employees(
     available = 0
     published = False
     interrupted = False
+    failure_code = "employee.sync_failed"
+    failure_reason = "Employee sync failed"
     updates = _stream_employee_source(source, req.limit)
     try:
         yield EmployeesSyncStarted(run_id)
@@ -167,6 +179,18 @@ async def sync_employees(
         )
     except BaseException as exc:
         interrupted = isinstance(exc, anyio.get_cancelled_exc_class() | GeneratorExit)
+        if interrupted:
+            failure_code = "request_interrupted"
+            failure_reason = "Employee sync was interrupted"
+        elif isinstance(exc, NoEmployeesFound):
+            failure_code = "employee.no_employees"
+            failure_reason = "No employees were found"
+        elif isinstance(exc, SourceUnavailable):
+            failure_code = "employee.source_unavailable"
+            failure_reason = "Employee source is unavailable"
+        elif isinstance(exc, StoreUnavailable):
+            failure_code = "employee.store_unavailable"
+            failure_reason = "Employee store is unavailable"
         raise
     finally:
         with anyio.CancelScope(shield=True):
@@ -174,4 +198,19 @@ async def sync_employees(
                 await updates.aclose()
             finally:
                 if not published:
-                    await _discard_sync(store, run_id, interrupted=interrupted)
+                    await _discard_sync(
+                        store,
+                        run_id,
+                        interrupted=interrupted,
+                        failure_code=failure_code,
+                        summary={
+                            "processed": created + updated + unchanged,
+                            "total": total,
+                            "available": available,
+                            "created": created,
+                            "updated": updated,
+                            "unchanged": unchanged,
+                            "published": False,
+                            "reason": failure_reason,
+                        },
+                    )

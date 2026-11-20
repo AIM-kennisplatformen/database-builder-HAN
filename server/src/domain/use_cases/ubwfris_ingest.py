@@ -2,9 +2,11 @@ from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import replace
 from datetime import date
 from typing import assert_never, cast
+from uuid import UUID
 
 import anyio
 
+from domain.exceptions.error import DomainError
 from domain.exceptions.ubwfris_ingest_errors import (
     DuplicateUpload,
     InvalidWorkbook,
@@ -44,7 +46,7 @@ async def _stage_ubwfris_rows[T: UbwfrisRow](
 ) -> int:
     try:
         return await writer.stage_ubwfris_rows(snapshot_id, rows)
-    except DuplicateUpload:
+    except (DuplicateUpload, InvalidWorkbook):
         raise
     except Exception as exc:
         raise StoreUnavailable(
@@ -63,6 +65,19 @@ async def _begin_snapshot[T: UbwfrisRow](
         raise StoreUnavailable("Failed to create the workbook snapshot") from exc
 
 
+async def _begin_operation[T: UbwfrisRow](
+    writer: UbwfrisWriter[T],
+    operation_id: UUID,
+    principal_id: str,
+    snapshot_id: str,
+) -> None:
+    try:
+        with anyio.CancelScope(shield=True):
+            await writer.begin_operation(operation_id, principal_id, snapshot_id)
+    except Exception as exc:
+        raise StoreUnavailable("Failed to create the upload operation") from exc
+
+
 async def _discard_snapshot[T: UbwfrisRow](
     writer: UbwfrisWriter[T], snapshot_id: str
 ) -> None:
@@ -73,10 +88,13 @@ async def _discard_snapshot[T: UbwfrisRow](
 
 
 async def _publish_snapshot[T: UbwfrisRow](
-    writer: UbwfrisWriter[T], snapshot_id: str
+    writer: UbwfrisWriter[T],
+    snapshot_id: str,
+    operation_id: UUID,
+    summary: dict[str, object],
 ) -> None:
     try:
-        await writer.publish_snapshot(snapshot_id)
+        await writer.publish_snapshot(snapshot_id, operation_id, summary)
     except Exception as exc:
         raise StoreUnavailable("Failed to complete the workbook snapshot") from exc
 
@@ -177,31 +195,39 @@ async def ingest_ubwfris_workbook[T: UbwfrisRow](
     parser: UbwfrisParser[T],
     writer: UbwfrisWriter[T],
     snapshot_id: str,
+    operation_id: UUID,
+    principal_id: str,
 ) -> AsyncGenerator[UbwfrisIngestEvent]:
-    """Ingest a workbook, yielding progress and a result on success.
-
-    Rows are committed in batches. An incomplete snapshot is removed on failure.
-    Ingest failures propagate to the caller for transport-specific handling.
-    """
+    """Validate and stage a workbook, then publish all rows in one transaction."""
     total_rows = 0
     processed_rows = 0
     created_rows = 0
     invalid_row_numbers: list[int] = []
+    seen_row_numbers: set[int] = set()
     batch: list[T] = []
 
-    if not req.workbook.file:
-        raise InvalidWorkbook("The uploaded workbook is empty")
-
-    await _begin_snapshot(writer, snapshot_id)
     completed = False
+    operation_started = False
+    snapshot_started = False
     try:
+        await _begin_operation(writer, operation_id, principal_id, snapshot_id)
+        operation_started = True
+        if not req.workbook.file:
+            raise InvalidWorkbook("The uploaded workbook is empty")
+
+        await _begin_snapshot(writer, snapshot_id)
+        snapshot_started = True
         async for item in _stream_ubwfris_parser(parser, req.workbook):
             row = item.row
             row_number = item.row_number
             total_rows = item.total_rows
-            if row is None:
+            if row_number in seen_row_numbers:
+                invalid_row_numbers.append(row_number)
+            elif row is None:
+                seen_row_numbers.add(row_number)
                 invalid_row_numbers.append(row_number)
             else:
+                seen_row_numbers.add(row_number)
                 normalized_row, is_valid = _validate_ubwfris_row(row)
                 if not is_valid:
                     invalid_row_numbers.append(row_number)
@@ -223,9 +249,15 @@ async def ingest_ubwfris_workbook[T: UbwfrisRow](
 
         if batch:
             created_rows += await _stage_ubwfris_rows(writer, snapshot_id, batch)
+            batch.clear()
 
         if processed_rows == 0:
             raise InvalidWorkbook("The uploaded workbook is empty")
+        if invalid_row_numbers:
+            raise InvalidWorkbook(
+                "Workbook contains invalid rows",
+                invalid_row_numbers=tuple(invalid_row_numbers),
+            )
         if created_rows == 0:
             raise InvalidWorkbook(
                 "The uploaded workbook has no valid rows",
@@ -233,7 +265,14 @@ async def ingest_ubwfris_workbook[T: UbwfrisRow](
             )
 
         await anyio.lowlevel.checkpoint()
-        await _publish_snapshot(writer, snapshot_id)
+        summary: dict[str, object] = {
+            "total_rows": total_rows,
+            "processed_rows": processed_rows,
+            "created_rows": created_rows,
+            "invalid_rows": 0,
+            "invalid_row_numbers": [],
+        }
+        await _publish_snapshot(writer, snapshot_id, operation_id, summary)
         completed = True
         yield UbwfrisIngestResult(
             status=UbwfrisIngestStatus.COMPLETED,
@@ -243,7 +282,57 @@ async def ingest_ubwfris_workbook[T: UbwfrisRow](
             invalid_rows=len(invalid_row_numbers),
             invalid_row_numbers=tuple(invalid_row_numbers),
         )
-    finally:
-        if not completed:
-            with anyio.CancelScope(shield=True):
-                await _discard_snapshot(writer, snapshot_id)
+    except BaseException as exc:
+        if completed:
+            raise
+        interrupted = isinstance(exc, anyio.get_cancelled_exc_class() | GeneratorExit)
+        if isinstance(exc, InvalidWorkbook):
+            invalid_row_numbers = list(
+                dict.fromkeys((*invalid_row_numbers, *exc.invalid_row_numbers))
+            )
+        failure_code, reason = _ubwfris_failure(exc, interrupted)
+        failure_summary: dict[str, object] = {
+            "total_rows": total_rows,
+            "processed_rows": processed_rows,
+            "staged_rows": created_rows,
+            "validated_rows": created_rows + len(batch),
+            "published_rows": 0,
+            "invalid_rows": len(invalid_row_numbers),
+            "invalid_row_numbers": invalid_row_numbers,
+            "reason": reason,
+        }
+        if isinstance(exc, DomainError):
+            exc.failure_summary = failure_summary
+        try:
+            if snapshot_started:
+                try:
+                    with anyio.CancelScope(shield=True):
+                        await _discard_snapshot(writer, snapshot_id)
+                except BaseException as cleanup_exc:
+                    if isinstance(cleanup_exc, DomainError):
+                        cleanup_exc.failure_summary = failure_summary
+                    raise
+        finally:
+            if operation_started:
+                with anyio.CancelScope(shield=True):
+                    await writer.fail_operation(
+                        operation_id,
+                        failure_code,
+                        failure_summary,
+                        interrupted=interrupted,
+                    )
+        raise
+
+
+def _ubwfris_failure(exc: BaseException, interrupted: bool) -> tuple[str, str]:
+    if interrupted:
+        return "request_interrupted", "Upload was interrupted"
+    if isinstance(exc, InvalidWorkbook):
+        return "ubwfris.invalid_workbook", "Workbook is invalid"
+    if isinstance(exc, DuplicateUpload):
+        return "ubwfris.duplicate_upload", "This workbook was already imported"
+    if isinstance(exc, ParserFailure):
+        return "ubwfris.parser_failure", "Workbook parsing failed"
+    if isinstance(exc, StoreUnavailable):
+        return "ubwfris.store_unavailable", "UBWFRIS store is unavailable"
+    return "ubwfris.ingest_failed", "UBWFRIS upload failed"

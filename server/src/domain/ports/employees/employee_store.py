@@ -28,4 +28,11 @@ class EmployeeWriter(Protocol):
 
     async def publish_sync(self, run_id: UUID) -> EmployeeSyncCounts: ...
 
-    async def discard_sync(self, run_id: UUID, *, interrupted: bool = False) -> None: ...
+    async def discard_sync(
+        self,
+        run_id: UUID,
+        *,
+        interrupted: bool = False,
+        failure_code: str = "employee.sync_failed",
+        summary: dict[str, object] | None = None,
+    ) -> None: ...

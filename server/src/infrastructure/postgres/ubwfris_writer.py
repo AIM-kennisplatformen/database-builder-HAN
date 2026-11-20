@@ -2,14 +2,16 @@
 
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
+from json import dumps
 from typing import Literal, LiteralString, override
+from uuid import UUID
 
 import anyio
 from psycopg import AsyncConnection, AsyncCopy
 from psycopg.errors import UniqueViolation
 from psycopg_pool import AsyncConnectionPool
 
-from domain.exceptions.ubwfris_ingest_errors import DuplicateUpload
+from domain.exceptions.ubwfris_ingest_errors import DuplicateUpload, InvalidWorkbook
 from domain.models.ubwfris import IbRow, RhaRow
 from domain.ports.ubwfris.ubwfris_store import UbwfrisWriter
 
@@ -104,6 +106,8 @@ async def _publish_snapshot(
     snapshot_id: str,
     row_type: Literal["ib", "rha"],
     publish_query: LiteralString,
+    operation_id: UUID,
+    summary: dict[str, object],
 ) -> None:
     async with _pool_transaction(pool) as connection:
         cursor = await connection.execute(
@@ -132,6 +136,57 @@ async def _publish_snapshot(
         )
         if await cursor.fetchone() is None:
             raise RuntimeError("UBWFRIS snapshot is not running")
+        cursor = await connection.execute(
+            """UPDATE operation_runs SET status = 'complete', finished_at = now(),
+               summary = %s::jsonb WHERE id = %s AND status = 'running'
+               RETURNING id""",
+            (dumps(summary), operation_id),
+        )
+        if await cursor.fetchone() is None:
+            raise RuntimeError("UBWFRIS operation is not running")
+
+
+async def _begin_operation(
+    pool: AsyncConnectionPool,
+    operation_id: UUID,
+    principal_id: str,
+    snapshot_id: str,
+    row_type: Literal["ib", "rha"],
+) -> None:
+    async with pool.connection() as connection:
+        _ = await connection.execute(
+            """INSERT INTO operation_runs
+               (id, principal_id, kind, status, domain_ids)
+               VALUES (%s, %s, %s, 'running', %s::jsonb)""",
+            (
+                operation_id,
+                principal_id,
+                f"ubwfris.{row_type}",
+                dumps({"snapshot_id": snapshot_id, "row_type": row_type}),
+            ),
+        )
+
+
+async def _fail_operation(
+    pool: AsyncConnectionPool,
+    operation_id: UUID,
+    failure_code: str,
+    summary: dict[str, object],
+    *,
+    interrupted: bool,
+) -> None:
+    async with pool.connection() as connection:
+        _ = await connection.execute(
+            """UPDATE operation_runs SET status = %s, finished_at = now(),
+               failure_code = %s, summary = %s::jsonb
+               WHERE id = %s AND status = 'running'""",
+            (
+                "interrupted" if interrupted else "failed",
+                failure_code,
+                dumps(summary),
+                operation_id,
+            ),
+        )
 
 
 async def _discard_snapshot(
@@ -189,11 +244,35 @@ async def interrupt_ubwfris_snapshots(pool: AsyncConnectionPool) -> None:
             _ = await connection.execute(
                 "DELETE FROM ubwfris_snapshots WHERE status = 'running'"
             )
+            _ = await connection.execute(
+                """UPDATE operation_runs SET status = 'interrupted', finished_at = now(),
+                   failure_code = 'process_interrupted'
+                   WHERE kind IN ('ubwfris.ib', 'ubwfris.rha') AND status = 'running'"""
+            )
 
 
 class PostgresIbWriter(UbwfrisWriter[IbRow]):
     def __init__(self, pool: AsyncConnectionPool) -> None:
         self._pool: AsyncConnectionPool = pool
+
+    @override
+    async def begin_operation(
+        self, operation_id: UUID, principal_id: str, snapshot_id: str
+    ) -> None:
+        await _begin_operation(self._pool, operation_id, principal_id, snapshot_id, "ib")
+
+    @override
+    async def fail_operation(
+        self,
+        operation_id: UUID,
+        failure_code: str,
+        summary: dict[str, object],
+        *,
+        interrupted: bool = False,
+    ) -> None:
+        await _fail_operation(
+            self._pool, operation_id, failure_code, summary, interrupted=interrupted
+        )
 
     @override
     async def begin_snapshot(self, snapshot_id: str) -> None:
@@ -217,8 +296,17 @@ class PostgresIbWriter(UbwfrisWriter[IbRow]):
         )
 
     @override
-    async def publish_snapshot(self, snapshot_id: str) -> None:
-        await _publish_snapshot(self._pool, snapshot_id, "ib", _PUBLISH_IB_SNAPSHOT)
+    async def publish_snapshot(
+        self, snapshot_id: str, operation_id: UUID, summary: dict[str, object]
+    ) -> None:
+        await _publish_snapshot(
+            self._pool,
+            snapshot_id,
+            "ib",
+            _PUBLISH_IB_SNAPSHOT,
+            operation_id,
+            summary,
+        )
 
     @override
     async def stage_ubwfris_rows(self, snapshot_id: str, rows: Sequence[IbRow]) -> int:
@@ -259,14 +347,33 @@ class PostgresIbWriter(UbwfrisWriter[IbRow]):
                     )
             return len(rows)
         except UniqueViolation as exc:
-            raise DuplicateUpload(
-                "The uploaded workbook was previously imported"
+            raise InvalidWorkbook(
+                "Workbook contains duplicate row numbers"
             ) from exc
 
 
 class PostgresRhaWriter(UbwfrisWriter[RhaRow]):
     def __init__(self, pool: AsyncConnectionPool) -> None:
         self._pool: AsyncConnectionPool = pool
+
+    @override
+    async def begin_operation(
+        self, operation_id: UUID, principal_id: str, snapshot_id: str
+    ) -> None:
+        await _begin_operation(self._pool, operation_id, principal_id, snapshot_id, "rha")
+
+    @override
+    async def fail_operation(
+        self,
+        operation_id: UUID,
+        failure_code: str,
+        summary: dict[str, object],
+        *,
+        interrupted: bool = False,
+    ) -> None:
+        await _fail_operation(
+            self._pool, operation_id, failure_code, summary, interrupted=interrupted
+        )
 
     @override
     async def begin_snapshot(self, snapshot_id: str) -> None:
@@ -290,8 +397,17 @@ class PostgresRhaWriter(UbwfrisWriter[RhaRow]):
         )
 
     @override
-    async def publish_snapshot(self, snapshot_id: str) -> None:
-        await _publish_snapshot(self._pool, snapshot_id, "rha", _PUBLISH_RHA_SNAPSHOT)
+    async def publish_snapshot(
+        self, snapshot_id: str, operation_id: UUID, summary: dict[str, object]
+    ) -> None:
+        await _publish_snapshot(
+            self._pool,
+            snapshot_id,
+            "rha",
+            _PUBLISH_RHA_SNAPSHOT,
+            operation_id,
+            summary,
+        )
 
     @override
     async def stage_ubwfris_rows(self, snapshot_id: str, rows: Sequence[RhaRow]) -> int:
@@ -350,6 +466,6 @@ class PostgresRhaWriter(UbwfrisWriter[RhaRow]):
                     )
             return len(rows)
         except UniqueViolation as exc:
-            raise DuplicateUpload(
-                "The uploaded workbook was previously imported"
+            raise InvalidWorkbook(
+                "Workbook contains duplicate row numbers"
             ) from exc

@@ -255,9 +255,16 @@ class EmployeePostgresWriter(EmployeeWriter):
         return EmployeeSyncCounts(created, updated, unchanged)
 
     @override
-    async def discard_sync(self, run_id: UUID, *, interrupted: bool = False) -> None:
+    async def discard_sync(
+        self,
+        run_id: UUID,
+        *,
+        interrupted: bool = False,
+        failure_code: str = "employee.sync_failed",
+        summary: dict[str, object] | None = None,
+    ) -> None:
         status = "interrupted" if interrupted else "failed"
-        failure_code = "request_interrupted" if interrupted else "employee_sync_failed"
+        code = "request_interrupted" if interrupted else failure_code
         with anyio.CancelScope(shield=True):
             async with _employee_transaction(self._pool) as (_, cursor):
                 _ = await cursor.execute(
@@ -266,8 +273,14 @@ class EmployeePostgresWriter(EmployeeWriter):
                 )
                 _ = await cursor.execute(
                     """UPDATE operation_runs SET status = %s, finished_at = now(),
-                       failure_code = %s WHERE id = %s AND status = 'running'""",
-                    (status, failure_code, run_id),
+                       failure_code = %s, summary = COALESCE(%s::jsonb, summary)
+                       WHERE id = %s AND status = 'running'""",
+                    (
+                        status,
+                        code,
+                        dumps(summary) if summary is not None else None,
+                        run_id,
+                    ),
                 )
                 _ = await cursor.execute(
                     """UPDATE employee_sync_runs
