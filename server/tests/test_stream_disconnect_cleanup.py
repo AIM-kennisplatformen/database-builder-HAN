@@ -10,16 +10,13 @@ import pytest
 from fastapi import FastAPI
 from starlette.types import Message, Scope
 
-from api.routes.documents.router import router as documents_router
-from api.routes.employees.router import router as employees_router
+from api.routes.documents.metadata import (
+    MetadataIngestRequestBody,
+    ingest_group_metadata_endpoint,
+)
+from api.routes.employees.sync import EmployeesSyncRequestBody, sync_employees_endpoint
 from api.routes.ubwfris.snapshots.router import router as ubwfris_snapshots_router
 from dependencies import (
-    get_current_graph_user_id,
-    get_document_metadata_source,
-    get_document_store,
-    get_employee_source,
-    get_employee_store,
-    get_group_drive_source,
     get_ubwfris_ib_parser,
     get_ubwfris_ib_writer,
 )
@@ -117,9 +114,14 @@ class EmployeeStore:
         self.staged: list[Employee] = []
         self.committed: list[Employee] = []
         self.discarded: bool = False
+        self.status: str | None = None
+        self.run_id: UUID | None = None
 
-    async def begin_sync(self) -> UUID:
-        return uuid4()
+    async def begin_sync(self, principal_id: str) -> UUID:
+        assert principal_id == "user"
+        self.run_id = uuid4()
+        self.status = "running"
+        return self.run_id
 
     async def stage_employee(
         self, run_id: UUID, employee: Employee
@@ -134,40 +136,30 @@ class EmployeeStore:
         self.staged.clear()
         return EmployeeSyncCounts(len(self.committed), 0, 0)
 
-    async def discard_sync(self, run_id: UUID) -> None:
+    async def discard_sync(self, run_id: UUID, *, interrupted: bool = False) -> None:
         _ = run_id
         await anyio.lowlevel.checkpoint()
         self.staged.clear()
         self.discarded = True
+        self.status = "interrupted" if interrupted else "failed"
 
 
-@pytest.mark.parametrize("spec_version", ["2.3", "2.4"])
-def test_employee_route_disconnect_discards_staging_without_error_sse(
-    spec_version: str,
-) -> None:
-    app = FastAPI()
-    app.include_router(employees_router)
+def test_employee_endpoint_close_marks_operation_interrupted() -> None:
     store = EmployeeStore()
-    app.dependency_overrides[get_employee_source] = BlockingEmployeeSource
-    app.dependency_overrides[get_employee_store] = lambda: store
 
-    async def exercise() -> tuple[int, bytes]:
-        return await _disconnect_during_stream(
-            app,
-            "/api/v1/employees/sync",
-            b"{}",
-            "application/json",
-            spec_version,
+    async def close_after_started() -> None:
+        endpoint = sync_employees_endpoint(
+            EmployeesSyncRequestBody(), "user", BlockingEmployeeSource(), store
         )
+        event = await anext(endpoint)
+        assert event.event == "started"
+        await endpoint.aclose()
 
-    attempts, body = asyncio.run(exercise())
-    app.dependency_overrides.clear()
-
-    assert attempts == 1
-    assert b"event: error" not in body
+    asyncio.run(close_after_started())
     assert store.discarded
     assert store.staged == []
     assert store.committed == []
+    assert store.status == "interrupted"
 
 
 class GroupSource:
@@ -219,16 +211,28 @@ class BlockingMetadataSource:
 class BlockingMetadataStore:
     def __init__(self) -> None:
         self.run_id: UUID | None = None
+        self.operation_id: UUID | None = None
         self.staged: list[Document] = []
         self.published: list[Document] = []
         self.cleaned: bool = False
         self.stage_count: int = 0
+        self.operation_status: str | None = None
+
+    async def begin_group_operation(self, principal_id: str, group_id: str) -> UUID:
+        assert (principal_id, group_id) == ("user", "group")
+        self.operation_id = uuid4()
+        self.operation_status = "running"
+        return self.operation_id
 
     async def begin_metadata_run(
-        self, principal_id: str, drive_id: str, selection: MetadataSelection
+        self,
+        principal_id: str,
+        drive_id: str,
+        selection: MetadataSelection,
+        operation_id: UUID | None = None,
     ) -> MetadataIngestRun:
         assert (principal_id, drive_id) == ("user", "drive")
-        _ = selection
+        _ = (selection, operation_id)
         run_id = uuid4()
         self.run_id = run_id
         return MetadataIngestRun(run_id, None, True)
@@ -251,11 +255,29 @@ class BlockingMetadataStore:
         self.staged.clear()
 
     async def publish_metadata_runs(
-        self, publications: tuple[MetadataRunPublication, ...]
+        self,
+        publications: tuple[MetadataRunPublication, ...],
+        operation_id: UUID | None = None,
+        summary: dict[str, object] | None = None,
+        domain_ids: dict[str, object] | None = None,
     ) -> None:
-        _ = publications
+        assert operation_id == self.operation_id
+        _ = (publications, summary, domain_ids)
         self.published.extend(self.staged)
         self.staged.clear()
+        self.operation_status = "complete"
+
+    async def fail_group_operation(
+        self,
+        operation_id: UUID,
+        failure_code: str,
+        *,
+        interrupted: bool = False,
+        summary: dict[str, object] | None = None,
+    ) -> None:
+        assert operation_id == self.operation_id
+        _ = (failure_code, summary)
+        self.operation_status = "interrupted" if interrupted else "failed"
 
     async def discard_metadata_run(self, run_id: UUID) -> None:
         assert run_id == self.run_id
@@ -264,33 +286,24 @@ class BlockingMetadataStore:
         self.cleaned = True
 
 
-@pytest.mark.parametrize("spec_version", ["2.3", "2.4"])
-def test_metadata_route_disconnect_discards_staging_without_error_sse(
-    spec_version: str,
-) -> None:
-    app = FastAPI()
-    app.include_router(documents_router)
+def test_metadata_endpoint_close_marks_operation_interrupted() -> None:
     store = BlockingMetadataStore()
-    app.dependency_overrides[get_current_graph_user_id] = lambda: "user"
-    app.dependency_overrides[get_group_drive_source] = GroupSource
-    app.dependency_overrides[get_document_metadata_source] = BlockingMetadataSource
-    app.dependency_overrides[get_document_store] = lambda: store
 
-    async def exercise() -> tuple[int, bytes]:
-        return await _disconnect_during_stream(
-            app,
-            "/api/v1/documents/groups/group/metadata",
-            b"{}",
-            "application/json",
-            spec_version,
+    async def close_after_started() -> None:
+        endpoint = ingest_group_metadata_endpoint(
+            "group",
+            MetadataIngestRequestBody(),
+            "user",
+            GroupSource(),
+            BlockingMetadataSource(),
+            store,
         )
+        event = await anext(endpoint)
+        assert event.event == "started"
+        await endpoint.aclose()
 
-    attempts, body = asyncio.run(exercise())
-    app.dependency_overrides.clear()
-
-    assert attempts == 1
-    assert b"event: error" not in body
-    assert store.cleaned
+    asyncio.run(close_after_started())
+    assert store.operation_status == "interrupted"
     assert store.staged == []
     assert store.published == []
 

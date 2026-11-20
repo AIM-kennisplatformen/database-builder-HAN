@@ -33,6 +33,7 @@ from domain.use_cases.metadata_ingest import (
     MetadataIngestRequest,
     MetadataIngestResult,
     MetadataIngestSkipped,
+    MetadataIngestStarted,
     ingest_group_metadata,
 )
 
@@ -79,18 +80,34 @@ class MetadataIngestEvent(BaseModel):
     error_status: int | None = None
     skipped_drive_ids: list[str] | None = None
     detail: str | None = None
+    operation_id: str | None = None
 
 
 def _event(
-    update: MetadataIngestProgress | MetadataIngestSkipped | MetadataIngestResult,
+    update: MetadataIngestStarted
+    | MetadataIngestProgress
+    | MetadataIngestSkipped
+    | MetadataIngestResult,
     group_id: str,
+    operation_id: str | None,
 ) -> StreamEvent:
+    if isinstance(update, MetadataIngestStarted):
+        return StreamEvent(
+            "started",
+            {
+                "status": "running",
+                "group_id": group_id,
+                "operation_id": str(update.operation_id),
+            },
+            StreamEventKind.NON_TERMINAL,
+        )
     if isinstance(update, MetadataIngestResult):
         event = MetadataIngestEvent(
             status=MetadataIngestEventStatus.COMPLETE,
             group_id=group_id,
             processed=update.processed,
             skipped_drive_ids=list(update.skipped_drive_ids),
+            operation_id=operation_id,
         )
         return StreamEvent(
             event.status.value,
@@ -105,6 +122,7 @@ def _event(
             drive_id=update.drive_id,
             error_status=403,
             detail="Drive is not accessible",
+            operation_id=operation_id,
         )
         return StreamEvent(
             event.status.value,
@@ -122,6 +140,7 @@ def _event(
         available=progress.available,
         item_id=progress.document.id.id[1],
         name=progress.document.file_metadata.name,
+        operation_id=operation_id,
     )
     return StreamEvent(
         event.status.value,
@@ -135,17 +154,20 @@ def _failure_event(
     exc: Exception | MetadataIngestDriveFailure,
     group_id: str,
     progress: MetadataIngestProgress | MetadataIngestSkipped | None,
+    operation_id: str | None,
 ) -> StreamEvent:
     drive_id = exc.drive_id if isinstance(exc, MetadataIngestDriveFailure) else None
     return StreamEvent(
         MetadataIngestEventStatus.ERROR.value,
         {
             "status": MetadataIngestEventStatus.ERROR.value,
+            "operation_id": operation_id,
             "error": public_error.as_dict(),
             "context": {
                 "operation": "metadata.ingest",
                 "group_id": group_id,
                 "drive_id": drive_id,
+                "operation_id": operation_id,
             },
             "progress": {"processed": progress.processed if progress else 0},
         },
@@ -167,10 +189,12 @@ async def ingest_group_metadata_endpoint(
     store: Annotated[DocumentRefreshStore, Depends(get_document_store)],
 ) -> AsyncGenerator[ServerSentEvent]:
     last_update: MetadataIngestProgress | MetadataIngestSkipped | None = None
+    operation_id: str | None = None
     missing_outcome = _failure_event(
         internal_error(),
         RuntimeError("Metadata inventory ended without an outcome"),
         group_id,
+        None,
         None,
     )
     lifecycle = StreamLifecycle(
@@ -196,9 +220,11 @@ async def ingest_group_metadata_endpoint(
 
     try:
         async for update in updates:
+            if isinstance(update, MetadataIngestStarted):
+                operation_id = str(update.operation_id)
             if isinstance(update, MetadataIngestProgress | MetadataIngestSkipped):
                 last_update = update
-            response = lifecycle.encode(_event(update, group_id))
+            response = lifecycle.encode(_event(update, group_id, operation_id))
             if response is not None:
                 yield response
     except Exception as exc:  # noqa: BLE001 - terminate the SSE stream on failures
@@ -216,7 +242,7 @@ async def ingest_group_metadata_endpoint(
             },
         )
         response = lifecycle.encode(
-            _failure_event(public_error, exc, group_id, last_update)
+            _failure_event(public_error, exc, group_id, last_update, operation_id)
         )
         if response is not None:
             yield response

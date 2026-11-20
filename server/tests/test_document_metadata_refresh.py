@@ -1,6 +1,6 @@
 import asyncio
 from typing import cast, final, override
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -79,10 +79,15 @@ class Store:
         self.selection: MetadataSelection | None = None
 
     async def begin_metadata_run(
-        self, principal_id: str, drive_id: str, selection: MetadataSelection
+        self,
+        principal_id: str,
+        drive_id: str,
+        selection: MetadataSelection,
+        operation_id: UUID | None = None,
     ) -> MetadataIngestRun:
         assert (principal_id, drive_id) == ("operator", "drive")
         self.selection = selection
+        _ = operation_id
         return MetadataIngestRun(uuid4(), self.cursor, True)
 
     async def stage_document(self, run_id: object, document: Document) -> None:

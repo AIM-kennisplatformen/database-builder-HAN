@@ -1,11 +1,15 @@
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
+from uuid import UUID
 
 import anyio
 
 from domain.exceptions.metadata_ingest_errors import (
     InvalidMetadataSelection,
+    MetadataRunAlreadyActive,
     MetadataSourceError,
+    SourceUnavailable,
+    StoreUnavailable,
 )
 from domain.ports.documents.document_metadata_source import DocumentRefreshSource
 from domain.ports.documents.document_store import (
@@ -13,14 +17,13 @@ from domain.ports.documents.document_store import (
     MetadataRunPublication,
 )
 from domain.ports.documents.group_drive_source import GroupDriveSource
-from domain.use_cases.group_drive_discovery import get_group_drives
+from domain.use_cases.group_drive_discovery import GroupNotAccessible, get_group_drives
 from domain.use_cases.metadata_ingest.drive import (
     MetadataIngestDriveProgress,
     MetadataIngestDriveRequest,
     MetadataIngestPrepared,
     discard_metadata_runs,
     prepare_metadata,
-    publish_metadata_runs,
 )
 
 
@@ -58,11 +61,58 @@ class MetadataIngestResult:
     skipped_drive_ids: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class MetadataIngestStarted:
+    operation_id: UUID
+
+
 class MetadataIngestDriveFailure(Exception):
     def __init__(self, drive_id: str, cause: Exception) -> None:
         super().__init__(str(cause))
         self.drive_id: str = drive_id
         self.cause: Exception = cause
+
+
+def _failure_details(
+    exc: Exception,
+    processed: int,
+    skipped_drive_ids: list[str],
+) -> tuple[str, dict[str, object]]:
+    summary: dict[str, object] = {
+        "processed": processed,
+        "skipped_drive_ids": skipped_drive_ids,
+    }
+    cause = exc
+    if isinstance(exc, MetadataIngestDriveFailure):
+        summary["failed_drive_id"] = exc.drive_id
+        cause = exc.cause
+
+    if isinstance(cause, MetadataSourceError):
+        summary["source_status"] = cause.status_code
+        summary["reason"] = (
+            "Drive is not accessible"
+            if cause.status_code == 403
+            else "Metadata source request failed"
+        )
+        return "metadata.source_error", summary
+    if isinstance(cause, MetadataRunAlreadyActive):
+        summary["reason"] = "A metadata run is already active"
+        return "metadata.run_already_active", summary
+    if isinstance(cause, GroupNotAccessible):
+        summary["reason"] = "Group is not accessible"
+        return "metadata.group_not_accessible", summary
+    if isinstance(cause, InvalidMetadataSelection):
+        summary["reason"] = "Metadata selection is invalid"
+        return "metadata.invalid_selection", summary
+    if isinstance(cause, SourceUnavailable):
+        summary["reason"] = "Metadata source is unavailable"
+        return "metadata.source_unavailable", summary
+    if isinstance(cause, StoreUnavailable):
+        summary["reason"] = "Metadata store is unavailable"
+        return "metadata.store_unavailable", summary
+
+    summary["reason"] = "Metadata ingestion failed"
+    return "metadata.ingest_failed", summary
 
 
 async def _ingest_drive(
@@ -96,12 +146,13 @@ async def _ingest_drive(
             await updates.aclose()
 
 
-async def ingest_group_metadata(
+async def _ingest_group_metadata(
     user_id: str,
     request: MetadataIngestRequest,
     drive_source: GroupDriveSource,
     metadata_source: DocumentRefreshSource,
     store: DocumentRefreshStore,
+    operation_id: UUID,
 ) -> AsyncGenerator[
     MetadataIngestProgress | MetadataIngestSkipped | MetadataIngestResult
 ]:
@@ -150,6 +201,7 @@ async def ingest_group_metadata(
             excluded[drive_id].paths if drive_id in excluded else [],
             excluded[drive_id].extensions if drive_id in excluded else [],
             locations[drive_id].root_item_id,
+            operation_id,
         )
         for drive_id in selected
     ]
@@ -187,7 +239,12 @@ async def ingest_group_metadata(
                 with anyio.CancelScope(shield=True):
                     await updates.aclose()
 
-        await publish_metadata_runs(store, tuple(publications))
+        await store.publish_metadata_runs(
+            tuple(publications),
+            operation_id,
+            {"processed": processed, "skipped_drive_ids": skipped_drive_ids},
+            {"group_id": request.group_id},
+        )
     except BaseException:
         await discard_metadata_runs(
             store, tuple(publication.run_id for publication in publications)
@@ -195,3 +252,53 @@ async def ingest_group_metadata(
         raise
 
     yield MetadataIngestResult(processed, tuple(skipped_drive_ids))
+
+
+async def ingest_group_metadata(
+    user_id: str,
+    request: MetadataIngestRequest,
+    drive_source: GroupDriveSource,
+    metadata_source: DocumentRefreshSource,
+    store: DocumentRefreshStore,
+) -> AsyncGenerator[
+    MetadataIngestStarted
+    | MetadataIngestProgress
+    | MetadataIngestSkipped
+    | MetadataIngestResult
+]:
+    operation_id = await store.begin_group_operation(user_id, request.group_id)
+    updates = _ingest_group_metadata(
+        user_id, request, drive_source, metadata_source, store, operation_id
+    )
+    processed = 0
+    skipped_drive_ids: list[str] = []
+    try:
+        yield MetadataIngestStarted(operation_id)
+        async for update in updates:
+            if isinstance(update, MetadataIngestProgress):
+                processed = update.processed
+            elif isinstance(update, MetadataIngestSkipped):
+                skipped_drive_ids.append(update.drive_id)
+            yield update
+    except BaseException as exc:
+        cancelled = isinstance(exc, anyio.get_cancelled_exc_class() | GeneratorExit)
+        failure_code = "request_interrupted"
+        summary: dict[str, object] = {
+            "processed": processed,
+            "skipped_drive_ids": skipped_drive_ids,
+        }
+        if not cancelled and isinstance(exc, Exception):
+            failure_code, summary = _failure_details(
+                exc, processed, skipped_drive_ids
+            )
+        with anyio.CancelScope(shield=True):
+            await store.fail_group_operation(
+                operation_id,
+                failure_code,
+                interrupted=cancelled,
+                summary=summary,
+            )
+        raise
+    finally:
+        with anyio.CancelScope(shield=True):
+            await updates.aclose()

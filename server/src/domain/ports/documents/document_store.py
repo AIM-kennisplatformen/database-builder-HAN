@@ -26,8 +26,14 @@ class DocumentStore(Protocol):
 
 
 class DocumentRefreshStore(Protocol):
+    async def begin_group_operation(self, principal_id: str, group_id: str) -> UUID: ...
+
     async def begin_metadata_run(
-        self, principal_id: str, drive_id: str, selection: MetadataSelection
+        self,
+        principal_id: str,
+        drive_id: str,
+        selection: MetadataSelection,
+        operation_id: UUID | None = None,
     ) -> MetadataIngestRun: ...
 
     async def stage_document(self, run_id: UUID, document: Document) -> None: ...
@@ -39,7 +45,20 @@ class DocumentRefreshStore(Protocol):
     ) -> None: ...
 
     async def publish_metadata_runs(
-        self, publications: tuple[MetadataRunPublication, ...]
+        self,
+        publications: tuple[MetadataRunPublication, ...],
+        operation_id: UUID | None = None,
+        summary: dict[str, object] | None = None,
+        domain_ids: dict[str, object] | None = None,
+    ) -> None: ...
+
+    async def fail_group_operation(
+        self,
+        operation_id: UUID,
+        failure_code: str,
+        *,
+        interrupted: bool = False,
+        summary: dict[str, object] | None = None,
     ) -> None: ...
 
     async def discard_metadata_run(self, run_id: UUID) -> None: ...

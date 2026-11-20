@@ -1,0 +1,11 @@
+info:
+  name: operations
+  type: folder
+  seq: 4
+
+request:
+  auth: inherit
+  variables:
+    - name: operation_id
+      value: 694697a2-2820-4d13-9dd9-7f7bf0bb8321
+      description: Paste the operation_id from the SSE started event.

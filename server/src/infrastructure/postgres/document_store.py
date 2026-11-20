@@ -105,7 +105,11 @@ class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
 
     @override
     async def begin_metadata_run(
-        self, principal_id: str, drive_id: str, selection: MetadataSelection
+        self,
+        principal_id: str,
+        drive_id: str,
+        selection: MetadataSelection,
+        operation_id: UUID | None = None,
     ) -> MetadataIngestRun:
         run_id = uuid4()
         serialized_selection = dumps(asdict(selection), sort_keys=True)
@@ -120,10 +124,19 @@ class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
                 same_selection = row is not None and row[0] == serialized_selection
                 _ = await connection.execute(
                     """INSERT INTO document_metadata_runs
-                       (id, principal_id, drive_id, selection, status)
-                       VALUES (%s, %s, %s, %s, 'running')""",
-                    (run_id, principal_id, drive_id, serialized_selection),
+                       (id, principal_id, drive_id, selection, status, operation_id)
+                       VALUES (%s, %s, %s, %s, 'running', %s)""",
+                    (run_id, principal_id, drive_id, serialized_selection, operation_id),
                 )
+                if operation_id is not None:
+                    _ = await connection.execute(
+                        """UPDATE operation_runs SET domain_ids = jsonb_set(
+                             domain_ids, '{drive_run_ids}',
+                             COALESCE(domain_ids->'drive_run_ids', '[]'::jsonb)
+                               || jsonb_build_array(%s::text), TRUE)
+                           WHERE id = %s AND status = 'running'""",
+                        (str(run_id), operation_id),
+                    )
         except UniqueViolation as exc:
             raise MetadataRunAlreadyActive(
                 "A metadata run is already active for this operator and drive"
@@ -133,6 +146,44 @@ class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
             row[1] if same_selection and row is not None else None,
             same_selection,
         )
+
+    @override
+    async def begin_group_operation(self, principal_id: str, group_id: str) -> UUID:
+        operation_id = uuid4()
+        async with self._pool.connection() as connection:
+            _ = await connection.execute(
+                """INSERT INTO operation_runs
+                   (id, principal_id, kind, status, domain_ids)
+                   VALUES (%s, %s, 'metadata.ingest', 'running', %s::jsonb)""",
+                (
+                    operation_id,
+                    principal_id,
+                    dumps({"group_id": group_id, "drive_run_ids": []}),
+                ),
+            )
+        return operation_id
+
+    @override
+    async def fail_group_operation(
+        self,
+        operation_id: UUID,
+        failure_code: str,
+        *,
+        interrupted: bool = False,
+        summary: dict[str, object] | None = None,
+    ) -> None:
+        async with self._pool.connection() as connection:
+            _ = await connection.execute(
+                """UPDATE operation_runs SET status = %s, finished_at = now(),
+                   failure_code = %s, summary = COALESCE(%s::jsonb, summary)
+                   WHERE id = %s AND status = 'running'""",
+                (
+                    "interrupted" if interrupted else "failed",
+                    failure_code,
+                    dumps(summary) if summary is not None else None,
+                    operation_id,
+                ),
+            )
 
     @override
     async def stage_document(self, run_id: UUID, document: Document) -> None:
@@ -190,10 +241,14 @@ class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
 
     @override
     async def publish_metadata_runs(
-        self, publications: tuple[MetadataRunPublication, ...]
+        self,
+        publications: tuple[MetadataRunPublication, ...],
+        operation_id: UUID | None = None,
+        summary: dict[str, object] | None = None,
+        domain_ids: dict[str, object] | None = None,
     ) -> None:
         """Publish all prepared drives atomically in one database transaction."""
-        if not publications:
+        if not publications and operation_id is None:
             return
         connection_context = self._pool.connection()
         connection = await connection_context.__aenter__()
@@ -203,6 +258,17 @@ class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
             try:
                 for publication in publications:
                     await self._publish_metadata_run(connection, publication)
+                if operation_id is not None:
+                    _ = await connection.execute(
+                        """UPDATE operation_runs SET status = 'complete', finished_at = now(),
+                           summary = %s::jsonb, domain_ids = domain_ids || %s::jsonb
+                           WHERE id = %s AND status = 'running'""",
+                        (
+                            dumps(summary or {}),
+                            dumps(domain_ids or {}),
+                            operation_id,
+                        ),
+                    )
                 # Deliver a pending cancellation before entering the short commit
                 # boundary. If cancelled, the transaction rolls back below.
                 await anyio.lowlevel.checkpoint()
@@ -327,4 +393,9 @@ class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
             _ = await connection.execute(
                 """UPDATE document_metadata_runs SET status = 'interrupted',
                    finished_at = now() WHERE status = 'running'"""
+            )
+            _ = await connection.execute(
+                """UPDATE operation_runs SET status = 'interrupted', finished_at = now(),
+                   failure_code = 'process_interrupted'
+                   WHERE kind = 'metadata.ingest' AND status = 'running'"""
             )

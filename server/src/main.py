@@ -9,6 +9,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from api.routes.documents.router import router as documents_router
 from api.routes.employees.router import router as employees_router
+from api.routes.operations import router as operations_router
 from api.routes.ubwfris.snapshots.router import router as ubwfris_snapshots_router
 from config import config
 from infrastructure.msgraph.document_metadata_source import (
@@ -69,5 +70,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(employees_router)
+app.include_router(operations_router)
 app.include_router(documents_router)
 app.include_router(ubwfris_snapshots_router)

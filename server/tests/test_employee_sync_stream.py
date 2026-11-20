@@ -19,6 +19,7 @@ from domain.use_cases.employee_sync import (
     EmployeesSyncProgress,
     EmployeesSyncRequest,
     EmployeesSyncResult,
+    EmployeesSyncStarted,
     sync_employees,
 )
 
@@ -41,10 +42,13 @@ class EmployeeStore:
     def __init__(self) -> None:
         self.committed: list[Employee] = []
         self.staged: dict[UUID, list[Employee]] = {}
+        self.statuses: dict[UUID, str] = {}
 
-    async def begin_sync(self) -> UUID:
+    async def begin_sync(self, principal_id: str) -> UUID:
+        assert principal_id == "operator"
         run_id = uuid4()
         self.staged[run_id] = []
+        self.statuses[run_id] = "running"
         return run_id
 
     async def stage_employee(
@@ -56,10 +60,12 @@ class EmployeeStore:
     async def publish_sync(self, run_id: UUID) -> EmployeeSyncCounts:
         employees = self.staged.pop(run_id)
         self.committed.extend(employees)
+        self.statuses[run_id] = "complete"
         return EmployeeSyncCounts(len(employees), 0, 0)
 
-    async def discard_sync(self, run_id: UUID) -> None:
+    async def discard_sync(self, run_id: UUID, *, interrupted: bool = False) -> None:
         self.staged.pop(run_id, None)
+        self.statuses[run_id] = "interrupted" if interrupted else "failed"
 
 
 def test_employee_sync_yields_success_result_after_progress() -> None:
@@ -69,17 +75,19 @@ def test_employee_sync_yields_success_result_after_progress() -> None:
         return [
             update
             async for update in sync_employees(
-                EmployeesSyncRequest(), EmployeeSource(), store
+                EmployeesSyncRequest(), EmployeeSource(), store, "operator"
             )
         ]
 
     updates = asyncio.run(collect())
-    assert isinstance(updates[0], EmployeesSyncProgress)
+    assert isinstance(updates[0], EmployeesSyncStarted)
+    assert isinstance(updates[1], EmployeesSyncProgress)
     assert isinstance(updates[-1], EmployeesSyncResult)
     assert updates[-1].processed == 3
     assert updates[-1].total == 3
     assert len(store.committed) == 3
     assert store.staged == {}
+    assert store.statuses[updates[0].operation_id] == "complete"
 
 
 def test_employee_sync_failure_discards_all_staged_employees() -> None:
@@ -87,7 +95,7 @@ def test_employee_sync_failure_discards_all_staged_employees() -> None:
 
     async def collect() -> None:
         async for _ in sync_employees(
-            EmployeesSyncRequest(), EmployeeSource(fail_after=1), store
+            EmployeesSyncRequest(), EmployeeSource(fail_after=1), store, "operator"
         ):
             pass
 
@@ -96,6 +104,7 @@ def test_employee_sync_failure_discards_all_staged_employees() -> None:
 
     assert store.committed == []
     assert store.staged == {}
+    assert set(store.statuses.values()) == {"failed"}
 
 
 def test_employee_sync_cancellation_discards_all_staged_employees() -> None:
@@ -103,7 +112,9 @@ def test_employee_sync_cancellation_discards_all_staged_employees() -> None:
     source = EmployeeSource()
 
     async def cancel_after_progress() -> None:
-        updates = sync_employees(EmployeesSyncRequest(), source, store)
+        updates = sync_employees(EmployeesSyncRequest(), source, store, "operator")
+        started = await anext(updates)
+        assert isinstance(started, EmployeesSyncStarted)
         first = await anext(updates)
         assert isinstance(first, EmployeesSyncProgress)
         assert store.committed == []
@@ -114,6 +125,7 @@ def test_employee_sync_cancellation_discards_all_staged_employees() -> None:
 
     assert store.committed == []
     assert store.staged == {}
+    assert set(store.statuses.values()) == {"interrupted"}
 
 
 def test_employee_sync_cancellation_closes_source_iterator() -> None:
@@ -136,7 +148,9 @@ def test_employee_sync_cancellation_closes_source_iterator() -> None:
     store, source = EmployeeStore(), CloseTrackingSource()
 
     async def cancel_after_progress() -> None:
-        updates = sync_employees(EmployeesSyncRequest(), source, store)
+        updates = sync_employees(EmployeesSyncRequest(), source, store, "operator")
+        started = await anext(updates)
+        assert isinstance(started, EmployeesSyncStarted)
         first = await anext(updates)
         assert isinstance(first, EmployeesSyncProgress)
         await updates.aclose()
@@ -153,7 +167,7 @@ def test_employee_sync_emits_rate_limited_progress_then_one_complete() -> None:
         return [
             event
             async for event in sync_employees_endpoint(
-                EmployeesSyncRequestBody(), EmployeeSource(), EmployeeStore()
+                EmployeesSyncRequestBody(), "operator", EmployeeSource(), EmployeeStore()
             )
         ]
 
@@ -161,7 +175,8 @@ def test_employee_sync_emits_rate_limited_progress_then_one_complete() -> None:
 
     # The first progress event passes; subsequent updates arrive inside the
     # limiter interval. Completion is a terminal event and is not rate limited.
-    assert [event.event for event in events] == ["progress", "complete"]
+    assert [event.event for event in events] == ["started", "progress", "complete"]
+    assert events[0].data["operation_id"]
     assert events[-1].data == {
         "status": "complete",
         "processed": 3,
@@ -170,6 +185,7 @@ def test_employee_sync_emits_rate_limited_progress_then_one_complete() -> None:
         "created": 3,
         "updated": 0,
         "unchanged": 0,
+        "operation_id": events[0].data["operation_id"],
     }
 
 
@@ -179,6 +195,7 @@ def test_employee_sync_emits_one_error_terminal_after_source_failure() -> None:
             event
             async for event in sync_employees_endpoint(
                 EmployeesSyncRequestBody(),
+                "operator",
                 EmployeeSource(fail_after=1),
                 EmployeeStore(),
             )
@@ -186,16 +203,17 @@ def test_employee_sync_emits_one_error_terminal_after_source_failure() -> None:
 
     events = asyncio.run(collect())
 
-    assert [event.event for event in events] == ["progress", "error"]
+    assert [event.event for event in events] == ["started", "progress", "error"]
     assert sum(event.event in {"complete", "error"} for event in events) == 1
     assert events[-1].data == {
         "status": "error",
+        "operation_id": events[0].data["operation_id"],
         "error": {
             "code": "employee.source_unavailable",
             "http_status": 501,
             "detail": "Employee source is unavailable",
         },
-        "context": {"operation": "employee.sync"},
+        "context": {"operation": "employee.sync", "operation_id": events[0].data["operation_id"]},
         "progress": {
             "processed": 1,
             "total": 3,
@@ -216,10 +234,16 @@ def test_employee_sync_emits_generic_unexpected_error_payload(
         request: EmployeesSyncRequest,
         source: EmployeeSource,
         store: EmployeeWriter,
+        principal_id: str,
     ) -> AsyncIterator[EmployeesSyncProgress | EmployeesSyncResult]:
-        _ = (request, source, store)
+        _ = (request, source, store, principal_id)
         yield EmployeesSyncProgress(
-            total=3, available=5, created=1, updated=0, unchanged=0
+            total=3,
+            available=5,
+            created=1,
+            updated=0,
+            unchanged=0,
+            operation_id=uuid4(),
         )
         raise RuntimeError("unexpected backend failure")
 
@@ -229,7 +253,7 @@ def test_employee_sync_emits_generic_unexpected_error_payload(
         return [
             event
             async for event in sync_employees_endpoint(
-                EmployeesSyncRequestBody(), EmployeeSource(), EmployeeStore()
+                EmployeesSyncRequestBody(), "operator", EmployeeSource(), EmployeeStore()
             )
         ]
 
@@ -238,12 +262,13 @@ def test_employee_sync_emits_generic_unexpected_error_payload(
     assert [event.event for event in events] == ["progress", "error"]
     assert events[-1].data == {
         "status": "error",
+        "operation_id": None,
         "error": {
             "code": "internal_error",
             "http_status": 500,
             "detail": "The operation failed",
         },
-        "context": {"operation": "employee.sync"},
+        "context": {"operation": "employee.sync", "operation_id": None},
         "progress": {
             "processed": 1,
             "total": 3,
@@ -273,10 +298,16 @@ def test_employee_sync_subclass_inherits_known_error_status(
         request: EmployeesSyncRequest,
         source: EmployeeSource,
         store: EmployeeWriter,
+        principal_id: str,
     ) -> AsyncIterator[EmployeesSyncProgress | EmployeesSyncResult]:
-        _ = (request, source, store)
+        _ = (request, source, store, principal_id)
         yield EmployeesSyncProgress(
-            total=3, available=5, created=1, updated=0, unchanged=0
+            total=3,
+            available=5,
+            created=1,
+            updated=0,
+            unchanged=0,
+            operation_id=uuid4(),
         )
         raise SpecializedSourceUnavailable("employee source unavailable")
 
@@ -286,7 +317,7 @@ def test_employee_sync_subclass_inherits_known_error_status(
         return [
             event
             async for event in sync_employees_endpoint(
-                EmployeesSyncRequestBody(), EmployeeSource(), EmployeeStore()
+                EmployeesSyncRequestBody(), "operator", EmployeeSource(), EmployeeStore()
             )
         ]
 

@@ -11,6 +11,7 @@ from domain.ports.documents.document_store import DocumentRefreshStore
 from domain.ports.documents.group_drive_source import GroupDriveSource
 from domain.ports.employees.employee_source import EmployeeSource
 from domain.ports.employees.employee_store import EmployeeWriter
+from domain.ports.operation_run_store import OperationRunReader
 from domain.ports.ubwfris.ubwfris_parser import UbwfrisParser
 from domain.ports.ubwfris.ubwfris_store import UbwfrisWriter
 from infrastructure.excel.ubwfris_parser import (
@@ -19,6 +20,7 @@ from infrastructure.excel.ubwfris_parser import (
 )
 from infrastructure.postgres.document_store import PostgresDocumentStore
 from infrastructure.postgres.employee_writer import EmployeePostgresWriter
+from infrastructure.postgres.operation_run_store import PostgresOperationRunStore
 from infrastructure.postgres.ubwfris_writer import (
     PostgresIbWriter,
     PostgresRhaWriter,
@@ -43,6 +45,12 @@ def get_employee_source(request: Request) -> EmployeeSource:
 
 def get_postgres_pool(request: Request) -> AsyncConnectionPool:
     return _state(request).postgres_pool
+
+
+def get_operation_run_reader(
+    pool: Annotated[AsyncConnectionPool, Depends(get_postgres_pool)],
+) -> OperationRunReader:
+    return PostgresOperationRunStore(pool)
 
 
 def get_employee_store(

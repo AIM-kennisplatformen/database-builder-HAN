@@ -16,7 +16,11 @@ from api.errors import (
 from api.progress import ProgressEventLimiter
 from api.stream import StreamEvent, StreamEventKind, StreamLifecycle
 from config import config
-from dependencies import get_employee_source, get_employee_store
+from dependencies import (
+    get_current_graph_user_id,
+    get_employee_source,
+    get_employee_store,
+)
 from domain.exceptions.employee_sync_errors import (
     InvalidLimit,
     NoEmployeesFound,
@@ -29,6 +33,7 @@ from domain.use_cases.employee_sync import (
     EmployeesSyncProgress,
     EmployeesSyncRequest,
     EmployeesSyncResult,
+    EmployeesSyncStarted,
     sync_employees,
 )
 
@@ -67,6 +72,7 @@ class EmployeesSyncProgressEvent(BaseModel):
             "Provisional count so far. Counts become committed only in the complete event."
         )
     )
+    operation_id: str | None = None
 
 
 class EmployeeErrorMapper:
@@ -87,7 +93,15 @@ class EmployeeErrorMapper:
         return internal_error()
 
 
-def _event(update: EmployeesSyncProgress | EmployeesSyncResult) -> StreamEvent:
+def _event(
+    update: EmployeesSyncStarted | EmployeesSyncProgress | EmployeesSyncResult,
+) -> StreamEvent:
+    if isinstance(update, EmployeesSyncStarted):
+        return StreamEvent(
+            "started",
+            {"status": "running", "operation_id": str(update.operation_id)},
+            StreamEventKind.NON_TERMINAL,
+        )
     if isinstance(update, EmployeesSyncResult):
         status = EmployeesSyncProgressStatus.COMPLETE
         kind = StreamEventKind.COMPLETE
@@ -103,6 +117,7 @@ def _event(update: EmployeesSyncProgress | EmployeesSyncResult) -> StreamEvent:
         created=update.created,
         updated=update.updated,
         unchanged=update.unchanged,
+        operation_id=str(update.operation_id),
     )
     return StreamEvent(
         event.status.value,
@@ -114,13 +129,15 @@ def _event(update: EmployeesSyncProgress | EmployeesSyncResult) -> StreamEvent:
 def _failure_event(
     public_error: PublicError,
     progress: EmployeesSyncProgress | None,
+    operation_id: str | None,
 ) -> StreamEvent:
     return StreamEvent(
         EmployeesSyncProgressStatus.ERROR.value,
         {
             "status": EmployeesSyncProgressStatus.ERROR.value,
+            "operation_id": operation_id,
             "error": public_error.as_dict(),
-            "context": {"operation": "employee.sync"},
+            "context": {"operation": "employee.sync", "operation_id": operation_id},
             "progress": {
                 "processed": progress.processed if progress else 0,
                 "total": progress.total if progress else None,
@@ -147,18 +164,24 @@ def _failure_event(
 )
 async def sync_employees_endpoint(
     request: EmployeesSyncRequestBody,
+    principal_id: Annotated[str, Depends(get_current_graph_user_id)],
     source: Annotated[EmployeeSource, Depends(get_employee_source)],
     store: Annotated[EmployeeWriter, Depends(get_employee_store)],
 ) -> AsyncGenerator[ServerSentEvent]:
-    missing_outcome = _failure_event(internal_error(), None)
+    missing_outcome = _failure_event(internal_error(), None, None)
     lifecycle = StreamLifecycle(
         ProgressEventLimiter(config.stream_progress_interval_seconds),
         missing_outcome,
     )
-    updates = sync_employees(EmployeesSyncRequest(request.limit), source, store)
+    updates = sync_employees(
+        EmployeesSyncRequest(request.limit), source, store, principal_id
+    )
     last_progress: EmployeesSyncProgress | None = None
+    operation_id: str | None = None
     try:
         async for update in updates:
+            if isinstance(update, EmployeesSyncStarted):
+                operation_id = str(update.operation_id)
             if isinstance(update, EmployeesSyncProgress):
                 last_progress = update
             event = _event(update)
@@ -173,7 +196,9 @@ async def sync_employees_endpoint(
             public_error,
             identifiers={"operation": "employee.sync"},
         )
-        response = lifecycle.encode(_failure_event(public_error, last_progress))
+        response = lifecycle.encode(
+            _failure_event(public_error, last_progress, operation_id)
+        )
         if response is not None:
             yield response
     else:

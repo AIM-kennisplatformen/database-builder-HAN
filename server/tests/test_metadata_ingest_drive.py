@@ -61,10 +61,18 @@ def test_inventory_saves_each_document_before_reporting_progress() -> None:
 
     class Store:
         async def begin_metadata_run(
-            self, principal_id: str, drive_id: str, selection: MetadataSelection
+            self,
+            principal_id: str,
+            drive_id: str,
+            selection: MetadataSelection,
+            operation_id: UUID | None = None,
         ) -> MetadataIngestRun:
-            _ = (principal_id, drive_id, selection)
+            _ = (principal_id, drive_id, selection, operation_id)
             return MetadataIngestRun(uuid4(), None, True)
+
+        async def begin_group_operation(self, principal_id: str, group_id: str) -> UUID:
+            _ = (principal_id, group_id)
+            return uuid4()
 
         async def stage_document(self, run_id: UUID, document: Document) -> None:
             _ = run_id
@@ -79,9 +87,23 @@ def test_inventory_saves_each_document_before_reporting_progress() -> None:
             _ = (run_id, delta_link, baseline, reconcile)
 
         async def publish_metadata_runs(
-            self, publications: tuple[MetadataRunPublication, ...]
+            self,
+            publications: tuple[MetadataRunPublication, ...],
+            operation_id: UUID | None = None,
+            summary: dict[str, object] | None = None,
+            domain_ids: dict[str, object] | None = None,
         ) -> None:
-            _ = publications
+            _ = (publications, operation_id, summary, domain_ids)
+
+        async def fail_group_operation(
+            self,
+            operation_id: UUID,
+            failure_code: str,
+            *,
+            interrupted: bool = False,
+            summary: dict[str, object] | None = None,
+        ) -> None:
+            _ = (operation_id, failure_code, interrupted, summary)
 
         async def discard_metadata_run(self, run_id: UUID) -> None:
             _ = run_id
@@ -145,10 +167,18 @@ def test_inventory_does_not_report_progress_when_save_fails() -> None:
 
     class BrokenStore:
         async def begin_metadata_run(
-            self, principal_id: str, drive_id: str, selection: MetadataSelection
+            self,
+            principal_id: str,
+            drive_id: str,
+            selection: MetadataSelection,
+            operation_id: UUID | None = None,
         ) -> MetadataIngestRun:
-            _ = (principal_id, drive_id, selection)
+            _ = (principal_id, drive_id, selection, operation_id)
             return MetadataIngestRun(uuid4(), None, True)
+
+        async def begin_group_operation(self, principal_id: str, group_id: str) -> UUID:
+            _ = (principal_id, group_id)
+            return uuid4()
 
         async def stage_document(self, run_id: UUID, document: Document) -> None:
             _ = run_id
@@ -164,9 +194,23 @@ def test_inventory_does_not_report_progress_when_save_fails() -> None:
             _ = (run_id, delta_link, baseline, reconcile)
 
         async def publish_metadata_runs(
-            self, publications: tuple[MetadataRunPublication, ...]
+            self,
+            publications: tuple[MetadataRunPublication, ...],
+            operation_id: UUID | None = None,
+            summary: dict[str, object] | None = None,
+            domain_ids: dict[str, object] | None = None,
         ) -> None:
-            _ = publications
+            _ = (publications, operation_id, summary, domain_ids)
+
+        async def fail_group_operation(
+            self,
+            operation_id: UUID,
+            failure_code: str,
+            *,
+            interrupted: bool = False,
+            summary: dict[str, object] | None = None,
+        ) -> None:
+            _ = (operation_id, failure_code, interrupted, summary)
 
         async def discard_metadata_run(self, run_id: UUID) -> None:
             _ = run_id

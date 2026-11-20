@@ -35,6 +35,7 @@ class MetadataIngestDriveRequest:
     exclude_paths: list[str] = field(default_factory=list)
     exclude_extensions: list[str] = field(default_factory=list)
     root_item_id: str = "root"
+    operation_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if not self.drive_id.strip():
@@ -105,7 +106,9 @@ async def _begin_metadata_run(
         exclude_extensions=tuple(sorted(set(req.exclude_extensions))),
     )
     try:
-        return await store.begin_metadata_run(principal_id, req.drive_id, selection)
+        return await store.begin_metadata_run(
+            principal_id, req.drive_id, selection, req.operation_id
+        )
     except MetadataRunAlreadyActive:
         raise
     except Exception as exc:

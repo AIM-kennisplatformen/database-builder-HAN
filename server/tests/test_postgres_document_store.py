@@ -86,13 +86,16 @@ def test_startup_recovery_discards_only_staged_rows_and_interrupts_running_runs(
         PostgresDocumentStore(cast(AsyncConnectionPool, pool)).interrupt_metadata_runs()
     )
 
-    assert connection.execute.await_count == 2
+    assert connection.execute.await_count == 3
     (delete_sql,) = connection.execute.await_args_list[0].args
     (update_sql,) = connection.execute.await_args_list[1].args
+    (operation_update_sql,) = connection.execute.await_args_list[2].args
     assert "DELETE FROM document_metadata_staging" in delete_sql
     assert "run.status = 'running'" in delete_sql
     assert "UPDATE document_metadata_runs SET status = 'interrupted'" in update_sql
     assert "WHERE status = 'running'" in update_sql
+    assert "UPDATE operation_runs SET status = 'interrupted'" in operation_update_sql
+    assert "kind = 'metadata.ingest'" in operation_update_sql
     assert "document_ms_graph_sources" not in delete_sql + update_sql
     assert "document_metadata_observations" not in delete_sql + update_sql
 

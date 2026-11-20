@@ -1,10 +1,12 @@
 import asyncio
 from collections.abc import AsyncIterator, Sequence
-from typing import override
+from datetime import UTC, datetime
+from typing import cast, override
 from uuid import UUID, uuid4
 
 import pytest
 
+from api.routes.operations import get_operation_run
 from domain.exceptions.metadata_ingest_errors import MetadataSourceError
 from domain.models.documents.content_version import ContentVersion
 from domain.models.documents.document import (
@@ -20,6 +22,7 @@ from domain.ports.documents.document_store import (
     MetadataRunPublication,
 )
 from domain.ports.documents.group_drive_source import GroupDriveLocation, UserGroup
+from domain.ports.operation_run_store import OperationRun
 from domain.use_cases.group_drive_discovery import GroupNotAccessible
 from domain.use_cases.metadata_ingest import (
     DriveMetadataSelector,
@@ -28,6 +31,7 @@ from domain.use_cases.metadata_ingest import (
     MetadataIngestRequest,
     MetadataIngestResult,
     MetadataIngestSkipped,
+    MetadataIngestStarted,
     ingest_group_metadata,
 )
 
@@ -98,12 +102,45 @@ class Store:
         self.saved: list[Document] = []
         self.staged: dict[UUID, list[Document]] = {}
         self.published_batches: list[list[UUID]] = []
+        self.operation_id: UUID | None = None
+        self.operation_status: str | None = None
+        self.operation_failure_code: str | None = None
+        self.operation_summary: dict[str, object] = {}
+        self.operation_domain_ids: dict[str, object] = {}
+        self.operation_principal_id: str | None = None
+        self.operation_started_at: datetime | None = None
+        self.operation_finished_at: datetime | None = None
+        self.metadata_runs_started: int = 0
+
+    async def begin_group_operation(self, principal_id: str, group_id: str) -> UUID:
+        assert principal_id == "user"
+        _ = group_id
+        self.operation_id = uuid4()
+        self.operation_status = "running"
+        self.operation_principal_id = principal_id
+        self.operation_started_at = datetime.now(UTC)
+        self.operation_finished_at = None
+        self.operation_domain_ids = {"group_id": group_id, "drive_run_ids": []}
+        return self.operation_id
 
     async def begin_metadata_run(
-        self, principal_id: str, drive_id: str, selection: MetadataSelection
+        self,
+        principal_id: str,
+        drive_id: str,
+        selection: MetadataSelection,
+        operation_id: UUID | None = None,
     ) -> MetadataIngestRun:
         _ = (principal_id, drive_id, selection)
-        return MetadataIngestRun(uuid4(), None, True)
+        self.metadata_runs_started += 1
+        if operation_id is not None:
+            assert operation_id == self.operation_id
+        run_id = uuid4()
+        if operation_id is not None:
+            self.operation_domain_ids.setdefault("drive_run_ids", [])
+            cast(list[str], self.operation_domain_ids["drive_run_ids"]).append(
+                str(run_id)
+            )
+        return MetadataIngestRun(run_id, None, True)
 
     async def stage_document(self, run_id: UUID, document: Document) -> None:
         self.staged.setdefault(run_id, []).append(document)
@@ -119,12 +156,56 @@ class Store:
         self.saved.extend(self.staged.pop(run_id, []))
 
     async def publish_metadata_runs(
-        self, publications: tuple[MetadataRunPublication, ...]
+        self,
+        publications: tuple[MetadataRunPublication, ...],
+        operation_id: UUID | None = None,
+        summary: dict[str, object] | None = None,
+        domain_ids: dict[str, object] | None = None,
     ) -> None:
+        assert operation_id == self.operation_id
+        self.operation_status = "complete"
+        self.operation_finished_at = datetime.now(UTC)
+        self.operation_summary = summary or {}
+        self.operation_domain_ids.update(domain_ids or {})
         run_ids = [publication.run_id for publication in publications]
         self.published_batches.append(run_ids)
         for run_id in run_ids:
             self.saved.extend(self.staged.pop(run_id, []))
+
+    async def fail_group_operation(
+        self,
+        operation_id: UUID,
+        failure_code: str,
+        *,
+        interrupted: bool = False,
+        summary: dict[str, object] | None = None,
+    ) -> None:
+        assert operation_id == self.operation_id
+        self.operation_status = "interrupted" if interrupted else "failed"
+        self.operation_failure_code = failure_code
+        self.operation_summary.update(summary or {})
+        self.operation_finished_at = datetime.now(UTC)
+
+    async def get_operation_run(
+        self, operation_id: UUID, principal_id: str
+    ) -> OperationRun | None:
+        if (
+            operation_id != self.operation_id
+            or principal_id != self.operation_principal_id
+            or self.operation_status is None
+            or self.operation_started_at is None
+        ):
+            return None
+        return OperationRun(
+            operation_id,
+            "metadata.ingest",
+            self.operation_status,
+            self.operation_started_at,
+            self.operation_finished_at,
+            self.operation_summary,
+            self.operation_failure_code,
+            self.operation_domain_ids,
+        )
 
     async def discard_metadata_run(self, run_id: UUID) -> None:
         self.staged.pop(run_id, None)
@@ -164,6 +245,11 @@ def test_include_and_exclude_apply_per_drive_filters() -> None:
     assert [document.id.id[0] for document in store.saved] == [
         "private-drive",
     ]
+    assert store.operation_status == "complete"
+    assert store.operation_summary == {"processed": 1, "skipped_drive_ids": []}
+    assert store.operation_domain_ids["group_id"] == "group"
+    drive_run_ids = cast(list[str], store.operation_domain_ids["drive_run_ids"])
+    assert len(drive_run_ids) == 1
 
 
 def test_empty_include_uses_all_drives_and_excludes_selected_extensions() -> None:
@@ -361,6 +447,48 @@ def test_explicitly_included_drive_denial_stops_run() -> None:
     assert error.value.cause.status_code == 403
     assert store.saved == []
     assert store.staged == {}
+
+
+def test_unavailable_explicit_include_is_inspectable_in_operation_status() -> None:
+    metadata, store = Metadata(), Store()
+
+    async def run() -> MetadataIngestStarted:
+        updates = ingest_group_metadata(
+            "user",
+            MetadataIngestRequest(
+                "group", include=[DriveMetadataSelector("unlisted-drive")]
+            ),
+            Groups(),
+            metadata,
+            store,
+        )
+        started = await anext(updates)
+        assert isinstance(started, MetadataIngestStarted)
+        with pytest.raises(MetadataIngestDriveFailure) as error:
+            await anext(updates)
+        assert error.value.drive_id == "unlisted-drive"
+        assert isinstance(error.value.cause, MetadataSourceError)
+        assert error.value.cause.status_code == 403
+        return started
+
+    started = asyncio.run(run())
+    operation = asyncio.run(
+        get_operation_run(started.operation_id, "user", store)
+    )
+
+    assert operation.status == "failed"
+    assert operation.failure_code == "metadata.source_error"
+    assert operation.summary == {
+        "processed": 0,
+        "skipped_drive_ids": [],
+        "failed_drive_id": "unlisted-drive",
+        "source_status": 403,
+        "reason": "Drive is not accessible",
+    }
+    assert operation.domain_ids == {"group_id": "group", "drive_run_ids": []}
+    assert store.metadata_runs_started == 0
+    assert metadata.calls == []
+    assert store.operation_status == "failed"
     assert store.published_batches == []
 
 
@@ -371,6 +499,8 @@ def test_cancellation_before_group_completion_discards_all_staged_drives() -> No
         updates = ingest_group_metadata(
             "user", MetadataIngestRequest("group"), Groups(), metadata, store
         )
+        started = await anext(updates)
+        assert isinstance(started, MetadataIngestStarted)
         first = await anext(updates)
         assert isinstance(first, MetadataIngestProgress)
         await updates.aclose()
@@ -380,17 +510,31 @@ def test_cancellation_before_group_completion_discards_all_staged_drives() -> No
     assert store.saved == []
     assert store.staged == {}
     assert store.published_batches == []
+    assert store.operation_status == "interrupted"
 
 
 def test_later_drive_failure_discards_all_staged_drives() -> None:
-    metadata, store = Metadata("private-drive", 503), Store()
+    metadata, store = Metadata("private-drive", 403), Store()
     seen: list[str] = []
+    operation_ids: list[UUID] = []
 
     async def collect() -> None:
         async for update in ingest_group_metadata(
-            "user", MetadataIngestRequest("group"), Groups(), metadata, store
+            "user",
+            MetadataIngestRequest(
+                "group",
+                include=[
+                    DriveMetadataSelector("team-drive"),
+                    DriveMetadataSelector("private-drive"),
+                ],
+            ),
+            Groups(),
+            metadata,
+            store,
         ):
-            if isinstance(update, MetadataIngestProgress | MetadataIngestSkipped):
+            if isinstance(update, MetadataIngestStarted):
+                operation_ids.append(update.operation_id)
+            elif isinstance(update, MetadataIngestProgress | MetadataIngestSkipped):
                 seen.append(update.drive_id)
 
     with pytest.raises(MetadataIngestDriveFailure) as error:
@@ -401,6 +545,20 @@ def test_later_drive_failure_discards_all_staged_drives() -> None:
     assert store.saved == []
     assert store.staged == {}
     assert store.published_batches == []
+    assert len(operation_ids) == 1
+    operation = asyncio.run(get_operation_run(operation_ids[0], "user", store))
+    assert operation is not None
+    assert operation.status == "failed"
+    assert operation.failure_code == "metadata.source_error"
+    assert operation.summary == {
+        "processed": 1,
+        "skipped_drive_ids": [],
+        "failed_drive_id": "private-drive",
+        "source_status": 403,
+        "reason": "Drive is not accessible",
+    }
+    assert operation.domain_ids["group_id"] == "group"
+    assert len(cast(list[str], operation.domain_ids["drive_run_ids"])) == 2
 
 
 def test_nonmember_group_is_rejected_before_drive_listing() -> None:

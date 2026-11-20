@@ -3,6 +3,7 @@
 from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import datetime
+from json import dumps
 from typing import cast, override
 from uuid import UUID, uuid4
 
@@ -139,9 +140,15 @@ class EmployeePostgresWriter(EmployeeWriter):
         self._pool: AsyncConnectionPool = pool
 
     @override
-    async def begin_sync(self) -> UUID:
+    async def begin_sync(self, principal_id: str) -> UUID:
         run_id = uuid4()
         async with _employee_transaction(self._pool) as (connection, _):
+            _ = await connection.execute(
+                """INSERT INTO operation_runs
+                   (id, principal_id, kind, status, domain_ids)
+                   VALUES (%s, %s, 'employee.sync', 'running', %s::jsonb)""",
+                (run_id, principal_id, dumps({"employee_sync_run_id": str(run_id)})),
+            )
             _ = await connection.execute(
                 "INSERT INTO employee_sync_runs (id, status) VALUES (%s, 'running')",
                 (run_id,),
@@ -235,10 +242,22 @@ class EmployeePostgresWriter(EmployeeWriter):
                 "UPDATE employee_sync_runs SET status = 'complete', finished_at = now() WHERE id = %s",
                 (run_id,),
             )
+            _ = await cursor.execute(
+                """UPDATE operation_runs SET status = 'complete', finished_at = now(),
+                   summary = %s::jsonb, domain_ids = %s::jsonb
+                   WHERE id = %s AND status = 'running'""",
+                (
+                    dumps({"created": created, "updated": updated, "unchanged": unchanged}),
+                    dumps({"employee_sync_run_id": str(run_id)}),
+                    run_id,
+                ),
+            )
         return EmployeeSyncCounts(created, updated, unchanged)
 
     @override
-    async def discard_sync(self, run_id: UUID) -> None:
+    async def discard_sync(self, run_id: UUID, *, interrupted: bool = False) -> None:
+        status = "interrupted" if interrupted else "failed"
+        failure_code = "request_interrupted" if interrupted else "employee_sync_failed"
         with anyio.CancelScope(shield=True):
             async with _employee_transaction(self._pool) as (_, cursor):
                 _ = await cursor.execute(
@@ -246,10 +265,15 @@ class EmployeePostgresWriter(EmployeeWriter):
                     (run_id,),
                 )
                 _ = await cursor.execute(
+                    """UPDATE operation_runs SET status = %s, finished_at = now(),
+                       failure_code = %s WHERE id = %s AND status = 'running'""",
+                    (status, failure_code, run_id),
+                )
+                _ = await cursor.execute(
                     """UPDATE employee_sync_runs
-                       SET status = 'failed', finished_at = now()
+                       SET status = %s, finished_at = now()
                        WHERE id = %s AND status = 'running'""",
-                    (run_id,),
+                    (status, run_id),
                 )
 
     async def interrupt_employee_sync_runs(self) -> None:
@@ -263,4 +287,9 @@ class EmployeePostgresWriter(EmployeeWriter):
             _ = await cursor.execute(
                 """UPDATE employee_sync_runs SET status = 'interrupted',
                    finished_at = now() WHERE status = 'running'"""
+            )
+            _ = await cursor.execute(
+                """UPDATE operation_runs SET status = 'interrupted', finished_at = now(),
+                   failure_code = 'process_interrupted'
+                   WHERE kind = 'employee.sync' AND status = 'running'"""
             )

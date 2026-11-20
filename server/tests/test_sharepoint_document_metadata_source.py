@@ -6,8 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient, Response
+from httpx import Response
 from msgraph.graph_service_client import GraphServiceClient
 from pydantic import ValidationError
 
@@ -16,13 +15,6 @@ from api.routes.documents.metadata import (
     DriveMetadataSelectorBody,
     MetadataIngestRequestBody,
     ingest_group_metadata_endpoint,
-)
-from api.routes.documents.router import router as documents_router
-from dependencies import (
-    get_current_graph_user_id,
-    get_document_metadata_source,
-    get_document_store,
-    get_group_drive_source,
 )
 from domain.exceptions.metadata_ingest_errors import (
     MetadataRunAlreadyActive,
@@ -96,11 +88,23 @@ class MetadataRefreshStore:
         self.cursor: str | None = None
         self.staged: list[Document] = []
         self.published: list[Document] = []
+        self.operation_id: UUID | None = None
+        self.operation_status: str | None = None
+
+    async def begin_group_operation(self, principal_id: str, group_id: str) -> UUID:
+        _ = (principal_id, group_id)
+        self.operation_id = uuid4()
+        self.operation_status = "running"
+        return self.operation_id
 
     async def begin_metadata_run(
-        self, principal_id: str, drive_id: str, selection: MetadataSelection
+        self,
+        principal_id: str,
+        drive_id: str,
+        selection: MetadataSelection,
+        operation_id: UUID | None = None,
     ) -> MetadataIngestRun:
-        _ = (principal_id, drive_id, selection)
+        _ = (principal_id, drive_id, selection, operation_id)
         return MetadataIngestRun(uuid4(), self.cursor, True)
 
     async def stage_document(self, run_id: UUID, document: Document) -> None:
@@ -119,12 +123,31 @@ class MetadataRefreshStore:
         self.cursor = delta_link
 
     async def publish_metadata_runs(
-        self, publications: tuple[MetadataRunPublication, ...]
+        self,
+        publications: tuple[MetadataRunPublication, ...],
+        operation_id: UUID | None = None,
+        summary: dict[str, object] | None = None,
+        domain_ids: dict[str, object] | None = None,
     ) -> None:
+        assert operation_id == self.operation_id
+        _ = (summary, domain_ids)
+        self.operation_status = "complete"
         self.published.extend(self.staged)
         self.staged.clear()
         if publications:
             self.cursor = publications[-1].delta_link
+
+    async def fail_group_operation(
+        self,
+        operation_id: UUID,
+        failure_code: str,
+        *,
+        interrupted: bool = False,
+        summary: dict[str, object] | None = None,
+    ) -> None:
+        assert operation_id == self.operation_id
+        _ = (failure_code, summary)
+        self.operation_status = "interrupted" if interrupted else "failed"
 
     async def discard_metadata_run(self, run_id: UUID) -> None:
         _ = run_id
@@ -980,10 +1003,11 @@ def test_metadata_endpoint_returns_graph_client_error(
         ]
 
     events = asyncio.run(collect())
-    assert len(events) == 1
-    assert events[0].event == "error"
-    assert events[0].data == {
+    assert [event.event for event in events] == ["started", "error"]
+    operation_id = events[0].data["operation_id"]
+    assert events[1].data == {
         "status": "error",
+        "operation_id": operation_id,
         "error": {
             "code": "metadata.source_error",
             "http_status": event_status,
@@ -993,6 +1017,7 @@ def test_metadata_endpoint_returns_graph_client_error(
             "operation": "metadata.ingest",
             "group_id": "group",
             "drive_id": "bad-drive",
+            "operation_id": operation_id,
         },
         "progress": {"processed": 0},
     }
@@ -1073,10 +1098,12 @@ def test_metadata_endpoint_failure_reports_group_progress_count(
         ]
 
     events = asyncio.run(collect())
-    assert [event.event for event in events] == ["progress", "error"]
-    assert events[0].data["processed"] == 1
-    assert events[1].data == {
+    assert [event.event for event in events] == ["started", "progress", "error"]
+    operation_id = events[0].data["operation_id"]
+    assert events[1].data["processed"] == 1
+    assert events[2].data == {
         "status": "error",
+        "operation_id": operation_id,
         "error": {
             "code": "metadata.source_error",
             "http_status": 502,
@@ -1086,6 +1113,7 @@ def test_metadata_endpoint_failure_reports_group_progress_count(
             "operation": "metadata.ingest",
             "group_id": "group",
             "drive_id": "bad-drive",
+            "operation_id": operation_id,
         },
         "progress": {"processed": 1},
     }
@@ -1102,9 +1130,13 @@ def test_metadata_known_error_subclass_inherits_status_and_hides_traceback(
     class AlreadyActiveStore(MetadataRefreshStore):
         @override
         async def begin_metadata_run(
-            self, principal_id: str, drive_id: str, selection: MetadataSelection
+            self,
+            principal_id: str,
+            drive_id: str,
+            selection: MetadataSelection,
+            operation_id: UUID | None = None,
         ) -> MetadataIngestRun:
-            _ = (principal_id, drive_id, selection)
+            _ = (principal_id, drive_id, selection, operation_id)
             raise SpecializedRunAlreadyActive("metadata run is already active")
 
     monkeypatch.setattr(
@@ -1127,9 +1159,11 @@ def test_metadata_known_error_subclass_inherits_status_and_hides_traceback(
         ]
 
     events = asyncio.run(collect())
-    assert [event.event for event in events] == ["error"]
-    assert events[0].data == {
+    assert [event.event for event in events] == ["started", "error"]
+    operation_id = events[0].data["operation_id"]
+    assert events[1].data == {
         "status": "error",
+        "operation_id": operation_id,
         "error": {
             "code": "metadata.run_already_active",
             "http_status": 409,
@@ -1139,6 +1173,7 @@ def test_metadata_known_error_subclass_inherits_status_and_hides_traceback(
             "operation": "metadata.ingest",
             "group_id": "group",
             "drive_id": "bad-drive",
+            "operation_id": operation_id,
         },
         "progress": {"processed": 0},
     }
@@ -1199,17 +1234,25 @@ def test_metadata_endpoint_skips_inaccessible_drive_and_completes() -> None:
         ]
 
     events = asyncio.run(collect())
-    assert [event.event for event in events] == ["skipped", "progress", "complete"]
-    assert events[0].data == {
+    assert [event.event for event in events] == [
+        "started",
+        "skipped",
+        "progress",
+        "complete",
+    ]
+    operation_id = events[0].data["operation_id"]
+    assert events[1].data == {
         "status": "skipped",
+        "operation_id": operation_id,
         "group_id": "group",
         "drive_id": "bad-drive",
         "processed": 0,
         "error_status": 403,
         "detail": "Drive is not accessible",
     }
-    assert events[1].data == {
+    assert events[2].data == {
         "status": "progress",
+        "operation_id": operation_id,
         "group_id": "group",
         "drive_id": "drive",
         "processed": 1,
@@ -1218,8 +1261,9 @@ def test_metadata_endpoint_skips_inaccessible_drive_and_completes() -> None:
         "item_id": "item",
         "name": "Report.pdf",
     }
-    assert events[2].data == {
+    assert events[3].data == {
         "status": "complete",
+        "operation_id": operation_id,
         "group_id": "group",
         "processed": 1,
         "skipped_drive_ids": ["bad-drive"],
@@ -1265,9 +1309,9 @@ def test_metadata_endpoint_reports_explicitly_included_drive_denial() -> None:
         ]
 
     events = asyncio.run(collect())
-    assert [event.event for event in events] == ["error"]
-    assert events[0].data["context"]["drive_id"] == "bad-drive"
-    assert events[0].data["error"] == {
+    assert [event.event for event in events] == ["started", "error"]
+    assert events[1].data["context"]["drive_id"] == "bad-drive"
+    assert events[1].data["error"] == {
         "code": "metadata.source_error",
         "http_status": 403,
         "detail": "Metadata source request failed",
@@ -1291,14 +1335,14 @@ def test_metadata_endpoint_reports_explicit_drive_filtered_by_discovery() -> Non
         ]
 
     events = asyncio.run(collect())
-    assert [event.event for event in events] == ["error"]
-    assert events[0].data["context"]["drive_id"] == "hidden-drive"
-    assert events[0].data["error"] == {
+    assert [event.event for event in events] == ["started", "error"]
+    assert events[1].data["context"]["drive_id"] == "hidden-drive"
+    assert events[1].data["error"] == {
         "code": "metadata.source_error",
         "http_status": 403,
         "detail": "Metadata source request failed",
     }
-    assert events[0].data["progress"]["processed"] == 0
+    assert events[1].data["progress"]["processed"] == 0
 
 
 def test_metadata_duplicate_selection_has_specific_public_error() -> None:
@@ -1321,13 +1365,13 @@ def test_metadata_duplicate_selection_has_specific_public_error() -> None:
         ]
 
     events = asyncio.run(collect())
-    assert [event.event for event in events] == ["error"]
-    assert events[0].data["error"] == {
+    assert [event.event for event in events] == ["started", "error"]
+    assert events[1].data["error"] == {
         "code": "metadata.invalid_selection",
         "http_status": 422,
         "detail": "include and exclude must each have unique drive_id values",
     }
-    assert events[0].data["progress"] == {"processed": 0}
+    assert events[1].data["progress"] == {"processed": 0}
 
 
 def test_metadata_endpoint_reports_and_logs_unexpected_failure(
@@ -1353,10 +1397,11 @@ def test_metadata_endpoint_reports_and_logs_unexpected_failure(
         ]
 
     events = asyncio.run(collect())
-    assert len(events) == 1
-    assert events[0].event == "error"
-    assert events[0].data == {
+    assert [event.event for event in events] == ["started", "error"]
+    operation_id = events[0].data["operation_id"]
+    assert events[1].data == {
         "status": "error",
+        "operation_id": operation_id,
         "error": {
             "code": "internal_error",
             "http_status": 500,
@@ -1366,10 +1411,11 @@ def test_metadata_endpoint_reports_and_logs_unexpected_failure(
             "operation": "metadata.ingest",
             "group_id": "group",
             "drive_id": None,
+            "operation_id": operation_id,
         },
         "progress": {"processed": 0},
     }
-    assert "discovery failed" not in str(events[0].data)
+    assert "discovery failed" not in str(events[1].data)
     failure_records = [record for record in caplog.records if record.exc_info]
     assert len(failure_records) == 1
     assert failure_records[0].exc_info is not None
@@ -1460,18 +1506,21 @@ def test_metadata_endpoint_streams_progress_and_completion() -> None:
                 False,
             )
 
-    app = FastAPI()
-    app.include_router(documents_router)
     saved: list[Document] = []
 
-    async def get_source() -> DocumentRefreshSource:
-        return OneDocumentSource()
-
     class Store:
+        async def begin_group_operation(self, principal_id: str, group_id: str) -> UUID:
+            _ = (principal_id, group_id)
+            return uuid4()
+
         async def begin_metadata_run(
-            self, principal_id: str, drive_id: str, selection: MetadataSelection
+            self,
+            principal_id: str,
+            drive_id: str,
+            selection: MetadataSelection,
+            operation_id: UUID | None = None,
         ) -> MetadataIngestRun:
-            _ = (principal_id, drive_id, selection)
+            _ = (principal_id, drive_id, selection, operation_id)
             return MetadataIngestRun(uuid4(), None, True)
 
         async def stage_document(self, run_id: UUID, document: Document) -> None:
@@ -1487,44 +1536,55 @@ def test_metadata_endpoint_streams_progress_and_completion() -> None:
             _ = (run_id, delta_link, baseline, reconcile)
 
         async def publish_metadata_runs(
-            self, publications: tuple[MetadataRunPublication, ...]
+            self,
+            publications: tuple[MetadataRunPublication, ...],
+            operation_id: UUID | None = None,
+            summary: dict[str, object] | None = None,
+            domain_ids: dict[str, object] | None = None,
         ) -> None:
-            _ = publications
+            _ = (publications, operation_id, summary, domain_ids)
+
+        async def fail_group_operation(
+            self,
+            operation_id: UUID,
+            failure_code: str,
+            *,
+            interrupted: bool = False,
+            summary: dict[str, object] | None = None,
+        ) -> None:
+            _ = (operation_id, failure_code, interrupted, summary)
 
         async def discard_metadata_run(self, run_id: UUID) -> None:
             _ = run_id
             saved.clear()
 
-    async def get_store() -> DocumentRefreshStore:
-        return Store()
-
-    app.dependency_overrides[get_document_metadata_source] = get_source
-    app.dependency_overrides[get_document_store] = get_store
-    app.dependency_overrides[get_group_drive_source] = lambda: OneGroupSource()
-    app.dependency_overrides[get_current_graph_user_id] = lambda: "user"
-
-    async def request() -> Response:
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            return await client.post(
-                "/api/v1/documents/groups/group/metadata",
-                json={
-                    "include": [
-                        {"drive_id": "drive", "paths": [], "extensions": ["pdf"]}
-                    ],
-                    "exclude": [],
-                },
+    async def collect():
+        return [
+            event
+            async for event in ingest_group_metadata_endpoint(
+                "group",
+                MetadataIngestRequestBody(
+                    include=[
+                        DriveMetadataSelectorBody(
+                            drive_id="drive", paths=[], extensions=["pdf"]
+                        )
+                    ]
+                ),
+                "user",
+                OneGroupSource(),
+                OneDocumentSource(),
+                Store(),
             )
+        ]
 
-    response = asyncio.run(request())
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/event-stream")
-    assert "event: progress" in response.text
-    assert "event: complete" in response.text
-    assert '"item_id": "item"' in response.text
-    assert response.text.count('"total": 1') == 1
-    assert response.text.count('"available": 1') == 1
+    events = asyncio.run(collect())
+    assert [event.event for event in events] == ["started", "progress", "complete"]
+    operation_id = events[0].data["operation_id"]
+    assert events[1].data["operation_id"] == operation_id
+    assert events[1].data["item_id"] == "item"
+    assert events[1].data["total"] == 1
+    assert events[1].data["available"] == 1
+    assert events[2].data["operation_id"] == operation_id
     assert [document.id.id for document in saved] == [("drive", "item")]
 
 
@@ -1575,8 +1635,8 @@ def test_metadata_endpoint_accepts_include_paths_without_extensions() -> None:
         ]
 
     events = asyncio.run(collect())
-    assert [event.event for event in events] == ["complete"]
-    assert events[0].data["processed"] == 0
+    assert [event.event for event in events] == ["started", "complete"]
+    assert events[1].data["processed"] == 0
 
 
 def test_metadata_endpoint_close_discards_staged_refresh() -> None:
@@ -1631,11 +1691,21 @@ def test_metadata_endpoint_close_discards_staged_refresh() -> None:
             self.published: dict[str, Document] = {"old": old_document}
             self.cursor: str | None = "old-cursor"
             self.failed: bool = False
+            self.operation_id: UUID | None = None
+
+        async def begin_group_operation(self, principal_id: str, group_id: str) -> UUID:
+            _ = (principal_id, group_id)
+            self.operation_id = uuid4()
+            return self.operation_id
 
         async def begin_metadata_run(
-            self, principal_id: str, drive_id: str, selection: MetadataSelection
+            self,
+            principal_id: str,
+            drive_id: str,
+            selection: MetadataSelection,
+            operation_id: UUID | None = None,
         ) -> MetadataIngestRun:
-            _ = (principal_id, drive_id, selection)
+            _ = (principal_id, drive_id, selection, operation_id)
             return MetadataIngestRun(uuid4(), self.cursor, True)
 
         async def stage_document(self, run_id: object, document: Document) -> None:
@@ -1653,10 +1723,27 @@ def test_metadata_endpoint_close_discards_staged_refresh() -> None:
             self.cursor = delta_link
 
         async def publish_metadata_runs(
-            self, publications: tuple[MetadataRunPublication, ...]
+            self,
+            publications: tuple[MetadataRunPublication, ...],
+            operation_id: UUID | None = None,
+            summary: dict[str, object] | None = None,
+            domain_ids: dict[str, object] | None = None,
         ) -> None:
+            assert operation_id == self.operation_id
+            _ = (summary, domain_ids)
             self.published.update(self.staged)
             self.cursor = publications[-1].delta_link
+
+        async def fail_group_operation(
+            self,
+            operation_id: UUID,
+            failure_code: str,
+            *,
+            interrupted: bool = False,
+            summary: dict[str, object] | None = None,
+        ) -> None:
+            assert operation_id == self.operation_id
+            _ = (failure_code, interrupted, summary)
 
         async def discard_metadata_run(self, run_id: object) -> None:
             _ = run_id
@@ -1674,6 +1761,8 @@ def test_metadata_endpoint_close_discards_staged_refresh() -> None:
             cast(DocumentRefreshStore, cast(object, store)),
         )
 
+        started = await anext(endpoint)
+        assert started.event == "started"
         event = await anext(endpoint)
         assert event.event == "progress"
         assert store.staged == {"new": new_document}

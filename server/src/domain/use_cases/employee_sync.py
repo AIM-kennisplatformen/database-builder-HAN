@@ -31,10 +31,16 @@ class EmployeesSyncProgress:
     created: int
     updated: int
     unchanged: int
+    operation_id: UUID
 
     @property
     def processed(self) -> int:
         return self.created + self.updated + self.unchanged
+
+
+@dataclass(frozen=True)
+class EmployeesSyncStarted:
+    operation_id: UUID
 
 
 @dataclass(frozen=True)
@@ -44,6 +50,7 @@ class EmployeesSyncResult:
     created: int
     updated: int
     unchanged: int
+    operation_id: UUID
 
     @property
     def processed(self) -> int:
@@ -75,11 +82,11 @@ async def _write_employee(
         raise StoreUnavailable("Employee store is unavailable") from exc
 
 
-async def _begin_sync(store: EmployeeWriter) -> UUID:
+async def _begin_sync(store: EmployeeWriter, principal_id: str) -> UUID:
     run_id: UUID | None = None
     with anyio.CancelScope(shield=True):
         try:
-            run_id = await store.begin_sync()
+            run_id = await store.begin_sync(principal_id)
         except Exception as exc:
             raise StoreUnavailable("Employee store is unavailable") from exc
     if run_id is None:
@@ -94,20 +101,27 @@ async def _publish_sync(store: EmployeeWriter, run_id: UUID) -> EmployeeSyncCoun
         raise StoreUnavailable("Employee store is unavailable") from exc
 
 
-async def _discard_sync(store: EmployeeWriter, run_id: UUID) -> None:
+async def _discard_sync(
+    store: EmployeeWriter, run_id: UUID, *, interrupted: bool = False
+) -> None:
     try:
-        await store.discard_sync(run_id)
+        await store.discard_sync(run_id, interrupted=interrupted)
     except Exception as exc:
         raise StoreUnavailable("Employee store is unavailable") from exc
 
 
 async def sync_employees(
-    req: EmployeesSyncRequest, source: EmployeeSource, store: EmployeeWriter
-) -> AsyncGenerator[EmployeesSyncProgress | EmployeesSyncResult]:
+    req: EmployeesSyncRequest,
+    source: EmployeeSource,
+    store: EmployeeWriter,
+    principal_id: str,
+) -> AsyncGenerator[
+    EmployeesSyncStarted | EmployeesSyncProgress | EmployeesSyncResult
+]:
     if req.limit is not None and req.limit <= 0:
         raise InvalidLimit("Employee sync limit must be positive")
 
-    run_id = await _begin_sync(store)
+    run_id = await _begin_sync(store, principal_id)
     created = 0
     updated = 0
     unchanged = 0
@@ -115,8 +129,10 @@ async def sync_employees(
     total: int | None = None
     available = 0
     published = False
+    interrupted = False
     updates = _stream_employee_source(source, req.limit)
     try:
+        yield EmployeesSyncStarted(run_id)
         async for item in updates:
             total = item.total
             available = item.available
@@ -133,6 +149,7 @@ async def sync_employees(
                 created=created,
                 updated=updated,
                 unchanged=unchanged,
+                operation_id=run_id,
             )
 
         if created + updated + unchanged == 0:
@@ -146,11 +163,15 @@ async def sync_employees(
             counts.created,
             counts.updated,
             counts.unchanged,
+            run_id,
         )
+    except BaseException as exc:
+        interrupted = isinstance(exc, anyio.get_cancelled_exc_class() | GeneratorExit)
+        raise
     finally:
         with anyio.CancelScope(shield=True):
             try:
                 await updates.aclose()
             finally:
                 if not published:
-                    await _discard_sync(store, run_id)
+                    await _discard_sync(store, run_id, interrupted=interrupted)
