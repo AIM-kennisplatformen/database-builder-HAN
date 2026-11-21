@@ -19,7 +19,7 @@ from domain.exceptions.metadata_ingest_errors import MetadataRunAlreadyActive
 from domain.models.documents.document import Document, DocumentMetadata
 from domain.models.documents.metadata_selection import MetadataSelection
 from domain.ports.documents.document_store import (
-    DocumentRefreshStore,
+    CombinedDocumentRefreshStore,
     DocumentStore,
     MetadataIngestRun,
     MetadataRunPublication,
@@ -55,7 +55,7 @@ async def _staging_transaction(
             _ = await stack.__aexit__(None, None, None)
 
 
-class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
+class PostgresDocumentStore(DocumentStore, CombinedDocumentRefreshStore):
     def __init__(self, pool: AsyncConnectionPool) -> None:
         self._pool: AsyncConnectionPool = pool
 
@@ -202,10 +202,90 @@ class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
                 (
                     operation_id,
                     principal_id,
-                    dumps({"group_id": group_id, "drive_run_ids": []}),
+                    dumps(
+                        {
+                            "group_id": group_id,
+                            "drive_run_ids": [],
+                        }
+                    ),
                 ),
             )
         return operation_id
+
+    async def _set_drive_outcome(
+        self,
+        connection: AsyncConnection[tuple[object, ...]],
+        operation_id: UUID,
+        drive_id: str,
+        outcome: dict[str, object],
+    ) -> None:
+        cursor = await connection.execute(
+            """UPDATE operation_runs
+               SET summary = jsonb_set(
+                 jsonb_set(summary, '{drive_outcomes}',
+                   COALESCE(summary->'drive_outcomes', '{}'::jsonb), TRUE),
+                 ARRAY['drive_outcomes', %s],
+                 CASE WHEN summary->'drive_outcomes'->%s->>'status' IN
+                   ('published', 'failed', 'skipped', 'interrupted')
+                   THEN summary->'drive_outcomes'->%s
+                   ELSE %s::jsonb END,
+                 TRUE)
+               WHERE id = %s AND status = 'running'
+               RETURNING id""",
+            (drive_id, drive_id, drive_id, dumps(outcome), operation_id),
+        )
+        if await cursor.fetchone() is None:
+            raise ValueError("Combined metadata operation is not active")
+
+    @override
+    async def record_metadata_drive_outcome(
+        self, operation_id: UUID, drive_id: str, outcome: dict[str, object]
+    ) -> None:
+        async with _staging_transaction(self._pool) as connection:
+            await self._set_drive_outcome(connection, operation_id, drive_id, outcome)
+
+    @override
+    async def publish_metadata_drive(
+        self,
+        operation_id: UUID,
+        drive_id: str,
+        publication: MetadataRunPublication,
+        outcome: dict[str, object],
+    ) -> None:
+        """Publish one drive snapshot and its parent outcome atomically."""
+        async with _staging_transaction(self._pool) as connection:
+            cursor = await connection.execute(
+                """SELECT drive_id, operation_id FROM document_metadata_runs
+                   WHERE id = %s AND status = 'running' FOR UPDATE""",
+                (publication.run_id,),
+            )
+            row = await cursor.fetchone()
+            if row is None or row != (drive_id, operation_id):
+                raise ValueError(
+                    "Metadata run does not belong to this combined drive operation"
+                )
+            await self._publish_metadata_run(connection, publication)
+            await self._set_drive_outcome(
+                connection,
+                operation_id,
+                drive_id,
+                outcome,
+            )
+
+    @override
+    async def complete_group_operation(
+        self, operation_id: UUID, summary: dict[str, object]
+    ) -> None:
+        async with _staging_transaction(self._pool) as connection:
+            cursor = await connection.execute(
+                """UPDATE operation_runs SET status = 'complete', finished_at = now(),
+                   summary = summary || %s::jsonb
+                   WHERE id = %s AND status = 'running'
+                   RETURNING id""",
+                (dumps(summary), operation_id),
+            )
+            if await cursor.fetchone() is None:
+                raise ValueError("Combined metadata operation is not active")
 
     @override
     async def fail_group_operation(
@@ -219,7 +299,8 @@ class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
         async with self._pool.connection() as connection:
             _ = await connection.execute(
                 """UPDATE operation_runs SET status = %s, finished_at = now(),
-                   failure_code = %s, summary = COALESCE(%s::jsonb, summary)
+                   failure_code = %s,
+                   summary = summary || COALESCE(%s::jsonb, '{}'::jsonb)
                    WHERE id = %s AND status = 'running'""",
                 (
                     "interrupted" if interrupted else "failed",
@@ -428,7 +509,7 @@ class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
 
     async def interrupt_metadata_runs(self) -> None:
         """Recover per-drive runs orphaned by a process crash at startup."""
-        async with self._pool.connection() as connection:
+        async with _staging_transaction(self._pool) as connection:
             _ = await connection.execute(
                 """DELETE FROM document_metadata_staging AS staging
                    USING document_metadata_runs AS run
@@ -440,6 +521,19 @@ class PostgresDocumentStore(DocumentStore, DocumentRefreshStore):
             )
             _ = await connection.execute(
                 """UPDATE operation_runs SET status = 'interrupted', finished_at = now(),
-                   failure_code = 'process_interrupted'
+                   failure_code = 'process_interrupted',
+                   summary = jsonb_set(
+                     summary, '{drive_outcomes}',
+                     COALESCE((
+                       SELECT jsonb_object_agg(
+                         outcome.key,
+                         CASE WHEN outcome.value->>'status' = 'refreshing'
+                           THEN jsonb_set(outcome.value, '{status}',
+                             '\"interrupted\"'::jsonb, TRUE)
+                           ELSE outcome.value END)
+                       FROM jsonb_each(COALESCE(
+                         operation_runs.summary->'drive_outcomes', '{}'::jsonb
+                       )) AS outcome
+                     ), '{}'::jsonb), TRUE)
                    WHERE kind = 'metadata.ingest' AND status = 'running'"""
             )

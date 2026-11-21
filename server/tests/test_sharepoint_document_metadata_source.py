@@ -1304,6 +1304,68 @@ def test_metadata_endpoint_failure_reports_group_progress_count(
     }
 
 
+def test_metadata_only_endpoint_keeps_group_atomic_publication() -> None:
+    class TwoDriveGroup(OneGroupSource):
+        @override
+        async def stream_group_drive_ids(self, group_id: str) -> AsyncIterator[str]:
+            assert group_id == "group"
+            yield "first-drive"
+            yield "second-drive"
+
+    class FailSecondDrive:
+        async def scan_metadata(
+            self,
+            drive_id: str,
+            selection: MetadataSelection,
+            root_item_id: str,
+            cursor: str | None,
+        ) -> DocumentMetadataScan:
+            _ = (selection, root_item_id)
+            assert cursor is None
+            if drive_id == "second-drive":
+                raise MetadataSourceError(503, "Graph unavailable")
+            return DocumentMetadataScan(
+                (
+                    Document(
+                        _id=DocumentId("first-drive", "item"),
+                        file_metadata=FileMetadata(
+                            name="Report.pdf",
+                            mime_type="application/pdf",
+                            size_bytes=10,
+                            content_version=ContentVersion("v1"),
+                            source_url=None,
+                        ),
+                        document_metadata=DocumentMetadata(),
+                    ),
+                ),
+                (),
+                "first-cursor",
+                True,
+            )
+
+    store = MetadataRefreshStore()
+
+    async def collect():
+        return [
+            event
+            async for event in ingest_group_metadata_endpoint(
+                "group",
+                MetadataIngestRequestBody(),
+                "user",
+                TwoDriveGroup(),
+                FailSecondDrive(),
+                store,
+            )
+        ]
+
+    events = asyncio.run(collect())
+
+    assert [event.event for event in events] == ["started", "progress", "error"]
+    assert store.published == []
+    assert store.staged == []
+    assert store.operation_status == "failed"
+
+
 def test_metadata_known_error_subclass_inherits_status_and_hides_traceback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

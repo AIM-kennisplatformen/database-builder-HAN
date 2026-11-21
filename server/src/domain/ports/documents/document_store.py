@@ -64,5 +64,25 @@ class DocumentRefreshStore(Protocol):
     async def discard_metadata_run(self, run_id: UUID) -> None: ...
 
 
+class CombinedDocumentRefreshStore(DocumentRefreshStore, Protocol):
+    """Storage operations used by per-drive combined metadata publication."""
+
+    async def publish_metadata_drive(
+        self,
+        operation_id: UUID,
+        drive_id: str,
+        publication: MetadataRunPublication,
+        outcome: dict[str, object],
+    ) -> None: ...
+
+    async def record_metadata_drive_outcome(
+        self, operation_id: UUID, drive_id: str, outcome: dict[str, object]
+    ) -> None: ...
+
+    async def complete_group_operation(
+        self, operation_id: UUID, summary: dict[str, object]
+    ) -> None: ...
+
+
 class DocumentMetadataDeleter(Protocol):
     async def delete_all_metadata(self) -> bool: ...
