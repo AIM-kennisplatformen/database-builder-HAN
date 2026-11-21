@@ -12,7 +12,10 @@ from domain.models.documents.document import (
     DocumentMetadata,
     FileMetadata,
 )
-from domain.models.documents.metadata_selection import MetadataSelection
+from domain.models.documents.metadata_selection import (
+    MetadataPathRule,
+    MetadataSelection,
+)
 from domain.ports.documents.document_metadata_source import (
     DocumentMetadataScan,
     DocumentRefreshSource,
@@ -47,19 +50,13 @@ class Source:
     async def scan_metadata(
         self,
         drive_id: str,
-        extensions: list[str],
-        include_paths: list[str],
-        exclude_paths: list[str],
-        exclude_extensions: list[str],
+        selection: MetadataSelection,
         root_item_id: str,
         cursor: str | None,
     ) -> DocumentMetadataScan:
         _ = (
             drive_id,
-            extensions,
-            include_paths,
-            exclude_paths,
-            exclude_extensions,
+            selection,
             root_item_id,
         )
         self.received_cursor = cursor
@@ -135,7 +132,7 @@ def test_refresh_publishes_documents_deletions_and_cursor_together() -> None:
 
     assert asyncio.run(collect()) == ["new"]
     assert source.received_cursor == "old-cursor"
-    assert store.selection == MetadataSelection("root", (), (), (), ())
+    assert store.selection == MetadataSelection((), ())
     assert store.published == {"new": new}
     assert store.cursor == "new-cursor"
     assert store.completed
@@ -209,7 +206,10 @@ def test_path_scope_uses_baseline_even_when_cursor_exists() -> None:
     async def collect() -> None:
         async for _ in ingest_metadata(
             "operator",
-            MetadataIngestDriveRequest("drive", include_paths=["Reports"]),
+            MetadataIngestDriveRequest(
+                "drive",
+                include_rules=(MetadataPathRule("Reports", ()),),
+            ),
             cast(DocumentRefreshSource, cast(object, source)),
             cast(DocumentRefreshStore, cast(object, store)),
         ):
@@ -218,6 +218,28 @@ def test_path_scope_uses_baseline_even_when_cursor_exists() -> None:
     asyncio.run(collect())
     assert source.received_cursor is None
     assert store.completed
+
+
+def test_root_extension_filter_reuses_incremental_cursor() -> None:
+    source = Source(DocumentMetadataScan((), (), "new-cursor", False))
+    store = Store("old-cursor")
+
+    async def collect() -> None:
+        async for _ in ingest_metadata(
+            "operator",
+            MetadataIngestDriveRequest(
+                "drive",
+                include_rules=(MetadataPathRule("", (".PDF",)),),
+            ),
+            cast(DocumentRefreshSource, cast(object, source)),
+            cast(DocumentRefreshStore, cast(object, store)),
+        ):
+            pass
+
+    asyncio.run(collect())
+    assert source.received_cursor == "old-cursor"
+    assert store.selection is not None
+    assert store.selection.include_rules == (MetadataPathRule("", ("pdf",)),)
 
 
 def test_cancelled_refresh_discards_staging_and_preserves_published_catalog() -> None:

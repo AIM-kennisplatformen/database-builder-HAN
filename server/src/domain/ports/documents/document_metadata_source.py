@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from domain.models.documents.document import Document
+from domain.models.documents.metadata_selection import MetadataSelection
 
 
 @dataclass(frozen=True)
@@ -24,10 +25,7 @@ class DocumentMetadataSource(Protocol):
     def stream_metadata(
         self,
         drive_id: str,
-        extensions: list[str],
-        include_paths: list[str],
-        exclude_paths: list[str],
-        exclude_extensions: list[str],
+        selection: MetadataSelection,
         root_item_id: str,
     ) -> AsyncIterator[DocumentMetadataItem]: ...
 
@@ -36,10 +34,7 @@ class DocumentRefreshSource(Protocol):
     async def scan_metadata(
         self,
         drive_id: str,
-        extensions: list[str],
-        include_paths: list[str],
-        exclude_paths: list[str],
-        exclude_extensions: list[str],
+        selection: MetadataSelection,
         root_item_id: str,
         cursor: str | None,
     ) -> DocumentMetadataScan: ...

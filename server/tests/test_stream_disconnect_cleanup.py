@@ -121,14 +121,11 @@ class BlockingMetadataSource:
     async def scan_metadata(
         self,
         drive_id: str,
-        extensions: list[str],
-        include_paths: list[str],
-        exclude_paths: list[str],
-        exclude_extensions: list[str],
+        selection: MetadataSelection,
         root_item_id: str,
         cursor: str | None,
     ) -> DocumentMetadataScan:
-        _ = (extensions, include_paths, exclude_paths, exclude_extensions)
+        _ = selection
         assert (drive_id, root_item_id, cursor) == ("drive", "root", None)
         documents = tuple(
             Document(

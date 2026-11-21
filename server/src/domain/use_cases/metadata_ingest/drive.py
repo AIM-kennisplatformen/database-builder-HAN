@@ -1,6 +1,6 @@
 import logging
 from collections.abc import AsyncGenerator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from uuid import UUID
 
 import anyio
@@ -13,7 +13,11 @@ from domain.exceptions.metadata_ingest_errors import (
     StoreUnavailable,
 )
 from domain.models.documents.document import Document
-from domain.models.documents.metadata_selection import MetadataSelection
+from domain.models.documents.metadata_selection import (
+    MetadataPathRule,
+    MetadataSelection,
+    normalize_metadata_rules,
+)
 from domain.ports.documents.document_metadata_source import (
     DocumentMetadataScan,
     DocumentRefreshSource,
@@ -30,10 +34,8 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class MetadataIngestDriveRequest:
     drive_id: str
-    extensions: list[str] = field(default_factory=list)
-    include_paths: list[str] = field(default_factory=list)
-    exclude_paths: list[str] = field(default_factory=list)
-    exclude_extensions: list[str] = field(default_factory=list)
+    include_rules: tuple[MetadataPathRule, ...] = ()
+    exclude_rules: tuple[MetadataPathRule, ...] = ()
     root_item_id: str = "root"
     operation_id: UUID | None = None
 
@@ -43,41 +45,15 @@ class MetadataIngestDriveRequest:
         if not self.root_item_id.strip():
             raise InvalidMetadataSelection("root_item_id is required")
 
-        def normalize_extensions(extensions: list[str]) -> list[str]:
-            normalized = [
-                extension.strip().lower().removeprefix(".") for extension in extensions
-            ]
-            if any(
-                not extension.isascii() or not extension.isalnum()
-                for extension in normalized
-            ):
-                raise InvalidMetadataSelection("extensions must be alphanumeric")
-            return normalized
-
-        def normalize_paths(paths: list[str], field_name: str) -> list[str]:
-            normalized_paths: list[str] = []
-            for path in paths:
-                normalized_path = path.strip("/")
-                if not normalized_path or any(
-                    not segment.strip() or segment in {".", ".."}
-                    for segment in normalized_path.split("/")
-                ):
-                    raise InvalidMetadataSelection(
-                        f"{field_name} must contain folder paths relative to the scan root"
-                    )
-                if normalized_path not in normalized_paths:
-                    normalized_paths.append(normalized_path)
-            return normalized_paths
-
         object.__setattr__(
-            self, "include_paths", normalize_paths(self.include_paths, "include_paths")
+            self,
+            "include_rules",
+            normalize_metadata_rules(self.include_rules, "include_rules"),
         )
         object.__setattr__(
-            self, "exclude_paths", normalize_paths(self.exclude_paths, "exclude_paths")
-        )
-        object.__setattr__(self, "extensions", normalize_extensions(self.extensions))
-        object.__setattr__(
-            self, "exclude_extensions", normalize_extensions(self.exclude_extensions)
+            self,
+            "exclude_rules",
+            normalize_metadata_rules(self.exclude_rules, "exclude_rules"),
         )
 
 
@@ -98,13 +74,7 @@ async def _begin_metadata_run(
     principal_id: str,
     req: MetadataIngestDriveRequest,
 ) -> MetadataIngestRun:
-    selection = MetadataSelection(
-        root_item_id=req.root_item_id,
-        extensions=tuple(sorted(set(req.extensions))),
-        include_paths=tuple(sorted(set(req.include_paths))),
-        exclude_paths=tuple(sorted(set(req.exclude_paths))),
-        exclude_extensions=tuple(sorted(set(req.exclude_extensions))),
-    )
+    selection = MetadataSelection(req.include_rules, req.exclude_rules)
     try:
         return await store.begin_metadata_run(
             principal_id, req.drive_id, selection, req.operation_id
@@ -121,14 +91,16 @@ async def _scan_metadata_source(
     cursor: str | None,
 ) -> DocumentMetadataScan:
     try:
+        selection = MetadataSelection(req.include_rules, req.exclude_rules)
         return await source.scan_metadata(
             req.drive_id,
-            req.extensions,
-            req.include_paths,
-            req.exclude_paths,
-            req.exclude_extensions,
+            selection,
             req.root_item_id,
-            cursor if not (req.include_paths or req.exclude_paths) else None,
+            cursor
+            if not any(
+                rule.path for rule in selection.include_rules + selection.exclude_rules
+            )
+            else None,
         )
     except MetadataSourceError:
         raise
@@ -193,9 +165,7 @@ async def _stage_metadata(
         await _stage_deleted_item(store, run_id, item_id)
 
 
-async def _discard_metadata_run(
-    store: DocumentRefreshStore, run_id: UUID
-) -> None:
+async def _discard_metadata_run(store: DocumentRefreshStore, run_id: UUID) -> None:
     """Clear staging; log cleanup failures so they do not mask the scan failure."""
     with anyio.CancelScope(shield=True):
         try:

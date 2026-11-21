@@ -11,6 +11,10 @@ from domain.exceptions.metadata_ingest_errors import (
     SourceUnavailable,
     StoreUnavailable,
 )
+from domain.models.documents.metadata_selection import (
+    MetadataPathRule,
+    normalize_metadata_rules,
+)
 from domain.ports.documents.document_metadata_source import DocumentRefreshSource
 from domain.ports.documents.document_store import (
     DocumentRefreshStore,
@@ -32,6 +36,51 @@ class DriveMetadataSelector:
     drive_id: str
     paths: list[str] = field(default_factory=list)
     extensions: list[str] = field(default_factory=list)
+
+
+def _selector_rules(
+    selectors: list[DriveMetadataSelector],
+) -> dict[str, tuple[MetadataPathRule, ...]]:
+    grouped: dict[str, list[MetadataPathRule]] = {}
+    for selector in selectors:
+        if not selector.drive_id.strip():
+            raise InvalidMetadataSelection("drive_id is required")
+        if selector.paths and any(
+            not path.replace("\\", "/").strip("/") for path in selector.paths
+        ):
+            raise InvalidMetadataSelection(
+                "paths must contain folder paths relative to the scan root"
+            )
+        paths = selector.paths or [""]
+        normalized_rules = normalize_metadata_rules(
+            tuple(MetadataPathRule(path, tuple(selector.extensions)) for path in paths),
+            "paths",
+        )
+        rules = grouped.setdefault(selector.drive_id, [])
+        rules.extend(normalized_rules)
+    return {
+        drive_id: normalize_metadata_rules(tuple(rules), "selectors")
+        for drive_id, rules in grouped.items()
+    }
+
+
+def _validate_selector_conflicts(
+    include_rules: dict[str, tuple[MetadataPathRule, ...]],
+    exclude_rules: dict[str, tuple[MetadataPathRule, ...]],
+) -> None:
+    for drive_id in include_rules.keys() & exclude_rules.keys():
+        for include in include_rules[drive_id]:
+            for exclude in exclude_rules[drive_id]:
+                if include.path != exclude.path:
+                    continue
+                if (
+                    not include.extensions
+                    or not exclude.extensions
+                    or set(include.extensions) & set(exclude.extensions)
+                ):
+                    raise InvalidMetadataSelection(
+                        f"include and exclude selectors overlap for drive {drive_id} at {include.path or '/'}"
+                    )
 
 
 @dataclass(frozen=True)
@@ -160,12 +209,10 @@ async def _ingest_group_metadata(
     group = await get_group_drives(user_id, request.group_id, drive_source)
     locations = {location.drive_id: location for location in group.locations}
     available = set(locations)
-    included = {selector.drive_id: selector for selector in request.include}
-    excluded = {selector.drive_id: selector for selector in request.exclude}
-    if len(included) != len(request.include) or len(excluded) != len(request.exclude):
-        raise InvalidMetadataSelection(
-            "include and exclude must each have unique drive_id values"
-        )
+    included_rules = _selector_rules(request.include)
+    excluded_rules = _selector_rules(request.exclude)
+    included = set(included_rules)
+    excluded = set(excluded_rules)
     unavailable_included = [
         drive_id for drive_id in included if drive_id not in available
     ]
@@ -174,34 +221,36 @@ async def _ingest_group_metadata(
             unavailable_included[0],
             MetadataSourceError(403, "Included drive is not accessible in this group"),
         )
-    unknown_excluded = set(excluded) - available
+    unknown_excluded = excluded - available
     if unknown_excluded:
         raise InvalidMetadataSelection(
             "drive IDs are not available in this group: "
             + ", ".join(sorted(unknown_excluded))
         )
-    if included and set(excluded) - set(included):
+    if included and excluded - included:
         raise InvalidMetadataSelection("excluded drives must also be included")
+    _validate_selector_conflicts(included_rules, excluded_rules)
     selected = tuple(
         drive_id
         for drive_id in group.drive_ids
         if (not included or drive_id in included)
         and (
             drive_id not in excluded
-            or excluded[drive_id].paths
-            or excluded[drive_id].extensions
+            or not any(
+                not selector.paths and not selector.extensions
+                for selector in request.exclude
+                if selector.drive_id == drive_id
+            )
         )
     )
     # Construct every per-drive request before the first write.
     requests = [
         MetadataIngestDriveRequest(
             drive_id,
-            included[drive_id].extensions if drive_id in included else [],
-            included[drive_id].paths if drive_id in included else [],
-            excluded[drive_id].paths if drive_id in excluded else [],
-            excluded[drive_id].extensions if drive_id in excluded else [],
-            locations[drive_id].root_item_id,
-            operation_id,
+            root_item_id=locations[drive_id].root_item_id,
+            operation_id=operation_id,
+            include_rules=included_rules.get(drive_id, ()),
+            exclude_rules=excluded_rules.get(drive_id, ()),
         )
         for drive_id in selected
     ]
@@ -266,6 +315,10 @@ async def ingest_group_metadata(
     | MetadataIngestSkipped
     | MetadataIngestResult
 ]:
+    # Normalize and reject malformed or ambiguous selectors before creating a run.
+    included_rules = _selector_rules(request.include)
+    excluded_rules = _selector_rules(request.exclude)
+    _validate_selector_conflicts(included_rules, excluded_rules)
     operation_id = await store.begin_group_operation(user_id, request.group_id)
     updates = _ingest_group_metadata(
         user_id, request, drive_source, metadata_source, store, operation_id
@@ -288,9 +341,7 @@ async def ingest_group_metadata(
             "skipped_drive_ids": skipped_drive_ids,
         }
         if not cancelled and isinstance(exc, Exception):
-            failure_code, summary = _failure_details(
-                exc, processed, skipped_drive_ids
-            )
+            failure_code, summary = _failure_details(exc, processed, skipped_drive_ids)
         with anyio.CancelScope(shield=True):
             await store.fail_group_operation(
                 operation_id,

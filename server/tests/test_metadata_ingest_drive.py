@@ -11,7 +11,10 @@ from domain.models.documents.document import (
     DocumentMetadata,
     FileMetadata,
 )
-from domain.models.documents.metadata_selection import MetadataSelection
+from domain.models.documents.metadata_selection import (
+    MetadataPathRule,
+    MetadataSelection,
+)
 from domain.ports.documents.document_metadata_source import DocumentMetadataScan
 from domain.ports.documents.document_store import (
     MetadataIngestRun,
@@ -41,21 +44,15 @@ def test_inventory_saves_each_document_before_reporting_progress() -> None:
         async def scan_metadata(
             self,
             drive_id: str,
-            extensions: list[str],
-            include_paths: list[str],
-            exclude_paths: list[str],
-            exclude_extensions: list[str],
+            selection: MetadataSelection,
             root_item_id: str,
             cursor: str | None,
         ) -> DocumentMetadataScan:
             assert root_item_id == "root"
-            assert (
-                drive_id,
-                extensions,
-                include_paths,
-                exclude_paths,
-                exclude_extensions,
-            ) == ("drive", ["pdf"], [], [], [])
+            assert drive_id == "drive"
+            assert selection == MetadataSelection(
+                (MetadataPathRule("", ("pdf",)),), ()
+            )
             assert cursor is None
             return DocumentMetadataScan((document,), (), "next", False)
 
@@ -114,7 +111,10 @@ def test_inventory_saves_each_document_before_reporting_progress() -> None:
             update.document
             async for update in ingest_metadata(
                 "operator",
-                MetadataIngestDriveRequest("drive", ["pdf"]),
+                MetadataIngestDriveRequest(
+                    "drive",
+                    include_rules=(MetadataPathRule("", ("pdf",)),),
+                ),
                 Source(),
                 Store(),
             )
@@ -130,21 +130,15 @@ def test_inventory_does_not_report_progress_when_save_fails() -> None:
         async def scan_metadata(
             self,
             drive_id: str,
-            extensions: list[str],
-            include_paths: list[str],
-            exclude_paths: list[str],
-            exclude_extensions: list[str],
+            selection: MetadataSelection,
             root_item_id: str,
             cursor: str | None,
         ) -> DocumentMetadataScan:
             assert root_item_id == "root"
-            assert (
-                drive_id,
-                extensions,
-                include_paths,
-                exclude_paths,
-                exclude_extensions,
-            ) == ("drive", ["pdf"], [], [], [])
+            assert drive_id == "drive"
+            assert selection == MetadataSelection(
+                (MetadataPathRule("", ("pdf",)),), ()
+            )
             assert cursor is None
             return DocumentMetadataScan(
                 (
@@ -220,7 +214,10 @@ def test_inventory_does_not_report_progress_when_save_fails() -> None:
             update.document
             async for update in ingest_metadata(
                 "operator",
-                MetadataIngestDriveRequest("drive", ["pdf"]),
+                MetadataIngestDriveRequest(
+                    "drive",
+                    include_rules=(MetadataPathRule("", ("pdf",)),),
+                ),
                 Source(),
                 BrokenStore(),
             )
@@ -233,15 +230,31 @@ def test_inventory_does_not_report_progress_when_save_fails() -> None:
 def test_inventory_request_normalizes_optional_filters() -> None:
     request = MetadataIngestDriveRequest(
         "drive",
-        include_paths=["/Reports/2026/", "Reports/2026"],
-        exclude_paths=["/Reports/2026/Drafts/"],
+        include_rules=(
+            MetadataPathRule("/Reports/2026/", (".PDF", "md")),
+            MetadataPathRule("reports\\2026", ("pdf", ".md")),
+        ),
+        exclude_rules=(MetadataPathRule("/Reports/2026/Drafts/", ()),),
     )
-    assert request.extensions == []
-    assert request.include_paths == ["Reports/2026"]
-    assert request.exclude_paths == ["Reports/2026/Drafts"]
+    assert request.include_rules == (
+        MetadataPathRule("reports/2026", ("md", "pdf")),
+    )
+    assert request.exclude_rules == (MetadataPathRule("reports/2026/drafts", ()),)
 
 
-@pytest.mark.parametrize("path", ["Reports//2026", "Reports/../2026", " ", "/"])
+@pytest.mark.parametrize(
+    "path", ["Reports//2026", "Reports/../2026", " ", "/", "///"]
+)
 def test_inventory_request_rejects_invalid_folder_paths(path: str) -> None:
     with pytest.raises(ValueError, match="folder paths relative"):
-        MetadataIngestDriveRequest("drive", include_paths=[path])
+        MetadataIngestDriveRequest(
+            "drive", include_rules=(MetadataPathRule(path, ()),)
+        )
+
+
+@pytest.mark.parametrize("extension", ["pdf/docx", "pdf*", "  "])
+def test_inventory_request_rejects_invalid_rule_extensions(extension: str) -> None:
+    with pytest.raises(ValueError, match="extensions must be alphanumeric"):
+        MetadataIngestDriveRequest(
+            "drive", include_rules=(MetadataPathRule("Reports", (extension,)),)
+        )

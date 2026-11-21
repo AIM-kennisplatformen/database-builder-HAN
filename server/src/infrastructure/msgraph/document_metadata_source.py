@@ -21,6 +21,7 @@ from domain.models.documents.document import (
     FileHashes,
     FileMetadata,
 )
+from domain.models.documents.metadata_selection import MetadataSelection
 from domain.ports.documents.document_metadata_source import (
     DocumentMetadataItem,
     DocumentMetadataScan,
@@ -179,30 +180,30 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource, DocumentRefreshSo
     async def scan_metadata(
         self,
         drive_id: str,
-        extensions: list[str],
-        include_paths: list[str],
-        exclude_paths: list[str],
-        exclude_extensions: list[str] | None = None,
+        selection: MetadataSelection,
         root_item_id: str = "root",
         cursor: str | None = None,
     ) -> DocumentMetadataScan:
         base_url = f"https://graph.microsoft.com/v1.0/drives/{quote(drive_id, safe='')}"
-        scoped = bool(include_paths or exclude_paths)
+        path_scoped = any(
+            rule.path for rule in selection.include_rules + selection.exclude_rules
+        )
         root_id: str | None = None
-        if scoped:
+        rule_folder_ids: dict[str, str] = {}
+        if path_scoped:
             root_id = (
                 await self._folder_id(drive_id, "", root_item_id)
                 if root_item_id == "root"
                 else root_item_id
             )
-        include_ids = {
-            await self._folder_id(drive_id, path, root_item_id)
-            for path in include_paths
-        }
-        exclude_ids = {
-            await self._folder_id(drive_id, path, root_item_id)
-            for path in exclude_paths
-        }
+            for path in {
+                rule.path
+                for rule in selection.include_rules + selection.exclude_rules
+                if rule.path
+            }:
+                rule_folder_ids[path] = await self._folder_id(
+                    drive_id, path, root_item_id
+                )
 
         delta = (
             self.client.drives.by_drive_id(drive_id)
@@ -215,7 +216,7 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource, DocumentRefreshSo
             else f"items/{quote(root_item_id, safe='')}"
         )
         baseline_url = f"{base_url}/{delta_path}/delta"
-        baseline = cursor is None or scoped
+        baseline = cursor is None or path_scoped
         next_url: str | None = baseline_url if baseline else cursor
         seen_urls: set[str] = set()
         matching_items: dict[str, GraphDriveItem] = {}
@@ -264,15 +265,7 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource, DocumentRefreshSo
                         item.parent_reference.id if item.parent_reference else None
                     )
                 excluded = (
-                    item.deleted is not None
-                    or item.file is None
-                    or not item.name
-                    or (
-                        extensions
-                        and item.name.rpartition(".")[2].lower() not in extensions
-                    )
-                    or item.name.rpartition(".")[2].lower()
-                    in (exclude_extensions or [])
+                    item.deleted is not None or item.file is None or not item.name
                 )
                 if item.deleted is not None or (excluded and not baseline):
                     deleted_ids.add(item.id)
@@ -289,27 +282,56 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource, DocumentRefreshSo
             if next_url is None:
                 delta_link = page.delta_link
 
-        def ancestors(item: GraphDriveItem) -> set[str]:
+        def ancestor_ids(item: GraphDriveItem) -> set[str]:
             parent_id = item.parent_reference.id if item.parent_reference else None
             found: set[str] = set()
-            while parent_id != root_id:
-                if parent_id is None or parent_id in found:
+            seen: set[str] = set()
+            while parent_id is not None:
+                if parent_id in seen:
                     raise ValueError("Graph returned incomplete folder ancestry")
+                seen.add(parent_id)
                 found.add(parent_id)
+                if parent_id == root_id:
+                    break
                 if parent_id not in folder_parents:
                     raise ValueError("Graph returned incomplete folder ancestry")
                 parent_id = folder_parents[parent_id]
+            if parent_id is None or (root_id is not None and root_id not in found):
+                raise ValueError("Graph returned incomplete folder ancestry")
             return found
 
-        selected = [
-            item
-            for item in matching_items.values()
-            if not scoped
-            or (
-                (not include_ids or bool(ancestors(item) & include_ids))
-                and not ancestors(item) & exclude_ids
+        def selected_by_rules(item: GraphDriveItem, extension: str) -> bool:
+            ancestors: set[str] = ancestor_ids(item) if path_scoped else set()
+            candidates: list[tuple[int, bool]] = []
+            for rules, included in (
+                (selection.include_rules, True),
+                (selection.exclude_rules, False),
+            ):
+                for rule in rules:
+                    rule_id = rule_folder_ids.get(rule.path, root_id)
+                    if rule_id is not None and rule_id not in ancestors:
+                        continue
+                    if rule.extensions and extension not in rule.extensions:
+                        continue
+                    candidates.append(
+                        (rule.path.count("/") + bool(rule.path), included)
+                    )
+            if not candidates:
+                return not selection.include_rules
+            specificity = max(depth for depth, _ in candidates)
+            return next(
+                included for depth, included in candidates if depth == specificity
             )
-        ]
+
+        selected: list[GraphDriveItem] = []
+        for item in matching_items.values():
+            if item.name is None:
+                continue
+            extension = item.name.rpartition(".")[2].lower() if "." in item.name else ""
+            if selected_by_rules(item, extension):
+                selected.append(item)
+            elif not baseline:
+                deleted_ids.add(item.id)
         if delta_link is None:
             raise ValueError("Graph did not provide a completed delta cursor")
         validate_graph_url(delta_link)
@@ -324,18 +346,12 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource, DocumentRefreshSo
     async def stream_metadata(
         self,
         drive_id: str,
-        extensions: list[str],
-        include_paths: list[str],
-        exclude_paths: list[str],
-        exclude_extensions: list[str] | None = None,
+        selection: MetadataSelection,
         root_item_id: str = "root",
     ) -> AsyncIterator[DocumentMetadataItem]:
         scan = await self.scan_metadata(
             drive_id,
-            extensions,
-            include_paths,
-            exclude_paths,
-            exclude_extensions,
+            selection,
             root_item_id,
             None,
         )

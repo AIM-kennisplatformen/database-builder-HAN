@@ -27,7 +27,10 @@ from domain.models.documents.document import (
     DocumentMetadata,
     FileMetadata,
 )
-from domain.models.documents.metadata_selection import MetadataSelection
+from domain.models.documents.metadata_selection import (
+    MetadataPathRule,
+    MetadataSelection,
+)
 from domain.ports.documents.document_metadata_source import (
     DocumentMetadataItem,
     DocumentMetadataScan,
@@ -48,6 +51,51 @@ from infrastructure.msgraph.document_metadata_source import (
 )
 
 
+def _selection(
+    extensions: list[str] | None = None,
+    include_paths: list[str] | None = None,
+    exclude_paths: list[str] | None = None,
+    exclude_extensions: list[str] | None = None,
+) -> MetadataSelection:
+    selected_extensions = tuple(extensions or [])
+    included = tuple(
+        MetadataPathRule(path, selected_extensions)
+        for path in (include_paths or ([""] if selected_extensions else []))
+    )
+    excluded = tuple(
+        MetadataPathRule(path, ()) for path in (exclude_paths or [])
+    ) + (
+        (MetadataPathRule("", tuple(exclude_extensions)),)
+        if exclude_extensions
+        else ()
+    )
+    return MetadataSelection(included, excluded)
+
+
+def _selection_arguments(
+    selection: MetadataSelection,
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    include_paths = [rule.path for rule in selection.include_rules if rule.path]
+    exclude_paths = [
+        rule.path
+        for rule in selection.exclude_rules
+        if rule.path and not rule.extensions
+    ]
+    extensions: list[str] = []
+    if selection.include_rules:
+        extensions = list(selection.include_rules[0].extensions)
+        for rule in selection.include_rules:
+            if not rule.path:
+                extensions = list(rule.extensions)
+                break
+    exclude_extensions: list[str] = []
+    for rule in selection.exclude_rules:
+        if not rule.path and rule.extensions:
+            exclude_extensions = list(rule.extensions)
+            break
+    return extensions, include_paths, exclude_paths, exclude_extensions
+
+
 @pytest.mark.parametrize(
     "removed_field",
     [{"limit": 10}, {"path": "Reports"}, {"include_drive_ids": ["drive"]}],
@@ -63,6 +111,21 @@ def test_metadata_selector_requires_paths_list() -> None:
     with pytest.raises(ValidationError):
         MetadataIngestRequestBody.model_validate(
             {"include": [{"drive_id": "drive", "paths": "Reports/"}]}
+        )
+
+
+def test_metadata_selector_rejects_ingestion_statuses() -> None:
+    with pytest.raises(ValidationError):
+        MetadataIngestRequestBody.model_validate(
+            {
+                "include": [
+                    {
+                        "drive_id": "drive",
+                        "paths": ["Reports"],
+                        "statuses": ["new"],
+                    }
+                ]
+            }
         )
 
 
@@ -176,7 +239,7 @@ def test_incremental_scan_uses_cursor_and_reports_deleted_items() -> None:
     old_cursor = "https://graph.microsoft.com/v1.0/old-cursor"
 
     scan = asyncio.run(
-        source.scan_metadata("drive", [], [], [], [], "root", old_cursor)
+        source.scan_metadata("drive", _selection(), "root", old_cursor)
     )
 
     assert delta.with_url.call_args.args == (old_cursor,)
@@ -210,10 +273,7 @@ def test_incremental_scan_marks_file_renamed_out_of_selected_extension_invisible
     scan = asyncio.run(
         source.scan_metadata(
             "drive",
-            ["pdf"],
-            [],
-            [],
-            [],
+            _selection(extensions=["pdf"]),
             "root",
             "https://graph.microsoft.com/v1.0/old-cursor",
         )
@@ -253,10 +313,7 @@ def test_incremental_scan_uses_last_matching_entry_for_same_file() -> None:
     scan = asyncio.run(
         source.scan_metadata(
             "drive",
-            ["pdf"],
-            [],
-            [],
-            [],
+            _selection(extensions=["pdf"]),
             "root",
             "https://graph.microsoft.com/v1.0/old-cursor",
         )
@@ -284,7 +341,7 @@ def test_baseline_scan_does_not_mark_unselected_extension_invisible() -> None:
     )
     source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
 
-    scan = asyncio.run(source.scan_metadata("drive", ["pdf"], [], []))
+    scan = asyncio.run(source.scan_metadata("drive", _selection(extensions=["pdf"])))
 
     assert scan.baseline
     assert scan.documents == ()
@@ -313,7 +370,10 @@ def test_expired_cursor_restarts_full_baseline() -> None:
 
     scan = asyncio.run(
         source.scan_metadata(
-            "drive", [], [], [], [], "root", "https://graph.microsoft.com/v1.0/expired"
+            "drive",
+            _selection(),
+            "root",
+            "https://graph.microsoft.com/v1.0/expired",
         )
     )
 
@@ -370,7 +430,10 @@ def test_stream_metadata_follows_pages_and_maps_matching_files() -> None:
 
     async def collect():
         return [
-            item async for item in source.stream_metadata("drive", ["docx"], [], [])
+            item
+            async for item in source.stream_metadata(
+                "drive", _selection(extensions=["docx"])
+            )
         ]
 
     items = asyncio.run(collect())
@@ -446,7 +509,7 @@ def test_stream_metadata_scopes_to_folder_and_accepts_all_file_types() -> None:
         return [
             item
             async for item in source.stream_metadata(
-                "drive", [], ["Team Reports/2026 #1"], []
+                "drive", _selection(include_paths=["Reports"])
             )
         ]
 
@@ -461,22 +524,16 @@ def test_stream_metadata_scopes_to_folder_and_accepts_all_file_types() -> None:
     )
     assert root.with_url.call_args_list[1].args[0] == (
         "https://graph.microsoft.com/v1.0/drives/drive/"
-        "root:/Team%20Reports/2026%20%231:"
+        "root:/reports:"
     )
-    assert client.drives.by_drive_id.return_value.items.by_drive_item_id.call_args_list[
-        0
-    ].args == ("root",)
-    assert delta.with_url.call_args.args[0].endswith("/root/delta")
 
 
-def test_stream_metadata_excludes_nested_folders_and_deduplicates_includes() -> None:
+def test_selection_path_matches_graph_folder_name_case_insensitively() -> None:
     root = MagicMock()
     root.with_url.return_value.get = AsyncMock(
         side_effect=[
             Response(200, json={"id": "root", "folder": {}}),
-            Response(200, json={"id": "reports", "folder": {}}),
-            Response(200, json={"id": "year", "folder": {}}),
-            Response(200, json={"id": "drafts", "folder": {}}),
+            Response(200, json={"id": "folder-id", "folder": {}}),
         ]
     )
     delta = MagicMock()
@@ -485,9 +542,79 @@ def test_stream_metadata_excludes_nested_folders_and_deduplicates_includes() -> 
             200,
             json={
                 "value": [
-                    {"id": "reports", "folder": {}, "parentReference": {"id": "root"}},
-                    {"id": "year", "folder": {}, "parentReference": {"id": "reports"}},
-                    {"id": "drafts", "folder": {}, "parentReference": {"id": "year"}},
+                    {
+                        "id": "folder-id",
+                        "name": "Research",
+                        "folder": {},
+                        "parentReference": {"id": "root"},
+                    },
+                    {
+                        "id": "file-id",
+                        "name": "Report.pdf",
+                        "file": {},
+                        "parentReference": {"id": "folder-id"},
+                    },
+                ],
+                "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta",
+            },
+        )
+    )
+    client = MagicMock()
+    client.drives.by_drive_id.return_value.root = root
+    client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
+        delta
+    )
+    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    selection = MetadataSelection(
+        include_rules=(MetadataPathRule("research", ("pdf",)),),
+        exclude_rules=(),
+    )
+
+    scan = asyncio.run(source.scan_metadata("drive", selection))
+
+    assert [document.id.id[1] for document in scan.documents] == ["file-id"]
+    assert client.drives.by_drive_id.return_value.items.by_drive_item_id.call_args_list[
+        0
+    ].args == ("root",)
+    assert delta.with_url.call_args.args[0].endswith("/root/delta")
+
+
+def test_stream_metadata_excludes_nested_folders_and_deduplicates_includes() -> None:
+    root = MagicMock()
+    folder_results: dict[str, dict[str, object]] = {
+        "https://graph.microsoft.com/v1.0/drives/drive/root": {
+            "id": "root",
+            "folder": {},
+        },
+        "https://graph.microsoft.com/v1.0/drives/drive/root:/reports:": {
+            "id": "reports",
+            "folder": {},
+        },
+        "https://graph.microsoft.com/v1.0/drives/drive/root:/reports/2026:": {
+            "id": "year",
+            "folder": {},
+        },
+        "https://graph.microsoft.com/v1.0/drives/drive/root:/reports/2026/drafts:": {
+            "id": "drafts",
+            "folder": {},
+        },
+    }
+
+    def folder_request(url: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            get=AsyncMock(return_value=Response(200, json=folder_results[url]))
+        )
+
+    root.with_url.side_effect = folder_request
+    delta = MagicMock()
+    delta.with_url.return_value.get = AsyncMock(
+        return_value=Response(
+            200,
+            json={
+                "value": [
+                        {"id": "reports", "name": "Reports", "folder": {}, "parentReference": {"id": "root"}},
+                        {"id": "year", "name": "2026", "folder": {}, "parentReference": {"id": "reports"}},
+                        {"id": "drafts", "name": "Drafts", "folder": {}, "parentReference": {"id": "year"}},
                     {
                         "id": "one",
                         "name": "One.pdf",
@@ -528,7 +655,12 @@ def test_stream_metadata_excludes_nested_folders_and_deduplicates_includes() -> 
         return [
             item
             async for item in source.stream_metadata(
-                "drive", ["pdf"], ["Reports", "Reports/2026"], ["Reports/2026/Drafts"]
+                "drive",
+                _selection(
+                    extensions=["pdf"],
+                    include_paths=["Reports", "Reports/2026"],
+                    exclude_paths=["Reports/2026/Drafts"],
+                ),
             )
         ]
 
@@ -555,7 +687,7 @@ def test_stream_metadata_exclusion_keeps_root_level_files() -> None:
             200,
             json={
                 "value": [
-                    {"id": "drafts", "folder": {}, "parentReference": {"id": "root"}},
+                        {"id": "drafts", "folder": {}, "parentReference": {"id": "root"}},
                     {
                         "id": "keep",
                         "name": "Keep.pdf",
@@ -582,7 +714,10 @@ def test_stream_metadata_exclusion_keeps_root_level_files() -> None:
 
     async def collect() -> list[DocumentMetadataItem]:
         return [
-            item async for item in source.stream_metadata("drive", [], [], ["Drafts"])
+            item
+            async for item in source.stream_metadata(
+                "drive", _selection(exclude_paths=["Drafts"])
+            )
         ]
 
     assert [item.document.id.id for item in asyncio.run(collect())] == [
@@ -634,7 +769,10 @@ def test_stream_metadata_rejects_incomplete_folder_ancestry(
 
     async def collect() -> list[DocumentMetadataItem]:
         return [
-            item async for item in source.stream_metadata("drive", [], [], ["Excluded"])
+            item
+            async for item in source.stream_metadata(
+                "drive", _selection(exclude_paths=["Excluded"])
+            )
         ]
 
     with pytest.raises(ValueError, match="incomplete folder ancestry"):
@@ -655,10 +793,11 @@ def test_stream_metadata_uses_latest_parent_for_repeated_folder() -> None:
             200,
             json={
                 "value": [
-                    {"id": "excluded", "folder": {}, "parentReference": {"id": "root"}},
-                    {"id": "allowed", "folder": {}, "parentReference": {"id": "root"}},
+                        {"id": "excluded", "name": "Excluded", "folder": {}, "parentReference": {"id": "root"}},
+                        {"id": "allowed", "name": "Allowed", "folder": {}, "parentReference": {"id": "root"}},
                     {
                         "id": "moved",
+                            "name": "Moved",
                         "folder": {},
                         "parentReference": {"id": "excluded"},
                     },
@@ -668,7 +807,7 @@ def test_stream_metadata_uses_latest_parent_for_repeated_folder() -> None:
                         "file": {},
                         "parentReference": {"id": "moved"},
                     },
-                    {"id": "moved", "folder": {}, "parentReference": {"id": "allowed"}},
+                    {"id": "moved", "name": "Moved", "folder": {}, "parentReference": {"id": "allowed"}},
                 ],
                 "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta",
             },
@@ -683,7 +822,10 @@ def test_stream_metadata_uses_latest_parent_for_repeated_folder() -> None:
 
     async def collect() -> list[DocumentMetadataItem]:
         return [
-            item async for item in source.stream_metadata("drive", [], [], ["Excluded"])
+            item
+            async for item in source.stream_metadata(
+                "drive", _selection(exclude_paths=["Excluded"])
+            )
         ]
 
     assert [item.document.id.id for item in asyncio.run(collect())] == [
@@ -704,6 +846,7 @@ def test_stream_metadata_scans_from_channel_folder_root() -> None:
                 "value": [
                     {
                         "id": "reports",
+                            "name": "Reports",
                         "folder": {},
                         "parentReference": {"id": "channel-root"},
                     },
@@ -729,7 +872,7 @@ def test_stream_metadata_scans_from_channel_folder_root() -> None:
         return [
             item
             async for item in source.stream_metadata(
-                "drive", [], ["Reports"], [], [], "channel-root"
+                "drive", _selection(include_paths=["Reports"]), "channel-root"
             )
         ]
 
@@ -737,7 +880,7 @@ def test_stream_metadata_scans_from_channel_folder_root() -> None:
         ("drive", "file")
     ]
     assert root.with_url.call_args.args[0] == (
-        "https://graph.microsoft.com/v1.0/drives/drive/items/channel-root:/Reports:"
+        "https://graph.microsoft.com/v1.0/drives/drive/items/channel-root:/reports:"
     )
     assert delta.with_url.call_args.args[0] == (
         "https://graph.microsoft.com/v1.0/drives/drive/items/channel-root/delta"
@@ -778,7 +921,12 @@ def test_stream_metadata_reports_total_after_repeated_and_deleted_items() -> Non
     source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
 
     async def collect() -> list[DocumentMetadataItem]:
-        return [item async for item in source.stream_metadata("drive", ["pdf"], [], [])]
+        return [
+            item
+            async for item in source.stream_metadata(
+                "drive", _selection(extensions=["pdf"])
+            )
+        ]
 
     items = asyncio.run(collect())
     assert [item.document.id.id for item in items] == [
@@ -812,12 +960,47 @@ def test_stream_metadata_excludes_file_extensions() -> None:
 
     async def collect() -> list[DocumentMetadataItem]:
         return [
-            item async for item in source.stream_metadata("drive", [], [], [], ["docx"])
+            item
+            async for item in source.stream_metadata(
+                "drive", _selection(exclude_extensions=["docx"])
+            )
         ]
 
     items = asyncio.run(collect())
     assert [item.document.id.id for item in items] == [("drive", "keep")]
     assert (items[0].total, items[0].available) == (1, 1)
+
+
+def test_extensionless_file_does_not_match_a_filter_for_its_basename() -> None:
+    delta = MagicMock()
+    delta.with_url.return_value.get = AsyncMock(
+        return_value=Response(
+            200,
+            json={
+                "value": [
+                    {"id": "extensionless", "name": "README", "file": {}},
+                    {"id": "readme-extension", "name": "file.readme", "file": {}},
+                ],
+                "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta",
+            },
+        )
+    )
+    client = MagicMock()
+    client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
+        delta
+    )
+    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+
+    async def collect() -> list[DocumentMetadataItem]:
+        return [
+            item
+            async for item in source.stream_metadata(
+                "drive", _selection(exclude_extensions=["readme"])
+            )
+        ]
+
+    items = asyncio.run(collect())
+    assert [item.document.id.id[1] for item in items] == ["extensionless"]
 
 
 def test_stream_metadata_maps_creation_and_latest_update_without_version_request() -> (
@@ -853,7 +1036,7 @@ def test_stream_metadata_maps_creation_and_latest_update_without_version_request
     source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
 
     async def collect() -> list[DocumentMetadataItem]:
-        return [item async for item in source.stream_metadata("drive", [], [], [])]
+        return [item async for item in source.stream_metadata("drive", _selection())]
 
     document = asyncio.run(collect())[0].document
     created = document.document_metadata.created
@@ -896,7 +1079,7 @@ def test_stream_metadata_keeps_audit_timestamps_when_actors_are_missing() -> Non
     source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
 
     async def collect() -> list[DocumentMetadataItem]:
-        return [item async for item in source.stream_metadata("drive", [], [], [])]
+        return [item async for item in source.stream_metadata("drive", _selection())]
 
     document = asyncio.run(collect())[0].document
     assert document.document_metadata.created is not None
@@ -925,7 +1108,9 @@ def test_graph_drive_error_is_reported_before_page_validation() -> None:
     source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
 
     async def collect() -> None:
-        async for _ in source.stream_metadata("bad-drive", ["pdf"], [], []):
+        async for _ in source.stream_metadata(
+            "bad-drive", _selection(extensions=["pdf"])
+        ):
             pass
 
     with pytest.raises(MetadataSourceError) as error:
@@ -959,13 +1144,13 @@ def test_metadata_endpoint_returns_graph_client_error(
         async def scan_metadata(
             self,
             drive_id: str,
-            extensions: list[str],
-            include_paths: list[str],
-            exclude_paths: list[str],
-            exclude_extensions: list[str],
+            selection: MetadataSelection,
             root_item_id: str,
             cursor: str | None,
         ) -> DocumentMetadataScan:
+            extensions, include_paths, exclude_paths, exclude_extensions = (
+                _selection_arguments(selection)
+            )
             assert cursor is None
             assert root_item_id == "root"
             assert (
@@ -1048,13 +1233,13 @@ def test_metadata_endpoint_failure_reports_group_progress_count(
         async def scan_metadata(
             self,
             drive_id: str,
-            extensions: list[str],
-            include_paths: list[str],
-            exclude_paths: list[str],
-            exclude_extensions: list[str],
+            selection: MetadataSelection,
             root_item_id: str,
             cursor: str | None,
         ) -> DocumentMetadataScan:
+            extensions, include_paths, exclude_paths, exclude_extensions = (
+                _selection_arguments(selection)
+            )
             _ = (
                 extensions,
                 include_paths,
@@ -1184,13 +1369,13 @@ def test_metadata_endpoint_skips_inaccessible_drive_and_completes() -> None:
         async def scan_metadata(
             self,
             drive_id: str,
-            extensions: list[str],
-            include_paths: list[str],
-            exclude_paths: list[str],
-            exclude_extensions: list[str],
+            selection: MetadataSelection,
             root_item_id: str,
             cursor: str | None,
         ) -> DocumentMetadataScan:
+            extensions, include_paths, exclude_paths, exclude_extensions = (
+                _selection_arguments(selection)
+            )
             assert cursor is None
             assert root_item_id == "root"
             assert (extensions, include_paths, exclude_paths, exclude_extensions) == (
@@ -1275,13 +1460,13 @@ def test_metadata_endpoint_reports_explicitly_included_drive_denial() -> None:
         async def scan_metadata(
             self,
             drive_id: str,
-            extensions: list[str],
-            include_paths: list[str],
-            exclude_paths: list[str],
-            exclude_extensions: list[str],
+            selection: MetadataSelection,
             root_item_id: str,
             cursor: str | None,
         ) -> DocumentMetadataScan:
+            extensions, include_paths, exclude_paths, exclude_extensions = (
+                _selection_arguments(selection)
+            )
             assert cursor is None
             assert drive_id == "bad-drive"
             assert (extensions, include_paths, exclude_paths, exclude_extensions) == (
@@ -1345,7 +1530,22 @@ def test_metadata_endpoint_reports_explicit_drive_filtered_by_discovery() -> Non
     assert events[1].data["progress"]["processed"] == 0
 
 
-def test_metadata_duplicate_selection_has_specific_public_error() -> None:
+def test_metadata_repeated_same_drive_selectors_are_accepted() -> None:
+    class EmptySource:
+        async def scan_metadata(
+            self,
+            drive_id: str,
+            selection: MetadataSelection,
+            root_item_id: str,
+            cursor: str | None,
+        ) -> DocumentMetadataScan:
+            assert drive_id == "drive"
+            assert selection.includes("reports/one", "pdf")
+            assert selection.includes("reports/two", "docx")
+            assert root_item_id == "root"
+            assert cursor is None
+            return DocumentMetadataScan((), (), "new-cursor", True)
+
     async def collect():
         return [
             event
@@ -1353,25 +1553,24 @@ def test_metadata_duplicate_selection_has_specific_public_error() -> None:
                 "group",
                 MetadataIngestRequestBody(
                     include=[
-                        DriveMetadataSelectorBody(drive_id="drive"),
-                        DriveMetadataSelectorBody(drive_id="drive"),
+                        DriveMetadataSelectorBody(
+                            drive_id="drive", paths=["Reports"], extensions=["pdf"]
+                        ),
+                        DriveMetadataSelectorBody(
+                            drive_id="drive", paths=["Reports"], extensions=["docx"]
+                        ),
                     ]
                 ),
                 "user",
                 OneGroupSource(),
-                cast(DocumentRefreshSource, cast(object, AsyncMock())),
+                EmptySource(),
                 MetadataRefreshStore(),
             )
         ]
 
     events = asyncio.run(collect())
-    assert [event.event for event in events] == ["started", "error"]
-    assert events[1].data["error"] == {
-        "code": "metadata.invalid_selection",
-        "http_status": 422,
-        "detail": "include and exclude must each have unique drive_id values",
-    }
-    assert events[1].data["progress"] == {"processed": 0}
+    assert [event.event for event in events] == ["started", "complete"]
+    assert events[1].data["processed"] == 0
 
 
 def test_metadata_endpoint_reports_and_logs_unexpected_failure(
@@ -1465,28 +1664,18 @@ def test_metadata_endpoint_streams_progress_and_completion() -> None:
         async def scan_metadata(
             self,
             drive_id: str,
-            extensions: list[str],
-            include_paths: list[str],
-            exclude_paths: list[str],
-            exclude_extensions: list[str],
+            selection: MetadataSelection,
             root_item_id: str,
             cursor: str | None,
         ) -> DocumentMetadataScan:
             assert cursor is None
             assert root_item_id == "root"
-            assert (
-                drive_id,
-                extensions,
-                include_paths,
-                exclude_paths,
-                exclude_extensions,
-            ) == (
-                "drive",
-                ["pdf"],
-                [],
-                [],
-                [],
-            )
+            assert drive_id == "drive"
+            assert selection.includes("A/report", "pdf")
+            assert selection.includes("A/B/report", "md")
+            assert selection.includes("A/B/report", "docx")
+            assert not selection.includes("A/B/report", "pdf")
+            assert not selection.includes("A/B/report", "xlsx")
             return DocumentMetadataScan(
                 (
                     Document(
@@ -1566,9 +1755,22 @@ def test_metadata_endpoint_streams_progress_and_completion() -> None:
                 MetadataIngestRequestBody(
                     include=[
                         DriveMetadataSelectorBody(
-                            drive_id="drive", paths=[], extensions=["pdf"]
-                        )
-                    ]
+                            drive_id="drive",
+                            paths=["/A/"],
+                            extensions=[".PDF", ".md"],
+                        ),
+                        DriveMetadataSelectorBody(
+                            drive_id="drive", paths=["A/B"], extensions=["docx"]
+                        ),
+                    ],
+                    exclude=[
+                        DriveMetadataSelectorBody(
+                            drive_id="drive", paths=["A"], extensions=["xlsx"]
+                        ),
+                        DriveMetadataSelectorBody(
+                            drive_id="drive", paths=["A/B"], extensions=["pdf"]
+                        ),
+                    ],
                 ),
                 "user",
                 OneGroupSource(),
@@ -1593,13 +1795,13 @@ def test_metadata_endpoint_accepts_include_paths_without_extensions() -> None:
         async def scan_metadata(
             self,
             drive_id: str,
-            extensions: list[str],
-            include_paths: list[str],
-            exclude_paths: list[str],
-            exclude_extensions: list[str],
+            selection: MetadataSelection,
             root_item_id: str,
             cursor: str | None,
         ) -> DocumentMetadataScan:
+            extensions, include_paths, exclude_paths, exclude_extensions = (
+                _selection_arguments(selection)
+            )
             assert cursor is None
             assert root_item_id == "root"
             assert (
@@ -1611,7 +1813,7 @@ def test_metadata_endpoint_accepts_include_paths_without_extensions() -> None:
             ) == (
                 "drive",
                 [],
-                ["Reports/2026"],
+                ["reports/2026"],
                 [],
                 [],
             )
@@ -1667,13 +1869,13 @@ def test_metadata_endpoint_close_discards_staged_refresh() -> None:
         async def scan_metadata(
             self,
             drive_id: str,
-            extensions: list[str],
-            include_paths: list[str],
-            exclude_paths: list[str],
-            exclude_extensions: list[str],
+            selection: MetadataSelection,
             root_item_id: str,
             cursor: str | None,
         ) -> DocumentMetadataScan:
+            extensions, include_paths, exclude_paths, exclude_extensions = (
+                _selection_arguments(selection)
+            )
             _ = (
                 drive_id,
                 extensions,

@@ -15,7 +15,10 @@ from domain.models.documents.document import (
     DocumentMetadata,
     FileMetadata,
 )
-from domain.models.documents.metadata_selection import MetadataSelection
+from domain.models.documents.metadata_selection import (
+    MetadataPathRule,
+    MetadataSelection,
+)
 from domain.ports.documents.document_metadata_source import DocumentMetadataScan
 from domain.ports.documents.document_store import (
     MetadataIngestRun,
@@ -63,15 +66,22 @@ class Metadata:
     async def scan_metadata(
         self,
         drive_id: str,
-        extensions: list[str],
-        include_paths: list[str],
-        exclude_paths: list[str],
-        exclude_extensions: list[str],
+        selection: MetadataSelection,
         root_item_id: str,
         cursor: str | None,
     ) -> DocumentMetadataScan:
         assert cursor is None
         self.roots.append((drive_id, root_item_id))
+        include_rules = selection.include_rules
+        exclude_rules = selection.exclude_rules
+        extensions = list(include_rules[0].extensions) if include_rules else []
+        include_paths = [rule.path for rule in include_rules if rule.path]
+        exclude_paths = [rule.path for rule in exclude_rules if rule.path]
+        exclude_extensions = (
+            list(exclude_rules[0].extensions)
+            if exclude_rules and exclude_rules[0].extensions
+            else []
+        )
         self.calls.append(
             (drive_id, extensions, include_paths, exclude_paths, exclude_extensions)
         )
@@ -111,6 +121,7 @@ class Store:
         self.operation_started_at: datetime | None = None
         self.operation_finished_at: datetime | None = None
         self.metadata_runs_started: int = 0
+        self.selections: list[MetadataSelection] = []
 
     async def begin_group_operation(self, principal_id: str, group_id: str) -> UUID:
         assert principal_id == "user"
@@ -130,8 +141,9 @@ class Store:
         selection: MetadataSelection,
         operation_id: UUID | None = None,
     ) -> MetadataIngestRun:
-        _ = (principal_id, drive_id, selection)
+        _ = (principal_id, drive_id)
         self.metadata_runs_started += 1
+        self.selections.append(selection)
         if operation_id is not None:
             assert operation_id == self.operation_id
         run_id = uuid4()
@@ -240,7 +252,7 @@ def test_include_and_exclude_apply_per_drive_filters() -> None:
     assert isinstance(updates[-1], MetadataIngestResult)
     assert updates[-1].processed == 1
     assert metadata.calls == [
-        ("private-drive", ["pdf"], ["Reports"], ["Reports/Drafts"], []),
+        ("private-drive", ["pdf"], ["reports"], ["reports/drafts"], []),
     ]
     assert [document.id.id[0] for document in store.saved] == [
         "private-drive",
@@ -329,6 +341,109 @@ def test_invalid_selection_fails_before_any_write(
         asyncio.run(collect())
     assert metadata.calls == []
     assert store.saved == []
+
+
+def test_nested_path_rules_inherit_parent_extension_selection() -> None:
+    metadata, store = Metadata(), Store()
+    request = MetadataIngestRequest(
+        "group",
+        include=[
+            DriveMetadataSelector("private-drive", ["/A/"], [".PDF", ".md"]),
+            DriveMetadataSelector("private-drive", ["A/B"], ["docx"]),
+        ],
+        exclude=[
+            DriveMetadataSelector("private-drive", ["A"], ["xlsx"]),
+            DriveMetadataSelector("private-drive", ["A/B"], ["pdf"]),
+        ],
+    )
+
+    async def collect() -> list[object]:
+        return [
+            update
+            async for update in ingest_group_metadata(
+                "user", request, Groups(), metadata, store
+            )
+        ]
+
+    asyncio.run(collect())
+    # The fake source sees the same resolved rules the SharePoint adapter uses.
+    assert len(metadata.calls) == 1
+    selection = store.selections[0]
+    assert selection.include_rules == (
+        MetadataPathRule("a", ("md", "pdf")),
+        MetadataPathRule("a/b", ("docx",)),
+    )
+    assert selection.exclude_rules == (
+        MetadataPathRule("a", ("xlsx",)),
+        MetadataPathRule("a/b", ("pdf",)),
+    )
+    assert selection.includes("A/report", "pdf")
+    assert selection.includes("A/B/report", "md")
+    assert selection.includes("A/B/report", "docx")
+    assert not selection.includes("A/B/report", "pdf")
+    assert not selection.includes("A/B/report", "xlsx")
+
+
+def test_overlapping_equal_path_selectors_fail_before_metadata_run_starts() -> None:
+    metadata, store = Metadata(), Store()
+    request = MetadataIngestRequest(
+        "group",
+        include=[DriveMetadataSelector("private-drive", ["A"], ["pdf", "md"])],
+        exclude=[DriveMetadataSelector("private-drive", ["/A/"], [".PDF"])],
+    )
+
+    async def collect() -> None:
+        async for _ in ingest_group_metadata(
+            "user", request, Groups(), metadata, store
+        ):
+            pass
+
+    with pytest.raises(ValueError):
+        asyncio.run(collect())
+    assert store.operation_id is None
+    assert store.metadata_runs_started == 0
+    assert metadata.calls == []
+
+
+def test_disjoint_equal_path_selectors_are_valid() -> None:
+    metadata, store = Metadata(), Store()
+    request = MetadataIngestRequest(
+        "group",
+        include=[DriveMetadataSelector("private-drive", ["A"], ["pdf"])],
+        exclude=[DriveMetadataSelector("private-drive", ["A"], ["docx"])],
+    )
+
+    async def collect() -> None:
+        async for _ in ingest_group_metadata(
+            "user", request, Groups(), metadata, store
+        ):
+            pass
+
+    asyncio.run(collect())
+    assert store.metadata_runs_started == 1
+    assert len(metadata.calls) == 1
+
+
+def test_duplicate_identical_directives_are_deduplicated() -> None:
+    metadata, store = Metadata(), Store()
+    request = MetadataIngestRequest(
+        "group",
+        include=[
+            DriveMetadataSelector("private-drive", ["/A/"], [".PDF"]),
+            DriveMetadataSelector("private-drive", ["a"], ["pdf"]),
+        ],
+    )
+
+    async def collect() -> None:
+        async for _ in ingest_group_metadata(
+            "user", request, Groups(), metadata, store
+        ):
+            pass
+
+    asyncio.run(collect())
+    assert store.selections[0].include_rules == (
+        MetadataPathRule("a", ("pdf",)),
+    )
 
 
 def test_unavailable_explicit_include_fails_before_any_write() -> None:

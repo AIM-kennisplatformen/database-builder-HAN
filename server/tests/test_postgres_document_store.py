@@ -16,7 +16,10 @@ from domain.models.documents.document import (
     FileHashes,
     FileMetadata,
 )
-from domain.models.documents.metadata_selection import MetadataSelection
+from domain.models.documents.metadata_selection import (
+    MetadataPathRule,
+    MetadataSelection,
+)
 from infrastructure.postgres.document_store import PostgresDocumentStore
 
 
@@ -102,8 +105,8 @@ def test_startup_recovery_discards_only_staged_rows_and_interrupts_running_runs(
 
 def test_metadata_selection_serialization_matches_persisted_cursor_key() -> None:
     expected = (
-        '{"exclude_extensions": [], "exclude_paths": [], "extensions": ["pdf"], '
-        '"include_paths": ["Reports"], "root_item_id": "root"}'
+        '{"exclude_rules": [], "include_rules": [{"extensions": ["pdf"], '
+        '"path": "reports"}]}'
     )
     cursor = MagicMock()
     cursor.fetchone = AsyncMock(return_value=(expected, "saved-cursor"))
@@ -117,11 +120,8 @@ def test_metadata_selection_serialization_matches_persisted_cursor_key() -> None
             "operator",
             "drive",
             MetadataSelection(
-                root_item_id="root",
-                extensions=("pdf",),
-                include_paths=("Reports",),
-                exclude_paths=(),
-                exclude_extensions=(),
+                include_rules=(MetadataPathRule("reports", ("pdf",)),),
+                exclude_rules=(),
             ),
         )
     )
