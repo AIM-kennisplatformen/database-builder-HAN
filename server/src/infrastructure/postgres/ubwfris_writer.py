@@ -119,7 +119,7 @@ async def _copy_transaction(
 
 
 async def interrupt_ubwfris_snapshots(pool: AsyncConnectionPool) -> None:
-    """Delete snapshots left incomplete by a process crash."""
+    """Discard staging data and mark UBW FRIS operations interrupted at startup."""
     with anyio.CancelScope(shield=True):
         async with pool.connection() as connection, connection.transaction():
             _ = await connection.execute(
@@ -159,6 +159,15 @@ class _UbwfrisWriterPostgres[T: IbRow | RhaRow](ABC):
         self._pool: AsyncConnectionPool = pool
 
     async def delete_all_snapshots(self, row_type: Literal["ib", "rha"]) -> bool:
+        """Delete stored and staged rows when no operation or snapshot is active.
+
+        Args:
+            row_type: UBW FRIS row family to clear.
+
+        Returns:
+            Whether the reset completed. ``False`` means an operation or snapshot of
+            that type is running; ``True`` means deletion succeeded, even if empty.
+        """
         operation_kind = f"ubwfris.{row_type}"
         async with _pool_transaction(self._pool) as connection:
             _ = await connection.execute(
@@ -192,6 +201,13 @@ class _UbwfrisWriterPostgres[T: IbRow | RhaRow](ABC):
     async def begin_operation(
         self, operation_id: UUID, principal_id: str, snapshot_id: str
     ) -> None:
+        """Associate a running import operation with its principal and snapshot.
+
+        Args:
+            operation_id: ID of the parent operation to track.
+            principal_id: User who initiated the import.
+            snapshot_id: Snapshot created for this import.
+        """
         async with self._pool.connection() as connection:
             _ = await connection.execute(
                 "SELECT pg_advisory_xact_lock(%s)",
@@ -217,6 +233,14 @@ class _UbwfrisWriterPostgres[T: IbRow | RhaRow](ABC):
         *,
         interrupted: bool = False,
     ) -> None:
+        """Record the failure details and stop a running import operation.
+
+        Args:
+            operation_id: Operation to update.
+            failure_code: Stable code describing the failure.
+            summary: Import outcome details to persist.
+            interrupted: Mark as interrupted when the process cannot finish normally.
+        """
         async with self._pool.connection() as connection:
             _ = await connection.execute(
                 """UPDATE operation_runs SET status = %s, finished_at = now(),
@@ -231,6 +255,11 @@ class _UbwfrisWriterPostgres[T: IbRow | RhaRow](ABC):
             )
 
     async def begin_snapshot(self, snapshot_id: str) -> None:
+        """Create a running snapshot before rows are staged.
+
+        Raises:
+            DuplicateUpload: If this snapshot ID already exists.
+        """
         try:
             with anyio.CancelScope(shield=True):
                 async with self._pool.connection() as connection:
@@ -245,6 +274,7 @@ class _UbwfrisWriterPostgres[T: IbRow | RhaRow](ABC):
             ) from exc
 
     async def discard_snapshot(self, snapshot_id: str) -> None:
+        """Delete staging rows and the snapshot only while it is still running."""
         with anyio.CancelScope(shield=True):
             async with self._pool.connection() as connection, connection.transaction():
                 cursor = await connection.execute(
@@ -267,6 +297,16 @@ class _UbwfrisWriterPostgres[T: IbRow | RhaRow](ABC):
     async def publish_snapshot(
         self, snapshot_id: str, operation_id: UUID, summary: dict[str, object]
     ) -> None:
+        """Atomically publish staged rows and complete the snapshot and operation.
+
+        Args:
+            snapshot_id: Running snapshot whose staged rows should become current.
+            operation_id: Running import operation to complete with the snapshot.
+            summary: Import outcome to associate with the completed operation.
+
+        Raises:
+            RuntimeError: If the snapshot or operation is no longer running.
+        """
         async with _pool_transaction(self._pool) as connection:
             cursor = await connection.execute(
                 """SELECT status FROM ubwfris_snapshots
@@ -299,11 +339,13 @@ class _UbwfrisWriterPostgres[T: IbRow | RhaRow](ABC):
 
     @abstractmethod
     async def stage_ubwfris_rows(self, snapshot_id: str, rows: Sequence[T]) -> int:
-        """Stage workbook rows in the writer's row-specific staging table."""
+        """Stage parsed rows and return the number written."""
         ...
 
 
 class IbWriterPostgres(_UbwfrisWriterPostgres[IbRow], UbwfrisWriter[IbRow]):
+    """Persist IB workbook imports and publish their snapshots."""
+
     @property
     @override
     def _row_type(self) -> Literal["ib"]:
@@ -316,6 +358,20 @@ class IbWriterPostgres(_UbwfrisWriterPostgres[IbRow], UbwfrisWriter[IbRow]):
 
     @override
     async def stage_ubwfris_rows(self, snapshot_id: str, rows: Sequence[IbRow]) -> int:
+        """Stage parsed IB rows and return the number written.
+
+        An empty batch returns zero.
+
+        Args:
+            snapshot_id: Running snapshot that owns these rows.
+            rows: Parsed IB rows to stage.
+
+        Returns:
+            Number of rows staged.
+
+        Raises:
+            InvalidWorkbook: If the batch contains duplicate row numbers.
+        """
         if not rows:
             return 0
         try:
@@ -357,6 +413,8 @@ class IbWriterPostgres(_UbwfrisWriterPostgres[IbRow], UbwfrisWriter[IbRow]):
 
 
 class RhaWriterPostgres(_UbwfrisWriterPostgres[RhaRow], UbwfrisWriter[RhaRow]):
+    """Persist RHA workbook imports and publish their snapshots."""
+
     @property
     @override
     def _row_type(self) -> Literal["rha"]:
@@ -369,6 +427,20 @@ class RhaWriterPostgres(_UbwfrisWriterPostgres[RhaRow], UbwfrisWriter[RhaRow]):
 
     @override
     async def stage_ubwfris_rows(self, snapshot_id: str, rows: Sequence[RhaRow]) -> int:
+        """Stage parsed RHA rows and return the number written.
+
+        An empty batch returns zero.
+
+        Args:
+            snapshot_id: Running snapshot that owns these rows.
+            rows: Parsed RHA rows to stage.
+
+        Returns:
+            Number of rows staged.
+
+        Raises:
+            InvalidWorkbook: If the batch contains duplicate row numbers.
+        """
         if not rows:
             return 0
         try:

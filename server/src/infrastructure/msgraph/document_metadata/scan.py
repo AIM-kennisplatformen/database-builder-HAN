@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import cast
 from urllib.parse import quote
@@ -40,8 +40,9 @@ class _DeltaSnapshot:
 
 @dataclass
 class ScanState:
+    """Carry resolved scan options and Graph dependencies between scan helpers."""
+
     client: GraphServiceClient
-    folder_resolver: Callable[[str, str, str], Awaitable[str]]
     document_mapper: Callable[[str, GraphDriveItem, str | None], Document]
     drive_id: str
     selection: MetadataSelection
@@ -50,41 +51,7 @@ class ScanState:
     path_scoped: bool
     capture_paths: bool
     root_id: str | None
-    rule_resolve_folder_ids: dict[str, str] = field(default_factory=dict)
-
-
-async def resolve_path_scope(state: ScanState) -> ScanState:
-    root_id = state.root_id
-    folder_ids = dict(state.rule_resolve_folder_ids)
-    if state.capture_paths:
-        root_id = (
-            await state.folder_resolver(state.drive_id, "", state.root_item_id)
-            if state.root_item_id == "root"
-            else state.root_item_id
-        )
-    if state.path_scoped:
-        paths = {
-            rule.path
-            for rule in state.selection.include_rules + state.selection.exclude_rules
-            if rule.path
-        }
-        for path in paths:
-            folder_ids[path] = await state.folder_resolver(
-                state.drive_id, path, state.root_item_id
-            )
-    return ScanState(
-        client=state.client,
-        folder_resolver=state.folder_resolver,
-        document_mapper=state.document_mapper,
-        drive_id=state.drive_id,
-        selection=state.selection,
-        root_item_id=state.root_item_id,
-        cursor=state.cursor,
-        path_scoped=state.path_scoped,
-        capture_paths=state.capture_paths,
-        root_id=root_id,
-        rule_resolve_folder_ids=folder_ids,
-    )
+    rule_resolve_folder_ids: dict[str, str]
 
 
 def delta_path(root_item_id: str) -> str:
@@ -96,6 +63,11 @@ def delta_path(root_item_id: str) -> str:
 def _parse_delta_response(
     response: Response, snapshot: _DeltaSnapshot
 ) -> GraphDeltaPage | None:
+    """Parse a delta page, returning ``None`` only for an expired incremental cursor.
+
+    Other Graph errors propagate. The caller is responsible for restarting from the
+    baseline when this function returns ``None``.
+    """
     try:
         raise_for_graph_error(response, "Graph rejected the drive metadata request")
     except MetadataSourceError as exc:
@@ -106,6 +78,21 @@ def _parse_delta_response(
 
 
 async def read_delta(state: ScanState, baseline_url: str) -> _DeltaSnapshot:
+    """Read all pages for a baseline or incremental delta scan.
+
+    Args:
+        state: Resolved scan options and Graph client dependencies.
+        baseline_url: Delta URL to use for a baseline scan or expired-cursor retry.
+
+    Returns:
+        The accumulated file items, folder ancestry, deletions, and completed cursor.
+
+    Raises:
+        ValueError: If Graph repeats a page URL, omits a page, or fails to complete
+            the delta sequence.
+        MetadataSourceError: If Graph rejects the request and cannot be recovered by
+            restarting from the baseline.
+    """
     baseline = state.cursor is None or state.path_scoped or state.capture_paths
     snapshot = _DeltaSnapshot(baseline=baseline)
     next_url = baseline_url if baseline else state.cursor
@@ -265,6 +252,16 @@ async def _item_relative_path(
 async def select_documents(
     state: ScanState, snapshot: _DeltaSnapshot
 ) -> tuple[list[Document], set[str]]:
+    """Select matching files and return documents with the updated deletion set.
+
+    Args:
+        state: Resolved selection rules and document mapper.
+        snapshot: Completed delta contents to filter.
+
+    Returns:
+        Selected documents and deleted IDs, including previously visible items that
+        no longer match the selection during an incremental scan.
+    """
     selected: list[Document] = []
     deleted_ids = set(snapshot.deleted_ids)
     folder_names: dict[str, str] = {}

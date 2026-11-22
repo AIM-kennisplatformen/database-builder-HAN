@@ -56,10 +56,24 @@ class _Worksheet(Protocol):
 
 
 class UbwfrisIbExcelParser(UbwfrisParser[IbRow]):
+    """Parse IB workbooks and report malformed data rows without stopping the stream."""
+
     @override
     async def stream_ubwfris_rows(
         self, workbook: UbwfrisWorkbook[IbRow]
     ) -> AsyncIterator[ParsedUbwfrisRow[IbRow]]:
+        """Yield parsed IB rows, preserving source row numbers and total row count.
+
+        Args:
+            workbook: Uploaded workbook containing an IB worksheet.
+
+        Yields:
+            A row result for each populated data row; invalid rows have no parsed
+            value. The workbook is closed when iteration ends or raises.
+
+        Raises:
+            InvalidWorkbook: If the upload cannot be opened or has no IB headers.
+        """
         source = _open_workbook(workbook)
         try:
             sheet, header_row, indices = _find_ib_sheet(source)
@@ -84,10 +98,24 @@ class UbwfrisIbExcelParser(UbwfrisParser[IbRow]):
 
 
 class UbwfrisRhaExcelParser(UbwfrisParser[RhaRow]):
+    """Parse RHA workbooks and report malformed data rows without stopping the stream."""
+
     @override
     async def stream_ubwfris_rows(
         self, workbook: UbwfrisWorkbook[RhaRow]
     ) -> AsyncIterator[ParsedUbwfrisRow[RhaRow]]:
+        """Yield parsed RHA rows, preserving source row numbers and total row count.
+
+        Args:
+            workbook: Uploaded workbook containing an RHA worksheet.
+
+        Yields:
+            A row result for each populated data row; invalid rows have no parsed
+            value. The workbook is closed when iteration ends or raises.
+
+        Raises:
+            InvalidWorkbook: If the upload cannot be opened or has no RHA headers.
+        """
         source = _open_workbook(workbook)
         try:
             sheet, header_row, indices = _find_rha_sheet(source)

@@ -43,7 +43,16 @@ class DocumentStorePostgres(
     DocumentStore,
     CombinedDocumentRefreshStore,
 ):
+    """Persist document metadata runs and publish drive snapshots transactionally."""
+
     async def delete_all_metadata(self) -> bool:
+        """Clear metadata and cursors unless a metadata operation is running.
+
+        Returns:
+            Whether the reset completed. ``False`` means an active metadata operation
+            or drive run blocked the reset; ``True`` means it succeeded, including
+            when the tables were already empty.
+        """
         async with staging_transaction(self._pool) as connection:
             _ = await connection.execute(
                 "SELECT pg_advisory_xact_lock(%s)", (METADATA_RESET_LOCK,)
@@ -72,6 +81,7 @@ class DocumentStorePostgres(
 
     @override
     async def save_document(self, document: Document) -> None:
+        """Insert or replace one document's current source metadata."""
         file = document.file_metadata
         drive_id, item_id = document.id.id
         async with self._pool.connection() as connection:
@@ -123,6 +133,22 @@ class DocumentStorePostgres(
         selection: MetadataSelection,
         operation_id: UUID | None = None,
     ) -> MetadataDriveIngestRun:
+        """Start a per-drive run and reuse a cursor only for the same selection.
+
+        Args:
+            principal_id: User whose visibility observations the run updates.
+            drive_id: Drive being scanned.
+            selection: Selection whose cursor may be reused.
+            operation_id: Optional parent operation to associate with this run.
+
+        Returns:
+            The new run ID, reusable delta cursor if the selection matches, and
+            whether it matched the previous cursor selection.
+
+        Raises:
+            MetadataRunAlreadyActive: If another run is active for this principal and
+                drive.
+        """
         run_id = uuid4()
         serialized_selection = dumps(asdict(selection), sort_keys=True)
         try:
@@ -182,7 +208,12 @@ class DocumentStorePostgres(
         publication: MetadataDriveRunPublication,
         outcome: dict[str, object],
     ) -> None:
-        """Publish one drive snapshot and its parent outcome atomically."""
+        """Publish one drive snapshot and its parent outcome atomically.
+
+        Raises:
+            ValueError: If the run is not active or does not belong to this operation
+                and drive.
+        """
         async with staging_transaction(self._pool) as connection:
             cursor = await connection.execute(
                 """SELECT drive_id, operation_id FROM document_metadata_runs
@@ -204,6 +235,7 @@ class DocumentStorePostgres(
 
     @override
     async def stage_document(self, run_id: UUID, document: Document) -> None:
+        """Stage a visible document, replacing an earlier staged version of its item."""
         file = document.file_metadata
         async with staging_transaction(self._pool) as connection:
             _ = await connection.execute(
@@ -242,6 +274,7 @@ class DocumentStorePostgres(
 
     @override
     async def stage_deleted_item(self, run_id: UUID, item_id: str) -> None:
+        """Stage an item as invisible in the next published snapshot."""
         async with staging_transaction(self._pool) as connection:
             _ = await connection.execute(
                 """INSERT INTO document_metadata_staging (run_id, item_id, visible)
@@ -254,6 +287,17 @@ class DocumentStorePostgres(
     async def publish_metadata_run(
         self, run_id: UUID, delta_link: str, baseline: bool, reconcile: bool
     ) -> None:
+        """Atomically publish one drive run and advance its delta cursor.
+
+        Args:
+            run_id: Active staged run to publish.
+            delta_link: Completed Graph delta cursor to store.
+            baseline: Whether the scan covered the full drive scope.
+            reconcile: Whether a baseline may hide previously observed but absent items.
+
+        Raises:
+            ValueError: If ``run_id`` is not active.
+        """
         publication = MetadataDriveRunPublication(
             run_id, delta_link, baseline, reconcile
         )
@@ -268,7 +312,11 @@ class DocumentStorePostgres(
         summary: dict[str, object] | None = None,
         domain_ids: dict[str, object] | None = None,
     ) -> None:
-        """Publish all prepared drives atomically in one database transaction."""
+        """Publish prepared drives and optionally complete their parent operation.
+
+        All drive snapshots and the parent operation status commit in one transaction.
+        An empty publication set is a no-op unless an operation ID is supplied.
+        """
         if not publications and operation_id is None:
             return
         async with self._metadata_publication_transaction() as connection:
@@ -400,6 +448,7 @@ class DocumentStorePostgres(
 
     @override
     async def discard_metadata_run(self, run_id: UUID) -> None:
+        """Remove staged rows and mark an active run failed without publishing it."""
         async with self._pool.connection() as connection:
             _ = await connection.execute(
                 "DELETE FROM document_metadata_staging WHERE run_id = %s", (run_id,)
@@ -411,7 +460,7 @@ class DocumentStorePostgres(
             )
 
     async def interrupt_metadata_runs(self) -> None:
-        """Recover per-drive runs orphaned by a process crash at startup."""
+        """Mark orphaned metadata runs and parent operations interrupted at startup."""
         async with staging_transaction(self._pool) as connection:
             _ = await connection.execute(
                 """DELETE FROM document_metadata_staging AS staging

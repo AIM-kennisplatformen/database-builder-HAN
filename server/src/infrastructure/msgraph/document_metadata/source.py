@@ -41,7 +41,6 @@ from infrastructure.msgraph.document_metadata.scan import (
     ScanState,
     delta_path,
     read_delta,
-    resolve_path_scope,
     select_documents,
 )
 
@@ -71,10 +70,28 @@ def _build_audit_actor(identities: GraphIdentitySet | None) -> AuditActor | None
 
 
 class DocumentMetadataSourceSharePoint(DocumentMetadataSource, DocumentRefreshSource):
+    """Read selected drive documents and delta snapshots from Microsoft Graph."""
+
     def __init__(self, client: GraphServiceClient) -> None:
         self.client: GraphServiceClient = client
 
     async def folder_id(self, drive_id: str, path: str, root_item_id: str) -> str:
+        """Resolve a drive-relative path to a folder item ID.
+
+        Args:
+            drive_id: Graph drive containing the path.
+            path: Slash-separated path relative to ``root_item_id``; an empty path
+                resolves the root item itself.
+            root_item_id: ``"root"`` or the ID of the folder that anchors the path.
+
+        Returns:
+            The Graph item ID for the resolved folder.
+
+        Raises:
+            ValueError: If Graph returns no folder metadata.
+            MetadataSourceError: If the path resolves to a non-folder or Graph rejects
+                the request.
+        """
         base_url = f"https://graph.microsoft.com/v1.0/drives/{quote(drive_id, safe='')}"
         encoded_path = "/".join(quote(segment, safe="") for segment in path.split("/"))
         root_path = (
@@ -108,6 +125,17 @@ class DocumentMetadataSourceSharePoint(DocumentMetadataSource, DocumentRefreshSo
     def document(
         self, drive_id: str, item: GraphDriveItem, relative_path: str | None
     ) -> Document:
+        """Convert a Graph file item into the domain document representation.
+
+        Args:
+            drive_id: Drive that owns the item.
+            item: Graph item with a file facet and name.
+            relative_path: Optional path relative to the scanned root.
+
+        Returns:
+            A document containing file metadata and available creation/update audit
+            entries.
+        """
         assert item.file is not None
         assert item.name is not None
         hashes = item.file.hashes
@@ -155,22 +183,62 @@ class DocumentMetadataSourceSharePoint(DocumentMetadataSource, DocumentRefreshSo
         cursor: str | None = None,
         capture_relative_paths: bool = False,
     ) -> DocumentMetadataScan:
+        """Read and filter a drive delta snapshot for the requested selection.
+
+        Path-based selections always read a baseline so folder ancestry is complete.
+        A supplied cursor is reused only when paths do not need to be resolved.
+
+        Args:
+            drive_id: Graph drive to scan.
+            selection: Include and exclude rules applied to file items.
+            root_item_id: Root item to scan, defaulting to the drive root.
+            cursor: Previous Graph delta link, if available.
+            capture_relative_paths: Include paths relative to the scan root.
+
+        Returns:
+            Selected documents, deleted item IDs, the completed delta cursor, and
+            whether the scan used a baseline.
+
+        Raises:
+            ValueError: If Graph returns an invalid or incomplete delta sequence or
+                incomplete folder ancestry.
+            MetadataSourceError: If Graph rejects a request other than an expired
+                cursor that can be recovered with a baseline scan.
+        """
         path_scoped = any(
             rule.path for rule in selection.include_rules + selection.exclude_rules
         )
+        capture_paths = path_scoped or capture_relative_paths
+        root_id = None
+        if capture_paths:
+            root_id = (
+                await self.folder_id(drive_id, "", root_item_id)
+                if root_item_id == "root"
+                else root_item_id
+            )
+        rule_resolve_folder_ids: dict[str, str] = {}
+        if path_scoped:
+            paths = {
+                rule.path
+                for rule in selection.include_rules + selection.exclude_rules
+                if rule.path
+            }
+            for path in paths:
+                rule_resolve_folder_ids[path] = await self.folder_id(
+                    drive_id, path, root_item_id
+                )
         state = ScanState(
             client=self.client,
-            folder_resolver=self.folder_id,
             document_mapper=self.document,
             drive_id=drive_id,
             selection=selection,
             root_item_id=root_item_id,
             cursor=cursor,
             path_scoped=path_scoped,
-            capture_paths=path_scoped or capture_relative_paths,
-            root_id=None,
+            capture_paths=capture_paths,
+            root_id=root_id,
+            rule_resolve_folder_ids=rule_resolve_folder_ids,
         )
-        state = await resolve_path_scope(state)
         base_url = f"https://graph.microsoft.com/v1.0/drives/{quote(drive_id, safe='')}"
         baseline_url = f"{base_url}/{delta_path(root_item_id)}/delta"
         snapshot = await read_delta(state, baseline_url)
@@ -192,6 +260,17 @@ class DocumentMetadataSourceSharePoint(DocumentMetadataSource, DocumentRefreshSo
         selection: MetadataSelection,
         root_item_id: str = "root",
     ) -> AsyncIterator[DocumentMetadataItem]:
+        """Yield selected documents with the completed scan's total count.
+
+        Args:
+            drive_id: Graph drive to scan.
+            selection: Include and exclude rules applied to file items.
+            root_item_id: Root item to scan, defaulting to the drive root.
+
+        Yields:
+            Each selected document with total and available counts set to the final
+            number of selected documents.
+        """
         scan = await self.scan_metadata(
             drive_id,
             selection,
