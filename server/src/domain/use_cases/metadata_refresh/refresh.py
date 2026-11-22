@@ -37,7 +37,7 @@ from domain.use_cases.metadata_refresh.group._selectors import (
 )
 
 
-async def _refresh_group_metadata_atomically(
+async def _stage_and_publish_group_metadata(
     user_id: str,
     request: MetadataGroupIngestRequest,
     drive_source: GroupDriveSource,
@@ -206,7 +206,7 @@ async def refresh_group_metadata_atomically(
     excluded_rules = build_selector_rules(request.exclude)
     validate_selector_conflicts(included_rules, excluded_rules)
     operation_id = await store.begin_group_operation(user_id, request.group_id)
-    refresh_events = _refresh_group_metadata_atomically(
+    refresh_events = _stage_and_publish_group_metadata(
         user_id, request, drive_source, metadata_source, store, operation_id
     )
     processed_document_count = 0

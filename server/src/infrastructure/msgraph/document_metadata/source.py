@@ -26,7 +26,7 @@ from domain.ports.documents.document_metadata_source import (
     DocumentMetadataSource,
     DocumentRefreshSource,
 )
-from infrastructure.msgraph.base import raise_for_graph_error
+from infrastructure.msgraph.base import raise_for_graph_error, validate_graph_url
 from infrastructure.msgraph.document_metadata.models import (
     GraphDeltaPage,
     GraphDriveItem,
@@ -36,6 +36,13 @@ from infrastructure.msgraph.document_metadata.models import (
     GraphIdentity,
     GraphIdentitySet,
     GraphParentReference,
+)
+from infrastructure.msgraph.document_metadata.scan import (
+    ScanState,
+    delta_path,
+    read_delta,
+    resolve_path_scope,
+    select_documents,
 )
 
 __all__ = [
@@ -67,9 +74,7 @@ class DocumentMetadataSourceSharePoint(DocumentMetadataSource, DocumentRefreshSo
     def __init__(self, client: GraphServiceClient) -> None:
         self.client: GraphServiceClient = client
 
-    async def _resolve_folder_id(
-        self, drive_id: str, path: str, root_item_id: str = "root"
-    ) -> str:
+    async def folder_id(self, drive_id: str, path: str, root_item_id: str) -> str:
         base_url = f"https://graph.microsoft.com/v1.0/drives/{quote(drive_id, safe='')}"
         encoded_path = "/".join(quote(segment, safe="") for segment in path.split("/"))
         root_path = (
@@ -100,11 +105,8 @@ class DocumentMetadataSourceSharePoint(DocumentMetadataSource, DocumentRefreshSo
             raise MetadataSourceError(400, "path must refer to a folder")
         return folder.id
 
-    async def folder_id(self, drive_id: str, path: str, root_item_id: str) -> str:
-        return await self._resolve_folder_id(drive_id, path, root_item_id)
-
-    def _document(
-        self, drive_id: str, item: GraphDriveItem, relative_path: str | None = None
+    def document(
+        self, drive_id: str, item: GraphDriveItem, relative_path: str | None
     ) -> Document:
         assert item.file is not None
         assert item.name is not None
@@ -144,11 +146,6 @@ class DocumentMetadataSourceSharePoint(DocumentMetadataSource, DocumentRefreshSo
             ),
         )
 
-    def document(
-        self, drive_id: str, item: GraphDriveItem, relative_path: str | None
-    ) -> Document:
-        return self._document(drive_id, item, relative_path)
-
     @override
     async def scan_metadata(
         self,
@@ -158,12 +155,34 @@ class DocumentMetadataSourceSharePoint(DocumentMetadataSource, DocumentRefreshSo
         cursor: str | None = None,
         capture_relative_paths: bool = False,
     ) -> DocumentMetadataScan:
-        from infrastructure.msgraph.document_metadata.scan import (
-            scan_document_metadata,
+        path_scoped = any(
+            rule.path for rule in selection.include_rules + selection.exclude_rules
         )
-
-        return await scan_document_metadata(
-            self, drive_id, selection, root_item_id, cursor, capture_relative_paths
+        state = ScanState(
+            client=self.client,
+            folder_resolver=self.folder_id,
+            document_mapper=self.document,
+            drive_id=drive_id,
+            selection=selection,
+            root_item_id=root_item_id,
+            cursor=cursor,
+            path_scoped=path_scoped,
+            capture_paths=path_scoped or capture_relative_paths,
+            root_id=None,
+        )
+        state = await resolve_path_scope(state)
+        base_url = f"https://graph.microsoft.com/v1.0/drives/{quote(drive_id, safe='')}"
+        baseline_url = f"{base_url}/{delta_path(root_item_id)}/delta"
+        snapshot = await read_delta(state, baseline_url)
+        documents, deleted_ids = await select_documents(state, snapshot)
+        if snapshot.delta_link is None:
+            raise ValueError("Graph did not provide a completed delta cursor")
+        validate_graph_url(snapshot.delta_link)
+        return DocumentMetadataScan(
+            documents=tuple(documents),
+            deleted_item_ids=tuple(sorted(deleted_ids)),
+            delta_link=snapshot.delta_link,
+            baseline=snapshot.baseline,
         )
 
     @override

@@ -1,5 +1,7 @@
 """Persist document metadata, observations, and inventory cursors."""
 
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from json import dumps
 from sys import exc_info
@@ -192,7 +194,7 @@ class DocumentStorePostgres(
                 raise ValueError(
                     "Metadata run does not belong to this combined drive operation"
                 )
-            await self._publish_metadata_run(connection, publication)
+            await self._apply_drive_publication(connection, publication)
             await self._set_drive_outcome(
                 connection,
                 operation_id,
@@ -252,9 +254,11 @@ class DocumentStorePostgres(
     async def publish_metadata_run(
         self, run_id: UUID, delta_link: str, baseline: bool, reconcile: bool
     ) -> None:
-        await self.publish_metadata_runs(
-            (MetadataDriveRunPublication(run_id, delta_link, baseline, reconcile),)
+        publication = MetadataDriveRunPublication(
+            run_id, delta_link, baseline, reconcile
         )
+        async with self._metadata_publication_transaction() as connection:
+            await self._apply_drive_publication(connection, publication)
 
     @override
     async def publish_metadata_runs(
@@ -267,43 +271,46 @@ class DocumentStorePostgres(
         """Publish all prepared drives atomically in one database transaction."""
         if not publications and operation_id is None:
             return
+        async with self._metadata_publication_transaction() as connection:
+            for publication in publications:
+                await self._apply_drive_publication(connection, publication)
+            if operation_id is not None:
+                _ = await connection.execute(
+                    """UPDATE operation_runs SET status = 'complete', finished_at = now(),
+                       summary = %s::jsonb, domain_ids = domain_ids || %s::jsonb
+                       WHERE id = %s AND status = 'running'""",
+                    (
+                        dumps(summary or {}),
+                        dumps(domain_ids or {}),
+                        operation_id,
+                    ),
+                )
+
+    @asynccontextmanager
+    async def _metadata_publication_transaction(
+        self,
+    ) -> AsyncGenerator[AsyncConnection[tuple[object, ...]]]:
         connection_context = self._pool.connection()
         connection = await connection_context.__aenter__()
         try:
             transaction_context = connection.transaction()
             _ = await transaction_context.__aenter__()
             try:
-                for publication in publications:
-                    await self._publish_metadata_run(connection, publication)
-                if operation_id is not None:
-                    _ = await connection.execute(
-                        """UPDATE operation_runs SET status = 'complete', finished_at = now(),
-                           summary = %s::jsonb, domain_ids = domain_ids || %s::jsonb
-                           WHERE id = %s AND status = 'running'""",
-                        (
-                            dumps(summary or {}),
-                            dumps(domain_ids or {}),
-                            operation_id,
-                        ),
-                    )
-                # Deliver a pending cancellation before entering the short commit
-                # boundary. If cancelled, the transaction rolls back below.
+                yield connection
+                # Deliver cancellation before entering the short commit boundary.
                 await anyio.lowlevel.checkpoint()
             except BaseException:
                 with anyio.CancelScope(shield=True):
                     _ = await transaction_context.__aexit__(*exc_info())
                 raise
             else:
-                # Finish the atomic commit without allowing cancellation to leave
-                # the connection in an unknown transaction state.
                 with anyio.CancelScope(shield=True):
                     _ = await transaction_context.__aexit__(None, None, None)
         finally:
-            # Pool release may roll back an open transaction, so protect it too.
             with anyio.CancelScope(shield=True):
                 _ = await connection_context.__aexit__(*exc_info())
 
-    async def _publish_metadata_run(
+    async def _apply_drive_publication(
         self,
         connection: AsyncConnection[tuple[object, ...]],
         publication: MetadataDriveRunPublication,

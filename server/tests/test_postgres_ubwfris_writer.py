@@ -3,7 +3,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import date
 from decimal import Decimal
-from typing import cast
+from typing import Literal, cast
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -153,7 +153,38 @@ def test_startup_recovery_deletes_only_running_snapshots() -> None:
     assert all("DELETE FROM ubwfris_rha_rows WHERE" not in sql for sql in statements)
 
 
-def test_discard_preserves_completed_snapshot() -> None:
+@pytest.mark.parametrize("row_type", ["ib", "rha"])
+def test_reset_deletes_all_rows_and_staging_for_selected_row_type(
+    row_type: Literal["ib", "rha"],
+) -> None:
+    operation_cursor = MagicMock()
+    operation_cursor.fetchone = AsyncMock(return_value=None)
+    snapshot_cursor = MagicMock()
+    snapshot_cursor.fetchone = AsyncMock(return_value=None)
+    connection = MagicMock()
+    connection.execute = AsyncMock(
+        side_effect=[None, operation_cursor, snapshot_cursor, None, None, None, None]
+    )
+    connection.transaction = MagicMock(side_effect=lambda: _async_resource(None))
+    pool = MagicMock()
+    pool.connection = MagicMock(side_effect=lambda: _async_resource(connection))
+
+    writer = (
+        IbWriterPostgres(cast(AsyncConnectionPool, pool))
+        if row_type == "ib"
+        else RhaWriterPostgres(cast(AsyncConnectionPool, pool))
+    )
+    assert asyncio.run(writer.delete_all_snapshots(row_type))
+
+    statements = [call.args[0] for call in connection.execute.await_args_list]
+    assert f"DELETE FROM ubwfris_{row_type}_rows" in statements[3]
+    assert f"DELETE FROM ubwfris_{row_type}_rows_staging" in statements[4]
+    assert connection.execute.await_args_list[3].args == (statements[3],)
+    assert connection.execute.await_args_list[4].args == (statements[4],)
+
+
+@pytest.mark.parametrize("row_type", ["ib", "rha"])
+def test_discard_preserves_completed_snapshot(row_type: Literal["ib", "rha"]) -> None:
     cursor = MagicMock()
     cursor.fetchone = AsyncMock(return_value=("complete",))
     connection = MagicMock()
@@ -161,11 +192,14 @@ def test_discard_preserves_completed_snapshot() -> None:
     pool = MagicMock()
     pool.connection.return_value.__aenter__.return_value = connection
 
-    asyncio.run(
-        IbWriterPostgres(cast(AsyncConnectionPool, pool)).discard_snapshot("snapshot")
+    writer = (
+        IbWriterPostgres(cast(AsyncConnectionPool, pool))
+        if row_type == "ib"
+        else RhaWriterPostgres(cast(AsyncConnectionPool, pool))
     )
+    asyncio.run(writer.discard_snapshot("snapshot"))
 
     assert connection.execute.await_count == 1
     sql, values = connection.execute.await_args.args
     assert "SELECT status FROM ubwfris_snapshots" in sql
-    assert values == ("snapshot", "ib")
+    assert values == ("snapshot", row_type)

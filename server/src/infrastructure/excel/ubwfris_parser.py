@@ -57,18 +57,58 @@ class _Worksheet(Protocol):
 
 class UbwfrisIbExcelParser(UbwfrisParser[IbRow]):
     @override
-    def stream_ubwfris_rows(
+    async def stream_ubwfris_rows(
         self, workbook: UbwfrisWorkbook[IbRow]
     ) -> AsyncIterator[ParsedUbwfrisRow[IbRow]]:
-        return _stream_ib_rows(workbook)
+        source = _open_workbook(workbook)
+        try:
+            sheet, header_row, indices = _find_ib_sheet(source)
+            total_rows = sum(
+                _has_populated_values(values, indices)
+                for values in sheet.iter_rows(min_row=header_row + 1, values_only=True)
+            )
+            for row_number, values in enumerate(
+                sheet.iter_rows(min_row=header_row + 1, values_only=True),
+                start=header_row + 1,
+            ):
+                if not _has_populated_values(values, indices):
+                    continue
+                try:
+                    row = _parse_ib_row(values, indices, row_number)
+                except IndexError, InvalidOperation, TypeError, ValueError:
+                    yield ParsedUbwfrisRow(None, row_number, total_rows)
+                    continue
+                yield ParsedUbwfrisRow(row, row_number, total_rows)
+        finally:
+            source.close()
 
 
 class UbwfrisRhaExcelParser(UbwfrisParser[RhaRow]):
     @override
-    def stream_ubwfris_rows(
+    async def stream_ubwfris_rows(
         self, workbook: UbwfrisWorkbook[RhaRow]
     ) -> AsyncIterator[ParsedUbwfrisRow[RhaRow]]:
-        return _stream_rha_rows(workbook)
+        source = _open_workbook(workbook)
+        try:
+            sheet, header_row, indices = _find_rha_sheet(source)
+            total_rows = sum(
+                _has_populated_values(values, indices)
+                for values in sheet.iter_rows(min_row=header_row + 1, values_only=True)
+            )
+            for row_number, values in enumerate(
+                sheet.iter_rows(min_row=header_row + 1, values_only=True),
+                start=header_row + 1,
+            ):
+                if not _has_populated_values(values, indices):
+                    continue
+                try:
+                    row = _parse_rha_row(values, indices, row_number, source.epoch)
+                except IndexError, InvalidOperation, TypeError, ValueError:
+                    yield ParsedUbwfrisRow(None, row_number, total_rows)
+                    continue
+                yield ParsedUbwfrisRow(row, row_number, total_rows)
+        finally:
+            source.close()
 
 
 def _open_workbook(
@@ -90,7 +130,9 @@ def _is_blank(value: object) -> bool:
 
 
 def _has_populated_values(values: tuple[object, ...], indices: tuple[int, ...]) -> bool:
-    return any(index < len(values) and not _is_blank(values[index]) for index in indices)
+    return any(
+        index < len(values) and not _is_blank(values[index]) for index in indices
+    )
 
 
 def _build_header_positions(values: tuple[object, ...]) -> dict[str, int]:
@@ -143,32 +185,6 @@ def _parse_ib_row(
         remaining_hours=numbers[4],
         cost_center=str(cells[8]).strip(),
     )
-
-
-async def _stream_ib_rows(
-    workbook: UbwfrisWorkbook[IbRow],
-) -> AsyncIterator[ParsedUbwfrisRow[IbRow]]:
-    source = _open_workbook(workbook)
-    try:
-        sheet, header_row, indices = _find_ib_sheet(source)
-        total_rows = sum(
-            _has_populated_values(values, indices)
-            for values in sheet.iter_rows(min_row=header_row + 1, values_only=True)
-        )
-        for row_number, values in enumerate(
-            sheet.iter_rows(min_row=header_row + 1, values_only=True),
-            start=header_row + 1,
-        ):
-            if not _has_populated_values(values, indices):
-                continue
-            try:
-                row = _parse_ib_row(values, indices, row_number)
-            except IndexError, InvalidOperation, TypeError, ValueError:
-                yield ParsedUbwfrisRow(None, row_number, total_rows)
-                continue
-            yield ParsedUbwfrisRow(row, row_number, total_rows)
-    finally:
-        source.close()
 
 
 def _find_rha_header_indices(values: tuple[object, ...]) -> tuple[int, ...] | None:
@@ -266,29 +282,3 @@ def _parse_rha_row(
         main_department_name=_parse_required_text(cells[16]),
         employment_cost_center=_parse_required_text(cells[17]),
     )
-
-
-async def _stream_rha_rows(
-    workbook: UbwfrisWorkbook[RhaRow],
-) -> AsyncIterator[ParsedUbwfrisRow[RhaRow]]:
-    source = _open_workbook(workbook)
-    try:
-        sheet, header_row, indices = _find_rha_sheet(source)
-        total_rows = sum(
-            _has_populated_values(values, indices)
-            for values in sheet.iter_rows(min_row=header_row + 1, values_only=True)
-        )
-        for row_number, values in enumerate(
-            sheet.iter_rows(min_row=header_row + 1, values_only=True),
-            start=header_row + 1,
-        ):
-            if not _has_populated_values(values, indices):
-                continue
-            try:
-                row = _parse_rha_row(values, indices, row_number, source.epoch)
-            except IndexError, InvalidOperation, TypeError, ValueError:
-                yield ParsedUbwfrisRow(None, row_number, total_rows)
-                continue
-            yield ParsedUbwfrisRow(row, row_number, total_rows)
-    finally:
-        source.close()
