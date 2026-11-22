@@ -69,7 +69,9 @@ class Metadata:
         selection: MetadataSelection,
         root_item_id: str,
         cursor: str | None,
+        capture_relative_paths: bool = False,
     ) -> DocumentMetadataScan:
+        _ = capture_relative_paths
         assert cursor is None
         self.roots.append((drive_id, root_item_id))
         include_rules = selection.include_rules
@@ -441,9 +443,7 @@ def test_duplicate_identical_directives_are_deduplicated() -> None:
             pass
 
     asyncio.run(collect())
-    assert store.selections[0].include_rules == (
-        MetadataPathRule("a", ("pdf",)),
-    )
+    assert store.selections[0].include_rules == (MetadataPathRule("a", ("pdf",)),)
 
 
 def test_unavailable_explicit_include_fails_before_any_write() -> None:
@@ -587,9 +587,7 @@ def test_unavailable_explicit_include_is_inspectable_in_operation_status() -> No
         return started
 
     started = asyncio.run(run())
-    operation = asyncio.run(
-        get_operation_run(started.operation_id, "user", store)
-    )
+    operation = asyncio.run(get_operation_run(started.operation_id, "user", store))
 
     assert operation.status == "failed"
     assert operation.failure_code == "metadata.source_error"

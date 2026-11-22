@@ -44,6 +44,7 @@ class FileMetadata(ValueObject):
     content_version: ContentVersion
     source_url: str | None
     hashes: FileHashes = field(default_factory=FileHashes)
+    relative_path: str | None = None
 
     def __post_init__(self) -> None:
         if not self.name.strip():

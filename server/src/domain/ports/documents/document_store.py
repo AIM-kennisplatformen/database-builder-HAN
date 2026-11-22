@@ -3,6 +3,11 @@ from typing import Protocol
 from uuid import UUID
 
 from domain.models.documents.document import Document
+from domain.models.documents.document_ingestion import (
+    DocumentIngestFileSelection,
+    DocumentProcessingCandidate,
+    ProcessingOutcome,
+)
 from domain.models.documents.metadata_selection import MetadataSelection
 
 
@@ -81,6 +86,29 @@ class CombinedDocumentRefreshStore(DocumentRefreshStore, Protocol):
 
     async def complete_group_operation(
         self, operation_id: UUID, summary: dict[str, object]
+    ) -> None: ...
+
+    async def query_visible_document_candidates(
+        self, principal_id: str, drive_id: str, published_run_id: UUID
+    ) -> tuple[DocumentProcessingCandidate, ...]: ...
+
+    async def record_document_ingest_selections(
+        self,
+        operation_id: UUID,
+        selections: tuple[DocumentIngestFileSelection, ...],
+    ) -> None: ...
+
+    async def record_document_processing_outcome(
+        self,
+        drive_id: str,
+        item_id: str,
+        source_content_version: str | None,
+        processing_policy_version: str,
+        outcome: ProcessingOutcome | str,
+        *,
+        deferred: bool = False,
+        failure_stage: str | None = None,
+        failure_detail: str | None = None,
     ) -> None: ...
 
 

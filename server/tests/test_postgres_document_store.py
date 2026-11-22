@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -17,6 +18,10 @@ from domain.models.documents.document import (
     DocumentMetadata,
     FileHashes,
     FileMetadata,
+)
+from domain.models.documents.document_ingestion import (
+    DocumentIngestFileSelection,
+    ProcessingStatus,
 )
 from domain.models.documents.metadata_selection import (
     MetadataPathRule,
@@ -110,6 +115,136 @@ def test_startup_recovery_discards_only_staged_rows_and_interrupts_running_runs(
     assert "document_metadata_observations" not in delete_sql + update_sql
 
 
+def test_candidate_query_uses_current_published_run_and_visible_operator_observations() -> None:
+    published_run_id = uuid4()
+    result_cursor = MagicMock()
+    result_cursor.fetchall = AsyncMock(
+        return_value=[
+            (
+                "drive",
+                "item",
+                "Report.pdf",
+                "reports/Report.pdf",
+                "v2",
+                "v1",
+                "policy-v1",
+                "v1",
+                "policy-v1",
+                None,
+                "drive",
+                False,
+            )
+        ]
+    )
+    connection = MagicMock()
+    connection.execute = AsyncMock(return_value=result_cursor)
+    pool = MagicMock()
+    pool.connection.return_value.__aenter__.return_value = connection
+
+    candidates = asyncio.run(
+        PostgresDocumentStore(cast(AsyncConnectionPool, pool)).query_visible_document_candidates(
+            "operator", "drive", published_run_id
+        )
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].item_id == "item"
+    assert candidates[0].relative_path == "reports/Report.pdf"
+    assert candidates[0].content_version == "v2"
+    assert candidates[0].state is not None
+    assert candidates[0].state.active_content_version == "v1"
+    sql, parameters = connection.execute.await_args.args
+    assert "cursor.published_run_id = %s" in sql
+    assert "cursor.principal_id = %s AND cursor.drive_id = %s" in sql
+    assert "run.selection = cursor.selection" in sql
+    assert "observation.principal_id = cursor.principal_id" in sql
+    assert "observation.selection = cursor.selection" in sql
+    assert "observation.visible" in sql
+    assert "observation.run_id" not in sql
+    assert "cursor.delta_link <> ''" in sql
+    assert parameters == ("operator", "drive", published_run_id)
+
+
+@pytest.mark.parametrize("current_snapshot", [False, True])
+def test_empty_candidate_result_requires_the_published_snapshot_to_remain_current(
+    current_snapshot: bool,
+) -> None:
+    published_run_id = uuid4()
+    candidates_cursor = MagicMock()
+    candidates_cursor.fetchall = AsyncMock(return_value=[])
+    validity_cursor = MagicMock()
+    validity_cursor.fetchone = AsyncMock(
+        return_value=(current_snapshot,) if current_snapshot else (False,)
+    )
+    connection = MagicMock()
+    connection.execute = AsyncMock(side_effect=[candidates_cursor, validity_cursor])
+    pool = MagicMock()
+    pool.connection.return_value.__aenter__.return_value = connection
+
+    async def query() -> tuple[object, ...]:
+        return await PostgresDocumentStore(
+            cast(AsyncConnectionPool, pool)
+        ).query_visible_document_candidates("operator", "drive", published_run_id)
+
+    if current_snapshot:
+        assert asyncio.run(query()) == ()
+    else:
+        with pytest.raises(ValueError, match="Published metadata snapshot is no longer current"):
+            asyncio.run(query())
+
+    assert connection.execute.await_count == 2
+    validation_sql, validation_parameters = connection.execute.await_args_list[1].args
+    assert "SELECT EXISTS" in validation_sql
+    assert "cursor.published_run_id = %s" in validation_sql
+    assert "run.status = 'complete'" in validation_sql
+    assert validation_parameters == ("operator", "drive", published_run_id)
+
+
+def test_selected_file_run_records_are_persisted_with_statuses_and_reasons() -> None:
+    operation_id = uuid4()
+    connection = MagicMock()
+    connection.execute = AsyncMock()
+    transaction = MagicMock()
+    transaction.__aenter__ = AsyncMock(return_value=None)
+    transaction.__aexit__ = AsyncMock(return_value=False)
+    connection.transaction.return_value = transaction
+    connection_context = MagicMock()
+    connection_context.__aenter__ = AsyncMock(return_value=connection)
+    connection_context.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.connection.return_value = connection_context
+    selection = DocumentIngestFileSelection(
+        drive_id="drive",
+        item_id="item",
+        relative_path="reports/Report.pdf",
+        source_content_version="v2",
+        processing_policy_version="policy-v1",
+        statuses=(ProcessingStatus.NEW, ProcessingStatus.DEFERRED),
+        selection_reasons=("reports;extensions=pdf;statuses=deferred,new",),
+    )
+
+    asyncio.run(
+        PostgresDocumentStore(cast(AsyncConnectionPool, pool)).record_document_ingest_selections(
+            operation_id, (selection,)
+        )
+    )
+
+    sql, parameters = connection.execute.await_args.args
+    assert "INSERT INTO document_ingest_file_runs" in sql
+    assert "ON CONFLICT (operation_id, drive_id, item_id) DO UPDATE" in sql
+    assert parameters[:6] == (
+        operation_id,
+        "drive",
+        "item",
+        "reports/Report.pdf",
+        "v2",
+        "policy-v1",
+    )
+    assert parameters[6].obj == ["new", "deferred"]
+    assert parameters[7].obj == ["reports;extensions=pdf;statuses=deferred,new"]
+    assert parameters[8] == "selected"
+
+
 def test_metadata_selection_serialization_matches_persisted_cursor_key() -> None:
     expected = (
         '{"exclude_rules": [], "include_rules": [{"extensions": ["pdf"], '
@@ -137,6 +272,36 @@ def test_metadata_selection_serialization_matches_persisted_cursor_key() -> None
     assert run.cursor == "saved-cursor"
     _, insert_values = connection.execute.await_args_list[1].args
     assert insert_values[3] == expected
+
+
+def test_legacy_metadata_cursor_forces_baseline_before_candidate_query() -> None:
+    expected = (
+        '{"exclude_rules": [], "include_rules": [{"extensions": ["pdf"], '
+        '"path": "reports"}]}'
+    )
+    cursor = MagicMock()
+    cursor.fetchone = AsyncMock(return_value=(expected, ""))
+    connection = MagicMock()
+    connection.execute = AsyncMock(side_effect=[cursor, None])
+    pool = MagicMock()
+    pool.connection.return_value.__aenter__.return_value = connection
+
+    run = asyncio.run(
+        PostgresDocumentStore(cast(AsyncConnectionPool, pool)).begin_metadata_run(
+            "operator",
+            "drive",
+            MetadataSelection(
+                include_rules=(MetadataPathRule("reports", ("pdf",)),),
+                exclude_rules=(),
+            ),
+        )
+    )
+
+    assert run.same_selection
+    assert run.cursor is None
+    migration = Path("migrations/versions/009_document_ingestion_state.sql").read_text()
+    assert "SET name = source.name, content_version = source.content_version" in migration
+    assert "UPDATE document_metadata_cursors SET delta_link = '';" in migration
 
 
 @pytest.mark.parametrize("fail_outcome_update", [False, True])

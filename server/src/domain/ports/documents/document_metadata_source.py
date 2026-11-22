@@ -37,4 +37,5 @@ class DocumentRefreshSource(Protocol):
         selection: MetadataSelection,
         root_item_id: str,
         cursor: str | None,
+        capture_relative_paths: bool = False,
     ) -> DocumentMetadataScan: ...

@@ -7,6 +7,7 @@ from domain.use_cases.metadata_ingest.drive import (
 )
 from domain.use_cases.metadata_ingest.group import (
     DriveMetadataSelector,
+    MetadataDriveFilesSelected,
     MetadataDrivePublished,
     MetadataDriveRefreshFailure,
     MetadataIngestDriveFailure,
@@ -16,12 +17,14 @@ from domain.use_cases.metadata_ingest.group import (
     MetadataIngestSkipped,
     MetadataIngestStarted,
     MetadataRefreshRunResult,
+    ingest_group_document_candidates,
     ingest_group_metadata,
     refresh_group_metadata_for_document_ingest,
 )
 
 __all__ = [
     "DriveMetadataSelector",
+    "MetadataDriveFilesSelected",
     "MetadataDrivePublished",
     "MetadataDriveRefreshFailure",
     "MetadataIngestDriveFailure",
@@ -33,6 +36,7 @@ __all__ = [
     "MetadataIngestSkipped",
     "MetadataIngestStarted",
     "MetadataRefreshRunResult",
+    "ingest_group_document_candidates",
     "ingest_group_metadata",
     "ingest_metadata",
     "refresh_group_metadata_for_document_ingest",

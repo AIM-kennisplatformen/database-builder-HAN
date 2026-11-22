@@ -89,18 +89,27 @@ async def _scan_metadata_source(
     source: DocumentRefreshSource,
     req: MetadataIngestDriveRequest,
     cursor: str | None,
+    capture_relative_paths: bool = False,
 ) -> DocumentMetadataScan:
     try:
         selection = MetadataSelection(req.include_rules, req.exclude_rules)
+        capture_paths = capture_relative_paths or any(
+            rule.path for rule in selection.include_rules + selection.exclude_rules
+        )
+        scan_cursor = cursor if not capture_paths else None
+        if capture_relative_paths:
+            return await source.scan_metadata(
+                req.drive_id,
+                selection,
+                req.root_item_id,
+                scan_cursor,
+                capture_relative_paths=True,
+            )
         return await source.scan_metadata(
             req.drive_id,
             selection,
             req.root_item_id,
-            cursor
-            if not any(
-                rule.path for rule in selection.include_rules + selection.exclude_rules
-            )
-            else None,
+            scan_cursor,
         )
     except MetadataSourceError:
         raise
@@ -191,6 +200,8 @@ async def prepare_metadata(
     req: MetadataIngestDriveRequest,
     source: DocumentRefreshSource,
     store: DocumentRefreshStore,
+    *,
+    capture_relative_paths: bool = False,
 ) -> AsyncGenerator[MetadataIngestDriveProgress | MetadataIngestPrepared]:
     """Scan and stage one drive without publishing it."""
     run: MetadataIngestRun | None = None
@@ -198,7 +209,9 @@ async def prepare_metadata(
         run = await _begin_metadata_run(store, principal_id, req)
     assert run is not None
     try:
-        scan = await _scan_metadata_source(source, req, run.cursor)
+        scan = await _scan_metadata_source(
+            source, req, run.cursor, capture_relative_paths
+        )
         updates = _stage_metadata(store, run.id, scan)
         try:
             async for update in updates:

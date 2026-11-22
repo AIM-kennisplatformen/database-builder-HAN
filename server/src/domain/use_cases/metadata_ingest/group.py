@@ -12,6 +12,10 @@ from domain.exceptions.metadata_ingest_errors import (
     SourceUnavailable,
     StoreUnavailable,
 )
+from domain.models.documents.document_ingestion import (
+    DocumentIngestRequest,
+    select_ingest_file,
+)
 from domain.models.documents.metadata_selection import (
     MetadataPathRule,
     normalize_metadata_rules,
@@ -127,6 +131,13 @@ class MetadataDrivePublished:
 
 
 @dataclass(frozen=True)
+class MetadataDriveFilesSelected:
+    drive_id: str
+    metadata_run_id: UUID
+    selected_count: int
+
+
+@dataclass(frozen=True)
 class MetadataDriveRefreshFailure:
     drive_id: str
     outcome_status: str
@@ -147,6 +158,10 @@ class MetadataIngestDriveFailure(Exception):
         super().__init__(str(cause))
         self.drive_id: str = drive_id
         self.cause: Exception = cause
+
+
+class DocumentCandidateSelectionFailure(Exception):
+    """Candidate selection failed after the metadata snapshot was published."""
 
 
 def _failure_details(
@@ -186,6 +201,10 @@ def _failure_details(
     if isinstance(cause, StoreUnavailable):
         summary["reason"] = "Metadata store is unavailable"
         return "metadata.store_unavailable", summary
+    if isinstance(cause, DocumentCandidateSelectionFailure):
+        summary["failure_stage"] = "document_ingest.selection"
+        summary["reason"] = "Document candidate selection or persistence failed"
+        return "document_ingest.selection_failed", summary
 
     summary["reason"] = "Metadata ingestion failed"
     return "metadata.ingest_failed", summary
@@ -198,10 +217,17 @@ async def _ingest_drive(
     store: DocumentRefreshStore,
     *,
     allow_skip: bool,
+    capture_relative_paths: bool = False,
 ) -> AsyncGenerator[
     MetadataIngestProgress | MetadataIngestSkipped | MetadataIngestPrepared
 ]:
-    updates = prepare_metadata(user_id, request, metadata_source, store)
+    updates = prepare_metadata(
+        user_id,
+        request,
+        metadata_source,
+        store,
+        capture_relative_paths=capture_relative_paths,
+    )
     try:
         try:
             async for update in updates:
@@ -388,6 +414,10 @@ async def refresh_group_metadata_for_document_ingest(
     drive_source: GroupDriveSource,
     metadata_source: DocumentRefreshSource,
     store: CombinedDocumentRefreshStore,
+    *,
+    validation_include_drive_ids: frozenset[str] | None = None,
+    validation_exclude_drive_ids: frozenset[str] | None = None,
+    capture_relative_paths_drive_ids: frozenset[str] | None = None,
 ) -> AsyncGenerator[
     MetadataIngestStarted
     | MetadataIngestProgress
@@ -411,7 +441,11 @@ async def refresh_group_metadata_for_document_ingest(
         group = await get_group_drives(user_id, request.group_id, drive_source)
         locations = {location.drive_id: location for location in group.locations}
         available = set(locations)
-        included = set(included_rules)
+        included = set(
+            validation_include_drive_ids
+            if validation_include_drive_ids is not None
+            else included_rules
+        )
         excluded = set(excluded_rules)
         unavailable_included = [
             drive_id for drive_id in included if drive_id not in available
@@ -423,13 +457,14 @@ async def refresh_group_metadata_for_document_ingest(
                     403, "Included drive is not accessible in this group"
                 ),
             )
-        unknown_excluded = excluded - available
+        validation_excluded = set(validation_exclude_drive_ids or ())
+        unknown_excluded = (excluded | validation_excluded) - available
         if unknown_excluded:
             raise InvalidMetadataSelection(
                 "drive IDs are not available in this group: "
                 + ", ".join(sorted(unknown_excluded))
             )
-        if included and excluded - included:
+        if included and (excluded | validation_excluded) - included:
             raise InvalidMetadataSelection("excluded drives must also be included")
         selected = tuple(
             drive_id
@@ -473,6 +508,8 @@ async def refresh_group_metadata_for_document_ingest(
                 metadata_source,
                 store,
                 allow_skip=not included,
+                capture_relative_paths=drive_id
+                in (capture_relative_paths_drive_ids or ()),
             )
             try:
                 async for update in updates:
@@ -617,3 +654,103 @@ async def refresh_group_metadata_for_document_ingest(
         if updates is not None:
             with anyio.CancelScope(shield=True):
                 await updates.aclose()
+
+
+async def ingest_group_document_candidates(
+    user_id: str,
+    request: DocumentIngestRequest,
+    drive_source: GroupDriveSource,
+    metadata_source: DocumentRefreshSource,
+    store: CombinedDocumentRefreshStore,
+) -> AsyncGenerator[
+    MetadataIngestStarted
+    | MetadataIngestProgress
+    | MetadataDrivePublished
+    | MetadataDriveFilesSelected
+    | MetadataDriveRefreshFailure
+    | MetadataRefreshRunResult
+]:
+    """Refresh metadata, then persist eligible candidates per published drive."""
+    metadata_request = MetadataIngestRequest(
+        request.group_id,
+        include=[
+            DriveMetadataSelector(
+                selector.drive_id,
+                paths=[path for path in selector.paths if path],
+                extensions=list(selector.extensions),
+            )
+            for selector in request.include
+        ],
+        exclude=[
+            DriveMetadataSelector(
+                selector.drive_id,
+                paths=[path for path in selector.paths if path],
+                extensions=list(selector.extensions),
+            )
+            for selector in request.exclude
+            if selector.statuses is None
+        ],
+    )
+    refresh = refresh_group_metadata_for_document_ingest(
+        user_id,
+        metadata_request,
+        drive_source,
+        metadata_source,
+        store,
+        validation_include_drive_ids=frozenset(
+            selector.drive_id for selector in request.include
+        ),
+        validation_exclude_drive_ids=frozenset(
+            selector.drive_id for selector in request.exclude
+        ),
+        capture_relative_paths_drive_ids=frozenset(
+            selector.drive_id
+            for selector in request.include + request.exclude
+            if selector.statuses is not None and any(selector.paths)
+        ),
+    )
+    operation_id: UUID | None = None
+    try:
+        async for event in refresh:
+            if isinstance(event, MetadataIngestStarted):
+                operation_id = event.operation_id
+            yield event
+            if isinstance(event, MetadataDrivePublished):
+                if operation_id is None:
+                    raise RuntimeError("Metadata refresh started without an operation")
+                candidates = await store.query_visible_document_candidates(
+                    user_id, event.drive_id, event.metadata_run_id
+                )
+                selections = tuple(
+                    selection
+                    for candidate in candidates
+                    if (selection := select_ingest_file(candidate, request)) is not None
+                )
+                await store.record_document_ingest_selections(
+                    operation_id,
+                    selections,
+                )
+                yield MetadataDriveFilesSelected(
+                    event.drive_id, event.metadata_run_id, len(selections)
+                )
+    except BaseException as exc:
+        if operation_id is not None:
+            cancelled = isinstance(exc, anyio.get_cancelled_exc_class() | GeneratorExit)
+            if not cancelled and isinstance(exc, Exception):
+                logger.exception("Document candidate selection failed")
+            if cancelled:
+                with anyio.CancelScope(shield=True):
+                    await store.fail_group_operation(
+                        operation_id,
+                        "request_interrupted",
+                        interrupted=True,
+                        summary={"failure_stage": "document_ingest.selection"},
+                    )
+            else:
+                try:
+                    _ = await refresh.athrow(DocumentCandidateSelectionFailure())
+                except DocumentCandidateSelectionFailure:
+                    pass
+        raise
+    finally:
+        await refresh.aclose()

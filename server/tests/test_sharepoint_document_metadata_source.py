@@ -62,12 +62,8 @@ def _selection(
         MetadataPathRule(path, selected_extensions)
         for path in (include_paths or ([""] if selected_extensions else []))
     )
-    excluded = tuple(
-        MetadataPathRule(path, ()) for path in (exclude_paths or [])
-    ) + (
-        (MetadataPathRule("", tuple(exclude_extensions)),)
-        if exclude_extensions
-        else ()
+    excluded = tuple(MetadataPathRule(path, ()) for path in (exclude_paths or [])) + (
+        (MetadataPathRule("", tuple(exclude_extensions)),) if exclude_extensions else ()
     )
     return MetadataSelection(included, excluded)
 
@@ -238,9 +234,7 @@ def test_incremental_scan_uses_cursor_and_reports_deleted_items() -> None:
     source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
     old_cursor = "https://graph.microsoft.com/v1.0/old-cursor"
 
-    scan = asyncio.run(
-        source.scan_metadata("drive", _selection(), "root", old_cursor)
-    )
+    scan = asyncio.run(source.scan_metadata("drive", _selection(), "root", old_cursor))
 
     assert delta.with_url.call_args.args == (old_cursor,)
     assert [item.id.id[1] for item in scan.documents] == ["changed"]
@@ -523,8 +517,7 @@ def test_stream_metadata_scopes_to_folder_and_accepts_all_file_types() -> None:
         "https://graph.microsoft.com/v1.0/drives/drive/root"
     )
     assert root.with_url.call_args_list[1].args[0] == (
-        "https://graph.microsoft.com/v1.0/drives/drive/"
-        "root:/reports:"
+        "https://graph.microsoft.com/v1.0/drives/drive/root:/reports:"
     )
 
 
@@ -579,6 +572,73 @@ def test_selection_path_matches_graph_folder_name_case_insensitively() -> None:
     assert delta.with_url.call_args.args[0].endswith("/root/delta")
 
 
+def test_path_scoped_scan_records_nested_relative_path_and_resolves_missing_folder_name() -> (
+    None
+):
+    root = MagicMock()
+    root.with_url.return_value.get = AsyncMock(
+        side_effect=[
+            Response(200, json={"id": "root", "folder": {}}),
+            Response(200, json={"id": "research", "folder": {}}),
+        ]
+    )
+    delta = MagicMock()
+    delta.with_url.return_value.get = AsyncMock(
+        return_value=Response(
+            200,
+            json={
+                "value": [
+                    {
+                        "id": "research",
+                        "name": "Research",
+                        "folder": {},
+                        "parentReference": {"id": "root"},
+                    },
+                    {
+                        "id": "reports",
+                        "folder": {},
+                        "parentReference": {"id": "research"},
+                    },
+                    {
+                        "id": "file-id",
+                        "name": "Report.pdf",
+                        "file": {},
+                        "parentReference": {"id": "reports"},
+                    },
+                ],
+                "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta",
+            },
+        )
+    )
+    drive = MagicMock()
+    drive.root = root
+    item_builder = drive.items.by_drive_item_id
+    item_builder.return_value.delta = delta
+    item_builder.return_value.get = AsyncMock(
+        return_value=Response(
+            200, json={"id": "reports", "name": "Reports", "folder": {}}
+        )
+    )
+    client = MagicMock()
+    client.drives.by_drive_id.return_value = drive
+    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+
+    scan = asyncio.run(
+        source.scan_metadata(
+            "drive",
+            MetadataSelection(
+                include_rules=(MetadataPathRule("Research", ("pdf",)),),
+                exclude_rules=(),
+            ),
+        )
+    )
+
+    assert len(scan.documents) == 1
+    assert scan.documents[0].file_metadata.relative_path == "Research/Reports"
+    item_builder.assert_any_call("reports")
+    item_builder.return_value.get.assert_awaited_once()
+
+
 def test_stream_metadata_excludes_nested_folders_and_deduplicates_includes() -> None:
     root = MagicMock()
     folder_results: dict[str, dict[str, object]] = {
@@ -612,9 +672,24 @@ def test_stream_metadata_excludes_nested_folders_and_deduplicates_includes() -> 
             200,
             json={
                 "value": [
-                        {"id": "reports", "name": "Reports", "folder": {}, "parentReference": {"id": "root"}},
-                        {"id": "year", "name": "2026", "folder": {}, "parentReference": {"id": "reports"}},
-                        {"id": "drafts", "name": "Drafts", "folder": {}, "parentReference": {"id": "year"}},
+                    {
+                        "id": "reports",
+                        "name": "Reports",
+                        "folder": {},
+                        "parentReference": {"id": "root"},
+                    },
+                    {
+                        "id": "year",
+                        "name": "2026",
+                        "folder": {},
+                        "parentReference": {"id": "reports"},
+                    },
+                    {
+                        "id": "drafts",
+                        "name": "Drafts",
+                        "folder": {},
+                        "parentReference": {"id": "year"},
+                    },
                     {
                         "id": "one",
                         "name": "One.pdf",
@@ -687,7 +762,7 @@ def test_stream_metadata_exclusion_keeps_root_level_files() -> None:
             200,
             json={
                 "value": [
-                        {"id": "drafts", "folder": {}, "parentReference": {"id": "root"}},
+                    {"id": "drafts", "folder": {}, "parentReference": {"id": "root"}},
                     {
                         "id": "keep",
                         "name": "Keep.pdf",
@@ -793,11 +868,21 @@ def test_stream_metadata_uses_latest_parent_for_repeated_folder() -> None:
             200,
             json={
                 "value": [
-                        {"id": "excluded", "name": "Excluded", "folder": {}, "parentReference": {"id": "root"}},
-                        {"id": "allowed", "name": "Allowed", "folder": {}, "parentReference": {"id": "root"}},
+                    {
+                        "id": "excluded",
+                        "name": "Excluded",
+                        "folder": {},
+                        "parentReference": {"id": "root"},
+                    },
+                    {
+                        "id": "allowed",
+                        "name": "Allowed",
+                        "folder": {},
+                        "parentReference": {"id": "root"},
+                    },
                     {
                         "id": "moved",
-                            "name": "Moved",
+                        "name": "Moved",
                         "folder": {},
                         "parentReference": {"id": "excluded"},
                     },
@@ -807,7 +892,12 @@ def test_stream_metadata_uses_latest_parent_for_repeated_folder() -> None:
                         "file": {},
                         "parentReference": {"id": "moved"},
                     },
-                    {"id": "moved", "name": "Moved", "folder": {}, "parentReference": {"id": "allowed"}},
+                    {
+                        "id": "moved",
+                        "name": "Moved",
+                        "folder": {},
+                        "parentReference": {"id": "allowed"},
+                    },
                 ],
                 "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta",
             },
@@ -846,7 +936,7 @@ def test_stream_metadata_scans_from_channel_folder_root() -> None:
                 "value": [
                     {
                         "id": "reports",
-                            "name": "Reports",
+                        "name": "Reports",
                         "folder": {},
                         "parentReference": {"id": "channel-root"},
                     },
@@ -1147,7 +1237,9 @@ def test_metadata_endpoint_returns_graph_client_error(
             selection: MetadataSelection,
             root_item_id: str,
             cursor: str | None,
+            capture_relative_paths: bool = False,
         ) -> DocumentMetadataScan:
+            _ = capture_relative_paths
             extensions, include_paths, exclude_paths, exclude_extensions = (
                 _selection_arguments(selection)
             )
@@ -1236,7 +1328,9 @@ def test_metadata_endpoint_failure_reports_group_progress_count(
             selection: MetadataSelection,
             root_item_id: str,
             cursor: str | None,
+            capture_relative_paths: bool = False,
         ) -> DocumentMetadataScan:
+            _ = capture_relative_paths
             extensions, include_paths, exclude_paths, exclude_extensions = (
                 _selection_arguments(selection)
             )
@@ -1319,7 +1413,9 @@ def test_metadata_only_endpoint_keeps_group_atomic_publication() -> None:
             selection: MetadataSelection,
             root_item_id: str,
             cursor: str | None,
+            capture_relative_paths: bool = False,
         ) -> DocumentMetadataScan:
+            _ = capture_relative_paths
             _ = (selection, root_item_id)
             assert cursor is None
             if drive_id == "second-drive":
@@ -1434,7 +1530,9 @@ def test_metadata_endpoint_skips_inaccessible_drive_and_completes() -> None:
             selection: MetadataSelection,
             root_item_id: str,
             cursor: str | None,
+            capture_relative_paths: bool = False,
         ) -> DocumentMetadataScan:
+            _ = capture_relative_paths
             extensions, include_paths, exclude_paths, exclude_extensions = (
                 _selection_arguments(selection)
             )
@@ -1525,7 +1623,9 @@ def test_metadata_endpoint_reports_explicitly_included_drive_denial() -> None:
             selection: MetadataSelection,
             root_item_id: str,
             cursor: str | None,
+            capture_relative_paths: bool = False,
         ) -> DocumentMetadataScan:
+            _ = capture_relative_paths
             extensions, include_paths, exclude_paths, exclude_extensions = (
                 _selection_arguments(selection)
             )
@@ -1600,7 +1700,9 @@ def test_metadata_repeated_same_drive_selectors_are_accepted() -> None:
             selection: MetadataSelection,
             root_item_id: str,
             cursor: str | None,
+            capture_relative_paths: bool = False,
         ) -> DocumentMetadataScan:
+            _ = capture_relative_paths
             assert drive_id == "drive"
             assert selection.includes("reports/one", "pdf")
             assert selection.includes("reports/two", "docx")
@@ -1729,7 +1831,9 @@ def test_metadata_endpoint_streams_progress_and_completion() -> None:
             selection: MetadataSelection,
             root_item_id: str,
             cursor: str | None,
+            capture_relative_paths: bool = False,
         ) -> DocumentMetadataScan:
+            _ = capture_relative_paths
             assert cursor is None
             assert root_item_id == "root"
             assert drive_id == "drive"
@@ -1860,7 +1964,9 @@ def test_metadata_endpoint_accepts_include_paths_without_extensions() -> None:
             selection: MetadataSelection,
             root_item_id: str,
             cursor: str | None,
+            capture_relative_paths: bool = False,
         ) -> DocumentMetadataScan:
+            _ = capture_relative_paths
             extensions, include_paths, exclude_paths, exclude_extensions = (
                 _selection_arguments(selection)
             )
@@ -1934,7 +2040,9 @@ def test_metadata_endpoint_close_discards_staged_refresh() -> None:
             selection: MetadataSelection,
             root_item_id: str,
             cursor: str | None,
+            capture_relative_paths: bool = False,
         ) -> DocumentMetadataScan:
+            _ = capture_relative_paths
             extensions, include_paths, exclude_paths, exclude_extensions = (
                 _selection_arguments(selection)
             )

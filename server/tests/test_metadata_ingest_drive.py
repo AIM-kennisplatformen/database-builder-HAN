@@ -47,12 +47,12 @@ def test_inventory_saves_each_document_before_reporting_progress() -> None:
             selection: MetadataSelection,
             root_item_id: str,
             cursor: str | None,
+            capture_relative_paths: bool = False,
         ) -> DocumentMetadataScan:
+            _ = capture_relative_paths
             assert root_item_id == "root"
             assert drive_id == "drive"
-            assert selection == MetadataSelection(
-                (MetadataPathRule("", ("pdf",)),), ()
-            )
+            assert selection == MetadataSelection((MetadataPathRule("", ("pdf",)),), ())
             assert cursor is None
             return DocumentMetadataScan((document,), (), "next", False)
 
@@ -133,12 +133,12 @@ def test_inventory_does_not_report_progress_when_save_fails() -> None:
             selection: MetadataSelection,
             root_item_id: str,
             cursor: str | None,
+            capture_relative_paths: bool = False,
         ) -> DocumentMetadataScan:
+            _ = capture_relative_paths
             assert root_item_id == "root"
             assert drive_id == "drive"
-            assert selection == MetadataSelection(
-                (MetadataPathRule("", ("pdf",)),), ()
-            )
+            assert selection == MetadataSelection((MetadataPathRule("", ("pdf",)),), ())
             assert cursor is None
             return DocumentMetadataScan(
                 (
@@ -236,20 +236,14 @@ def test_inventory_request_normalizes_optional_filters() -> None:
         ),
         exclude_rules=(MetadataPathRule("/Reports/2026/Drafts/", ()),),
     )
-    assert request.include_rules == (
-        MetadataPathRule("reports/2026", ("md", "pdf")),
-    )
+    assert request.include_rules == (MetadataPathRule("reports/2026", ("md", "pdf")),)
     assert request.exclude_rules == (MetadataPathRule("reports/2026/drafts", ()),)
 
 
-@pytest.mark.parametrize(
-    "path", ["Reports//2026", "Reports/../2026", " ", "/", "///"]
-)
+@pytest.mark.parametrize("path", ["Reports//2026", "Reports/../2026", " ", "/", "///"])
 def test_inventory_request_rejects_invalid_folder_paths(path: str) -> None:
     with pytest.raises(ValueError, match="folder paths relative"):
-        MetadataIngestDriveRequest(
-            "drive", include_rules=(MetadataPathRule(path, ()),)
-        )
+        MetadataIngestDriveRequest("drive", include_rules=(MetadataPathRule(path, ()),))
 
 
 @pytest.mark.parametrize("extension", ["pdf/docx", "pdf*", "  "])

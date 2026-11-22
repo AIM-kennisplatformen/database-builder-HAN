@@ -124,7 +124,9 @@ class BlockingMetadataSource:
         selection: MetadataSelection,
         root_item_id: str,
         cursor: str | None,
+        capture_relative_paths: bool = False,
     ) -> DocumentMetadataScan:
+        _ = capture_relative_paths
         _ = selection
         assert (drive_id, root_item_id, cursor) == ("drive", "root", None)
         documents = tuple(
