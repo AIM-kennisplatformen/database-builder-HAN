@@ -41,6 +41,9 @@ This behaviour is only allowed when you are asked to make changes.
 - Compare the results with the requirements
 	- Missing requirements fail the review
 	- Work that wasn't needed for the requirements fail the review
+- When the SonarQube MCP server is available:
+	- Analyse the code through `uv run poe -v sonar`
+	- View the issues through the SonarQube MCP server
 - Return to the main AGENT:
 	- Anything that caused the review to fail
 	- Anything that is not in line with the rest of the code base

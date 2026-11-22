@@ -1,0 +1,47 @@
+services:
+  sonarqube:
+    image: sonarqube:latest
+    environment:
+      SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
+    ports:
+      - "9000:9000"
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl --noproxy '*' --fail --silent http://localhost:9000/api/system/status
+          | grep --quiet '"status":"UP"'
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    stop_grace_period: 1h
+    restart: unless-stopped
+
+  sonarqube-mcp:
+    image: sonarsource/sonarqube-mcp:latest
+    depends_on:
+      sonarqube:
+        condition: service_healthy
+    environment:
+      SONARQUBE_TRANSPORT: "http"
+      SONARQUBE_HTTP_HOST: "0.0.0.0"
+      SONARQUBE_HTTP_PORT: "8080"
+      SONARQUBE_URL: "http://sonarqube:9000"
+      STORAGE_PATH: "/data"
+      SONARQUBE_TOKEN: "${SONAR_TOKEN}"
+    ports:
+      - "8080:8080"
+    volumes:
+      - sonarqube_mcp_data:/data
+    restart: unless-stopped
+
+volumes:
+  sonarqube_data:
+  sonarqube_extensions:
+  sonarqube_logs:
+  sonarqube_mcp_data:

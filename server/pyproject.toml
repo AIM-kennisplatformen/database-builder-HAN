@@ -48,9 +48,13 @@ executionEnvironments = [
 dev = [
     "basedpyright>=1.40.2",
     "poethepoet>=0.37,<1",
+    "pysonar>=1.11.0.6012",
     "pytest>=9.2.0",
     "ruff>=0.17.3",
 ]
+
+[tool.poe]
+envfile = "../.env"
 
 [tool.poe.tasks]
 migrate-up = "alembic -c pyproject.toml upgrade head"
@@ -61,4 +65,16 @@ fmt = "ruff format"
 typecheck = "basedpyright"
 check = ["lint", "fmt", "typecheck"]
 
-start = "uvicorn main:app --app-dir src --env-file ../.env --host 127.0.0.1 --port 8001 --reload"
+[tool.poe.tasks.sonar]
+help = "Run SonarQube analysis"
+cmd = "pysonar --sonar-project-key=han"
+
+[tool.poe.tasks.server]
+help = "Run the ingestion server"
+cmd = """
+uvicorn main:app
+  --app-dir ${APP_DIR:-src}
+  --host ${SERVER_HOST:-127.0.0.1}
+  --port ${SERVER_PORT:-8001}
+  --reload
+"""
