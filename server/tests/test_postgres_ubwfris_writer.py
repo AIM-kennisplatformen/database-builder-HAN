@@ -86,9 +86,7 @@ def test_complete_snapshot_marks_running_snapshot_complete(
         writer = PostgresIbWriter(cast(AsyncConnectionPool, pool))
     else:
         writer = PostgresRhaWriter(cast(AsyncConnectionPool, pool))
-    asyncio.run(
-        writer.publish_snapshot("snapshot", uuid4(), {"created_rows": 1})
-    )
+    asyncio.run(writer.publish_snapshot("snapshot", uuid4(), {"created_rows": 1}))
 
     statements = [args.args[0] for args in connection.execute.await_args_list]
     assert "SELECT status FROM ubwfris_snapshots" in statements[0]

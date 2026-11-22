@@ -151,9 +151,7 @@ async def _upload_ubwfris_workbook[T: UbwfrisRow](
             dict(exc.failure_summary)
             if isinstance(exc, DomainError) and exc.failure_summary is not None
             else {
-                "processed_rows": last_progress.processed_rows
-                if last_progress
-                else 0,
+                "processed_rows": last_progress.processed_rows if last_progress else 0,
                 "staged_rows": last_progress.created_rows if last_progress else 0,
                 "published_rows": 0,
                 "invalid_rows": 0,

@@ -99,7 +99,10 @@ class FakeWriter[T: UbwfrisRow]:
             finished_at=None,
             summary={},
             failure_code=None,
-            domain_ids={"snapshot_id": snapshot_id, "row_type": self.kind.removeprefix("ubwfris.")},
+            domain_ids={
+                "snapshot_id": snapshot_id,
+                "row_type": self.kind.removeprefix("ubwfris."),
+            },
         )
         self.owners[operation_id] = principal_id
 
@@ -167,6 +170,39 @@ class FakeWriter[T: UbwfrisRow]:
         return run
 
 
+class FailingWriter(FakeWriter[IbRow]):
+    def __init__(self, failure_phase: str) -> None:
+        super().__init__()
+        self.failure_phase: str = failure_phase
+        self.discarded_snapshots: list[str] = []
+
+    @override
+    async def begin_snapshot(self, snapshot_id: str) -> None:
+        if self.failure_phase == "begin":
+            raise RuntimeError("private database connection detail")
+        await super().begin_snapshot(snapshot_id)
+
+    @override
+    async def stage_ubwfris_rows(self, snapshot_id: str, rows: Sequence[IbRow]) -> int:
+        if self.failure_phase == "stage":
+            self.staged[snapshot_id] = list(rows)
+            raise RuntimeError("private database connection detail")
+        return await super().stage_ubwfris_rows(snapshot_id, rows)
+
+    @override
+    async def publish_snapshot(
+        self, snapshot_id: str, operation_id: UUID, summary: dict[str, object]
+    ) -> None:
+        if self.failure_phase == "publish":
+            raise RuntimeError("private database connection detail")
+        await super().publish_snapshot(snapshot_id, operation_id, summary)
+
+    @override
+    async def discard_snapshot(self, snapshot_id: str) -> None:
+        self.discarded_snapshots.append(snapshot_id)
+        await super().discard_snapshot(snapshot_id)
+
+
 class MemoryUpload:
     async def read(self) -> bytes:
         return b"same-workbook"
@@ -203,14 +239,18 @@ def test_ib_upload_returns_json_result_and_owner_scoped_operation() -> None:
     writer = FakeWriter[IbRow]("ubwfris.ib")
 
     async def upload():
-        return await upload_ib_workbook(_file(), "owner", FakeParser([_ib_row()]), writer)
+        return await upload_ib_workbook(
+            _file(), "owner", FakeParser([_ib_row()]), writer
+        )
 
     response = asyncio.run(upload())
     assert isinstance(response, UbwfrisIngestResponse)
     assert response.row_type == "ib"
     assert response.created_rows == 1
     assert len(writer.published_rows) == 1
-    owned = _assert_operation_owner_scoped(response.operation_id, cast(FakeWriter[UbwfrisRow], writer))
+    owned = _assert_operation_owner_scoped(
+        response.operation_id, cast(FakeWriter[UbwfrisRow], writer)
+    )
     assert owned.status == "complete"
     assert owned.kind == "ubwfris.ib"
     assert owned.id == response.operation_id
@@ -221,25 +261,33 @@ def test_rha_upload_returns_json_result_and_owner_scoped_operation() -> None:
     writer = FakeWriter[RhaRow]("ubwfris.rha")
 
     async def upload():
-        return await upload_rha_workbook(_file(), "owner", FakeParser([_rha_row()]), writer)
+        return await upload_rha_workbook(
+            _file(), "owner", FakeParser([_rha_row()]), writer
+        )
 
     response = asyncio.run(upload())
     assert isinstance(response, UbwfrisIngestResponse)
     assert response.row_type == "rha"
     assert response.created_rows == 1
     assert len(writer.published_rows) == 1
-    owned = _assert_operation_owner_scoped(response.operation_id, cast(FakeWriter[UbwfrisRow], writer))
+    owned = _assert_operation_owner_scoped(
+        response.operation_id, cast(FakeWriter[UbwfrisRow], writer)
+    )
     assert owned.status == "complete"
     assert owned.kind == "ubwfris.rha"
     assert owned.id == response.operation_id
     assert owned.domain_ids == {"snapshot_id": response.snapshot_id, "row_type": "rha"}
 
 
-def test_duplicate_upload_returns_distinct_failed_operation_and_keeps_published_rows() -> None:
+def test_duplicate_upload_returns_distinct_failed_operation_and_keeps_published_rows() -> (
+    None
+):
     writer = FakeWriter[IbRow]()
 
     async def exercise():
-        first = await upload_ib_workbook(_file(), "owner", FakeParser([_ib_row()]), writer)
+        first = await upload_ib_workbook(
+            _file(), "owner", FakeParser([_ib_row()]), writer
+        )
         duplicate = await upload_ib_workbook(
             _file(), "owner", FakeParser([_ib_row()]), writer
         )
@@ -261,7 +309,9 @@ def test_duplicate_upload_returns_distinct_failed_operation_and_keeps_published_
     assert len(writer.published_rows) == 1
 
 
-def test_mixed_valid_invalid_rows_fail_atomically_with_safe_row_summary_and_retry() -> None:
+def test_mixed_valid_invalid_rows_fail_atomically_with_safe_row_summary_and_retry() -> (
+    None
+):
     writer = FakeWriter[IbRow]()
 
     async def exercise():
@@ -300,7 +350,9 @@ def test_parser_failure_is_safe_and_same_bytes_can_be_retried() -> None:
         failed = await upload_ib_workbook(
             _file(), "owner", FakeParser([_ib_row()], broken=True), writer
         )
-        retried = await upload_ib_workbook(_file(), "owner", FakeParser([_ib_row()]), writer)
+        retried = await upload_ib_workbook(
+            _file(), "owner", FakeParser([_ib_row()]), writer
+        )
         return failed, retried
 
     failed, retried = asyncio.run(exercise())
@@ -310,6 +362,37 @@ def test_parser_failure_is_safe_and_same_bytes_can_be_retried() -> None:
     assert "private parser exception" not in str(_json_body(failed))
     assert retried.created_rows == 1
     assert len(writer.published_rows) == 1
+
+
+@pytest.mark.parametrize("failure_phase", ["begin", "stage", "publish"])
+def test_writer_failure_is_safe_and_discards_unpublished_snapshot(
+    failure_phase: str,
+) -> None:
+    writer = FailingWriter(failure_phase)
+
+    async def upload():
+        return await upload_ib_workbook(
+            _file(), "owner", FakeParser([_ib_row()]), writer
+        )
+
+    response = asyncio.run(upload())
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 503
+    body = _json_body(response)
+    assert body["error"]["code"] == "ubwfris.store_unavailable"
+    assert "private database connection detail" not in str(body)
+    operation_id = UUID(cast(str, body["operation_id"]))
+    operation = writer.operations[operation_id]
+    assert operation.status == "failed"
+    assert operation.failure_code == "ubwfris.store_unavailable"
+    assert operation.summary["published_rows"] == 0
+    assert writer.staged == {}
+    assert writer.published_rows == []
+    if failure_phase == "begin":
+        assert writer.discarded_snapshots == []
+    else:
+        assert writer.discarded_snapshots == [body["snapshot_id"]]
 
 
 def test_cancelled_ingest_persists_interrupted_operation() -> None:

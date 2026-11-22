@@ -1,5 +1,5 @@
 from collections.abc import AsyncGenerator, AsyncIterator
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import assert_never, cast
 from uuid import UUID
@@ -46,7 +46,7 @@ async def _stage_ubwfris_rows[T: UbwfrisRow](
 ) -> int:
     try:
         return await writer.stage_ubwfris_rows(snapshot_id, rows)
-    except (DuplicateUpload, InvalidWorkbook):
+    except DuplicateUpload, InvalidWorkbook:
         raise
     except Exception as exc:
         raise StoreUnavailable(
@@ -190,6 +190,129 @@ def _validate_rha_row(row: RhaRow) -> tuple[RhaRow, bool]:
     return normalized, valid
 
 
+@dataclass
+class _WorkbookProgress[T: UbwfrisRow]:
+    total_rows: int = 0
+    processed_rows: int = 0
+    created_rows: int = 0
+    invalid_row_numbers: list[int] = field(default_factory=list)
+    seen_row_numbers: set[int] = field(default_factory=set)
+    batch: list[T] = field(default_factory=list)
+
+
+async def _flush_workbook_batch[T: UbwfrisRow](
+    writer: UbwfrisWriter[T], snapshot_id: str, progress: _WorkbookProgress[T]
+) -> None:
+    if not progress.batch:
+        return
+    progress.created_rows += await _stage_ubwfris_rows(
+        writer, snapshot_id, progress.batch
+    )
+    progress.batch.clear()
+
+
+async def _accept_workbook_row[T: UbwfrisRow](
+    item: ParsedUbwfrisRow[T],
+    writer: UbwfrisWriter[T],
+    snapshot_id: str,
+    progress: _WorkbookProgress[T],
+) -> None:
+    row_number = item.row_number
+    if row_number in progress.seen_row_numbers:
+        progress.invalid_row_numbers.append(row_number)
+        return
+    progress.seen_row_numbers.add(row_number)
+    if item.row is None:
+        progress.invalid_row_numbers.append(row_number)
+        return
+    normalized_row, is_valid = _validate_ubwfris_row(item.row)
+    if not is_valid:
+        progress.invalid_row_numbers.append(row_number)
+        return
+    progress.batch.append(cast(T, normalized_row))
+    if len(progress.batch) >= 1000:
+        await _flush_workbook_batch(writer, snapshot_id, progress)
+
+
+async def _consume_workbook_rows[T: UbwfrisRow](
+    parser: UbwfrisParser[T],
+    writer: UbwfrisWriter[T],
+    workbook: UbwfrisWorkbook[T],
+    snapshot_id: str,
+    progress: _WorkbookProgress[T],
+) -> AsyncIterator[UbwfrisIngestProgress]:
+    async for item in _stream_ubwfris_parser(parser, workbook):
+        progress.total_rows = item.total_rows
+        await _accept_workbook_row(item, writer, snapshot_id, progress)
+        progress.processed_rows += 1
+        yield UbwfrisIngestProgress(
+            total_rows=progress.total_rows,
+            processed_rows=progress.processed_rows,
+            created_rows=progress.created_rows,
+            invalid_rows=len(progress.invalid_row_numbers),
+        )
+    await _flush_workbook_batch(writer, snapshot_id, progress)
+    if progress.processed_rows == 0:
+        raise InvalidWorkbook("The uploaded workbook is empty")
+    if progress.invalid_row_numbers:
+        raise InvalidWorkbook(
+            "Workbook contains invalid rows",
+            invalid_row_numbers=tuple(progress.invalid_row_numbers),
+        )
+    if progress.created_rows == 0:
+        raise InvalidWorkbook(
+            "The uploaded workbook has no valid rows",
+            invalid_row_numbers=tuple(progress.invalid_row_numbers),
+        )
+
+
+async def _handle_ingest_failure[T: UbwfrisRow](
+    exc: BaseException,
+    writer: UbwfrisWriter[T],
+    snapshot_id: str,
+    operation_id: UUID,
+    snapshot_started: bool,
+    operation_started: bool,
+    progress: _WorkbookProgress[T],
+) -> None:
+    interrupted = isinstance(exc, anyio.get_cancelled_exc_class() | GeneratorExit)
+    if isinstance(exc, InvalidWorkbook):
+        progress.invalid_row_numbers = list(
+            dict.fromkeys((*progress.invalid_row_numbers, *exc.invalid_row_numbers))
+        )
+    failure_code, reason = _ubwfris_failure(exc, interrupted)
+    failure_summary: dict[str, object] = {
+        "total_rows": progress.total_rows,
+        "processed_rows": progress.processed_rows,
+        "staged_rows": progress.created_rows,
+        "validated_rows": progress.created_rows + len(progress.batch),
+        "published_rows": 0,
+        "invalid_rows": len(progress.invalid_row_numbers),
+        "invalid_row_numbers": progress.invalid_row_numbers,
+        "reason": reason,
+    }
+    if isinstance(exc, DomainError):
+        exc.failure_summary = failure_summary
+    try:
+        if snapshot_started:
+            try:
+                with anyio.CancelScope(shield=True):
+                    await _discard_snapshot(writer, snapshot_id)
+            except BaseException as cleanup_exc:
+                if isinstance(cleanup_exc, DomainError):
+                    cleanup_exc.failure_summary = failure_summary
+                raise
+    finally:
+        if operation_started:
+            with anyio.CancelScope(shield=True):
+                await writer.fail_operation(
+                    operation_id,
+                    failure_code,
+                    failure_summary,
+                    interrupted=interrupted,
+                )
+
+
 async def ingest_ubwfris_workbook[T: UbwfrisRow](
     req: UbwfrisIngestRequest[T],
     parser: UbwfrisParser[T],
@@ -199,13 +322,7 @@ async def ingest_ubwfris_workbook[T: UbwfrisRow](
     principal_id: str,
 ) -> AsyncGenerator[UbwfrisIngestEvent]:
     """Validate and stage a workbook, then publish all rows in one transaction."""
-    total_rows = 0
-    processed_rows = 0
-    created_rows = 0
-    invalid_row_numbers: list[int] = []
-    seen_row_numbers: set[int] = set()
-    batch: list[T] = []
-
+    progress = _WorkbookProgress[T]()
     completed = False
     operation_started = False
     snapshot_started = False
@@ -217,58 +334,16 @@ async def ingest_ubwfris_workbook[T: UbwfrisRow](
 
         await _begin_snapshot(writer, snapshot_id)
         snapshot_started = True
-        async for item in _stream_ubwfris_parser(parser, req.workbook):
-            row = item.row
-            row_number = item.row_number
-            total_rows = item.total_rows
-            if row_number in seen_row_numbers:
-                invalid_row_numbers.append(row_number)
-            elif row is None:
-                seen_row_numbers.add(row_number)
-                invalid_row_numbers.append(row_number)
-            else:
-                seen_row_numbers.add(row_number)
-                normalized_row, is_valid = _validate_ubwfris_row(row)
-                if not is_valid:
-                    invalid_row_numbers.append(row_number)
-                else:
-                    batch.append(cast(T, normalized_row))
-                    if len(batch) >= 1000:
-                        created_rows += await _stage_ubwfris_rows(
-                            writer, snapshot_id, batch
-                        )
-                        batch.clear()
-
-            processed_rows += 1
-            yield UbwfrisIngestProgress(
-                total_rows=total_rows,
-                processed_rows=processed_rows,
-                created_rows=created_rows,
-                invalid_rows=len(invalid_row_numbers),
-            )
-
-        if batch:
-            created_rows += await _stage_ubwfris_rows(writer, snapshot_id, batch)
-            batch.clear()
-
-        if processed_rows == 0:
-            raise InvalidWorkbook("The uploaded workbook is empty")
-        if invalid_row_numbers:
-            raise InvalidWorkbook(
-                "Workbook contains invalid rows",
-                invalid_row_numbers=tuple(invalid_row_numbers),
-            )
-        if created_rows == 0:
-            raise InvalidWorkbook(
-                "The uploaded workbook has no valid rows",
-                invalid_row_numbers=tuple(invalid_row_numbers),
-            )
+        async for progress_event in _consume_workbook_rows(
+            parser, writer, req.workbook, snapshot_id, progress
+        ):
+            yield progress_event
 
         await anyio.lowlevel.checkpoint()
         summary: dict[str, object] = {
-            "total_rows": total_rows,
-            "processed_rows": processed_rows,
-            "created_rows": created_rows,
+            "total_rows": progress.total_rows,
+            "processed_rows": progress.processed_rows,
+            "created_rows": progress.created_rows,
             "invalid_rows": 0,
             "invalid_row_numbers": [],
         }
@@ -276,51 +351,24 @@ async def ingest_ubwfris_workbook[T: UbwfrisRow](
         completed = True
         yield UbwfrisIngestResult(
             status=UbwfrisIngestStatus.COMPLETED,
-            total_rows=total_rows,
-            processed_rows=processed_rows,
-            created_rows=created_rows,
-            invalid_rows=len(invalid_row_numbers),
-            invalid_row_numbers=tuple(invalid_row_numbers),
+            total_rows=progress.total_rows,
+            processed_rows=progress.processed_rows,
+            created_rows=progress.created_rows,
+            invalid_rows=len(progress.invalid_row_numbers),
+            invalid_row_numbers=tuple(progress.invalid_row_numbers),
         )
     except BaseException as exc:
         if completed:
             raise
-        interrupted = isinstance(exc, anyio.get_cancelled_exc_class() | GeneratorExit)
-        if isinstance(exc, InvalidWorkbook):
-            invalid_row_numbers = list(
-                dict.fromkeys((*invalid_row_numbers, *exc.invalid_row_numbers))
-            )
-        failure_code, reason = _ubwfris_failure(exc, interrupted)
-        failure_summary: dict[str, object] = {
-            "total_rows": total_rows,
-            "processed_rows": processed_rows,
-            "staged_rows": created_rows,
-            "validated_rows": created_rows + len(batch),
-            "published_rows": 0,
-            "invalid_rows": len(invalid_row_numbers),
-            "invalid_row_numbers": invalid_row_numbers,
-            "reason": reason,
-        }
-        if isinstance(exc, DomainError):
-            exc.failure_summary = failure_summary
-        try:
-            if snapshot_started:
-                try:
-                    with anyio.CancelScope(shield=True):
-                        await _discard_snapshot(writer, snapshot_id)
-                except BaseException as cleanup_exc:
-                    if isinstance(cleanup_exc, DomainError):
-                        cleanup_exc.failure_summary = failure_summary
-                    raise
-        finally:
-            if operation_started:
-                with anyio.CancelScope(shield=True):
-                    await writer.fail_operation(
-                        operation_id,
-                        failure_code,
-                        failure_summary,
-                        interrupted=interrupted,
-                    )
+        await _handle_ingest_failure(
+            exc,
+            writer,
+            snapshot_id,
+            operation_id,
+            snapshot_started,
+            operation_started,
+            progress,
+        )
         raise
 
 
