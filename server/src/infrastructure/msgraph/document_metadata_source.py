@@ -1,5 +1,4 @@
 from collections.abc import AsyncIterator
-from datetime import datetime
 from typing import cast, override
 from urllib.parse import quote
 
@@ -8,7 +7,6 @@ from kiota_abstractions.base_request_configuration import RequestConfiguration
 from kiota_abstractions.native_response_handler import NativeResponseHandler
 from kiota_http.middleware.options import ResponseHandlerOption
 from msgraph.graph_service_client import GraphServiceClient
-from pydantic import BaseModel, Field
 
 from domain.exceptions.metadata_ingest_errors import MetadataSourceError
 from domain.models.documents.content_version import ContentVersion
@@ -28,65 +26,29 @@ from domain.ports.documents.document_metadata_source import (
     DocumentMetadataSource,
     DocumentRefreshSource,
 )
-from infrastructure.msgraph.base import raise_for_graph_error, validate_graph_url
+from infrastructure.msgraph.base import raise_for_graph_error
+from infrastructure.msgraph.document_metadata_models import (
+    GraphDeltaPage,
+    GraphDriveItem,
+    GraphFileFacet,
+    GraphFileHashes,
+    GraphFolder,
+    GraphIdentity,
+    GraphIdentitySet,
+    GraphParentReference,
+)
 
-
-class GraphFileHashes(BaseModel):
-    sha1: str | None = Field(default=None, alias="sha1Hash")
-    sha256: str | None = Field(default=None, alias="sha256Hash")
-    quick_xor: str | None = Field(default=None, alias="quickXorHash")
-
-
-class GraphFileFacet(BaseModel):
-    mime_type: str | None = Field(default=None, alias="mimeType")
-    hashes: GraphFileHashes | None = None
-
-
-class GraphIdentity(BaseModel):
-    display_name: str | None = Field(default=None, alias="displayName")
-
-
-class GraphIdentitySet(BaseModel):
-    user: GraphIdentity | None = None
-    application: GraphIdentity | None = None
-    device: GraphIdentity | None = None
-
-
-class GraphParentReference(BaseModel):
-    id: str | None = None
-
-
-class GraphDriveItem(BaseModel):
-    id: str
-    name: str | None = None
-    file: GraphFileFacet | None = None
-    deleted: dict[str, object] | None = None
-    folder: dict[str, object] | None = None
-    parent_reference: GraphParentReference | None = Field(
-        default=None, alias="parentReference"
-    )
-    c_tag: str | None = Field(default=None, alias="cTag")
-    web_url: str | None = Field(default=None, alias="webUrl")
-    size: int | None = None
-    created_date_time: datetime | None = Field(default=None, alias="createdDateTime")
-    created_by: GraphIdentitySet | None = Field(default=None, alias="createdBy")
-    last_modified_date_time: datetime | None = Field(
-        default=None, alias="lastModifiedDateTime"
-    )
-    last_modified_by: GraphIdentitySet | None = Field(
-        default=None, alias="lastModifiedBy"
-    )
-
-
-class GraphDeltaPage(BaseModel):
-    value: list[GraphDriveItem]
-    next_link: str | None = Field(default=None, alias="@odata.nextLink")
-    delta_link: str | None = Field(default=None, alias="@odata.deltaLink")
-
-
-class GraphFolder(BaseModel):
-    id: str
-    folder: dict[str, object] | None = None
+__all__ = [
+    "GraphDeltaPage",
+    "GraphDriveItem",
+    "GraphFileFacet",
+    "GraphFileHashes",
+    "GraphFolder",
+    "GraphIdentity",
+    "GraphIdentitySet",
+    "GraphParentReference",
+    "SharePointDocumentMetadataSource",
+]
 
 
 def _audit_actor(identities: GraphIdentitySet | None) -> AuditActor | None:
@@ -138,6 +100,9 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource, DocumentRefreshSo
             raise MetadataSourceError(400, "path must refer to a folder")
         return folder.id
 
+    async def folder_id(self, drive_id: str, path: str, root_item_id: str) -> str:
+        return await self._folder_id(drive_id, path, root_item_id)
+
     def _document(
         self, drive_id: str, item: GraphDriveItem, relative_path: str | None = None
     ) -> Document:
@@ -179,6 +144,11 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource, DocumentRefreshSo
             ),
         )
 
+    def document(
+        self, drive_id: str, item: GraphDriveItem, relative_path: str | None
+    ) -> Document:
+        return self._document(drive_id, item, relative_path)
+
     @override
     async def scan_metadata(
         self,
@@ -188,207 +158,12 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource, DocumentRefreshSo
         cursor: str | None = None,
         capture_relative_paths: bool = False,
     ) -> DocumentMetadataScan:
-        base_url = f"https://graph.microsoft.com/v1.0/drives/{quote(drive_id, safe='')}"
-        path_scoped = any(
-            rule.path for rule in selection.include_rules + selection.exclude_rules
+        from infrastructure.msgraph.document_metadata_scan import (
+            scan_document_metadata,
         )
-        capture_paths = path_scoped or capture_relative_paths
-        root_id: str | None = None
-        rule_folder_ids: dict[str, str] = {}
-        if capture_paths:
-            root_id = (
-                await self._folder_id(drive_id, "", root_item_id)
-                if root_item_id == "root"
-                else root_item_id
-            )
-        if path_scoped:
-            for path in {
-                rule.path
-                for rule in selection.include_rules + selection.exclude_rules
-                if rule.path
-            }:
-                rule_folder_ids[path] = await self._folder_id(
-                    drive_id, path, root_item_id
-                )
 
-        delta = (
-            self.client.drives.by_drive_id(drive_id)
-            .items.by_drive_item_id(root_item_id)
-            .delta
-        )
-        delta_path = (
-            "root"
-            if root_item_id == "root"
-            else f"items/{quote(root_item_id, safe='')}"
-        )
-        baseline_url = f"{base_url}/{delta_path}/delta"
-        baseline = cursor is None or path_scoped or capture_relative_paths
-        next_url: str | None = baseline_url if baseline else cursor
-        seen_urls: set[str] = set()
-        matching_items: dict[str, GraphDriveItem] = {}
-        folder_parents: dict[str, str | None] = {}
-        folder_names: dict[str, str] = {}
-        deleted_ids: set[str] = set()
-        delta_link: str | None = None
-
-        while next_url is not None:
-            if next_url in seen_urls:
-                raise ValueError("Graph repeated an @odata.nextLink")
-            seen_urls.add(next_url)
-            validate_graph_url(next_url)
-
-            response = cast(
-                Response | None,
-                await delta.with_url(next_url).get(
-                    request_configuration=RequestConfiguration(
-                        options=[ResponseHandlerOption(NativeResponseHandler())]
-                    )
-                ),
-            )
-            if response is None:
-                raise ValueError("Graph returned no drive item page")
-            try:
-                raise_for_graph_error(
-                    response, "Graph rejected the drive metadata request"
-                )
-            except MetadataSourceError as exc:
-                if exc.status_code != 410 or baseline:
-                    raise
-                # An expired cursor must not publish a partial delta.
-                baseline = True
-                next_url = baseline_url
-                seen_urls.clear()
-                matching_items.clear()
-                folder_parents.clear()
-                folder_names.clear()
-                deleted_ids.clear()
-                continue
-
-            page = GraphDeltaPage.model_validate_json(response.content)
-            for item in page.value:
-                if item.deleted is not None or item.folder is None:
-                    _ = folder_parents.pop(item.id, None)
-                else:
-                    folder_parents[item.id] = (
-                        item.parent_reference.id if item.parent_reference else None
-                    )
-                    if item.name:
-                        folder_names[item.id] = item.name
-                excluded = (
-                    item.deleted is not None or item.file is None or not item.name
-                )
-                if item.deleted is not None or (excluded and not baseline):
-                    deleted_ids.add(item.id)
-                else:
-                    deleted_ids.discard(item.id)
-                if excluded:
-                    _ = matching_items.pop(item.id, None)
-                else:
-                    matching_items[item.id] = item
-
-            next_url = page.next_link
-            if next_url is None and page.delta_link is None:
-                raise ValueError("Graph did not complete the drive delta scan")
-            if next_url is None:
-                delta_link = page.delta_link
-
-        def ancestor_ids(item: GraphDriveItem) -> set[str]:
-            parent_id = item.parent_reference.id if item.parent_reference else None
-            found: set[str] = set()
-            seen: set[str] = set()
-            while parent_id is not None:
-                if parent_id in seen:
-                    raise ValueError("Graph returned incomplete folder ancestry")
-                seen.add(parent_id)
-                found.add(parent_id)
-                if parent_id == root_id:
-                    break
-                if parent_id not in folder_parents:
-                    raise ValueError("Graph returned incomplete folder ancestry")
-                parent_id = folder_parents[parent_id]
-            if parent_id is None or (root_id is not None and root_id not in found):
-                raise ValueError("Graph returned incomplete folder ancestry")
-            return found
-
-        def selected_by_rules(item: GraphDriveItem, extension: str) -> bool:
-            ancestors: set[str] = ancestor_ids(item) if path_scoped else set()
-            candidates: list[tuple[int, bool]] = []
-            for rules, included in (
-                (selection.include_rules, True),
-                (selection.exclude_rules, False),
-            ):
-                for rule in rules:
-                    rule_id = rule_folder_ids.get(rule.path, root_id)
-                    if rule_id is not None and rule_id not in ancestors:
-                        continue
-                    if rule.extensions and extension not in rule.extensions:
-                        continue
-                    candidates.append(
-                        (rule.path.count("/") + bool(rule.path), included)
-                    )
-            if not candidates:
-                return not selection.include_rules
-            specificity = max(depth for depth, _ in candidates)
-            return next(
-                included for depth, included in candidates if depth == specificity
-            )
-
-        async def item_relative_path(item: GraphDriveItem) -> str:
-            ancestors = ancestor_ids(item)
-            parent_id = item.parent_reference.id if item.parent_reference else None
-            ordered: list[str] = []
-            while parent_id is not None and parent_id != root_id:
-                ordered.append(parent_id)
-                parent_id = folder_parents.get(parent_id)
-            ordered.reverse()
-            names: list[str] = []
-            for folder_id in ordered:
-                name = folder_names.get(folder_id)
-                if name is None:
-                    response = cast(
-                        Response | None,
-                        await self.client.drives.by_drive_id(drive_id)
-                        .items.by_drive_item_id(folder_id)
-                        .get(
-                            request_configuration=RequestConfiguration(
-                                options=[ResponseHandlerOption(NativeResponseHandler())]
-                            )
-                        ),
-                    )
-                    if response is None:
-                        raise ValueError("Graph returned no folder metadata")
-                    raise_for_graph_error(response, "Graph rejected folder ancestry")
-                    folder = GraphDriveItem.model_validate_json(response.content)
-                    if folder.folder is None or not folder.name:
-                        raise ValueError("Graph returned incomplete folder ancestry")
-                    name = folder.name
-                    folder_names[folder_id] = name
-                names.append(name)
-            if root_id is not None and root_id not in ancestors:
-                raise ValueError("Graph returned incomplete folder ancestry")
-            return "/".join(names)
-
-        selected: list[tuple[GraphDriveItem, str | None]] = []
-        for item in matching_items.values():
-            if item.name is None:
-                continue
-            extension = item.name.rpartition(".")[2].lower() if "." in item.name else ""
-            if selected_by_rules(item, extension):
-                selected.append(
-                    (item, await item_relative_path(item) if capture_paths else None)
-                )
-            elif not baseline:
-                deleted_ids.add(item.id)
-        if delta_link is None:
-            raise ValueError("Graph did not provide a completed delta cursor")
-        validate_graph_url(delta_link)
-        return DocumentMetadataScan(
-            documents=tuple(
-                self._document(drive_id, item, path) for item, path in selected
-            ),
-            deleted_item_ids=tuple(sorted(deleted_ids)),
-            delta_link=delta_link,
-            baseline=baseline,
+        return await scan_document_metadata(
+            self, drive_id, selection, root_item_id, cursor, capture_relative_paths
         )
 
     @override

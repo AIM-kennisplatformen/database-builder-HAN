@@ -1,11 +1,11 @@
-"""Use cases for ingesting document metadata into the catalog."""
+"""Public metadata refresh use cases and their request/event types."""
 
-from domain.use_cases.metadata_ingest.drive import (
+from domain.use_cases.metadata_refresh.drive.refresh import (
     MetadataIngestDriveProgress,
     MetadataIngestDriveRequest,
-    ingest_metadata,
+    refresh_drive_metadata_atomically,
 )
-from domain.use_cases.metadata_ingest.group import (
+from domain.use_cases.metadata_refresh.group import (
     DriveMetadataSelector,
     MetadataDriveFilesSelected,
     MetadataDrivePublished,
@@ -17,10 +17,11 @@ from domain.use_cases.metadata_ingest.group import (
     MetadataIngestSkipped,
     MetadataIngestStarted,
     MetadataRefreshRunResult,
-    ingest_group_document_candidates,
-    ingest_group_metadata,
-    refresh_group_metadata_for_document_ingest,
 )
+from domain.use_cases.metadata_refresh.group.per_drive import (
+    refresh_group_metadata_per_drive,
+)
+from domain.use_cases.metadata_refresh.refresh import refresh_group_metadata_atomically
 
 __all__ = [
     "DriveMetadataSelector",
@@ -36,8 +37,7 @@ __all__ = [
     "MetadataIngestSkipped",
     "MetadataIngestStarted",
     "MetadataRefreshRunResult",
-    "ingest_group_document_candidates",
-    "ingest_group_metadata",
-    "ingest_metadata",
-    "refresh_group_metadata_for_document_ingest",
+    "refresh_drive_metadata_atomically",
+    "refresh_group_metadata_atomically",
+    "refresh_group_metadata_per_drive",
 ]

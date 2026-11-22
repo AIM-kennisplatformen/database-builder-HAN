@@ -1,7 +1,5 @@
 """Persist document metadata, observations, and inventory cursors."""
 
-from collections.abc import AsyncGenerator
-from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import asdict
 from json import dumps
 from sys import exc_info
@@ -12,17 +10,10 @@ import anyio
 from psycopg import AsyncConnection
 from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
-from psycopg_pool import AsyncConnectionPool
 from pydantic import TypeAdapter
 
 from domain.exceptions.metadata_ingest_errors import MetadataRunAlreadyActive
 from domain.models.documents.document import Document, DocumentMetadata
-from domain.models.documents.document_ingestion import (
-    DocumentIngestFileSelection,
-    DocumentProcessingCandidate,
-    DocumentProcessingState,
-    ProcessingOutcome,
-)
 from domain.models.documents.metadata_selection import MetadataSelection
 from domain.ports.documents.document_store import (
     CombinedDocumentRefreshStore,
@@ -30,45 +21,30 @@ from domain.ports.documents.document_store import (
     MetadataIngestRun,
     MetadataRunPublication,
 )
+from infrastructure.postgres.combined_operation_store import (
+    CombinedOperationStoreMethods,
+)
+from infrastructure.postgres.document_ingestion_store import (
+    DocumentIngestionStoreMethods,
+)
+from infrastructure.postgres.document_store_constants import METADATA_RESET_LOCK
+from infrastructure.postgres.pool_store import PostgresPoolStore
+from infrastructure.postgres.transactions import staging_transaction
 
 _metadata_adapter = TypeAdapter(DocumentMetadata)
-_METADATA_RESET_LOCK = 7368369943385156103
 
 
-@asynccontextmanager
-async def _staging_transaction(
-    pool: AsyncConnectionPool,
-) -> AsyncGenerator[AsyncConnection[tuple[object, ...]]]:
-    """Keep metadata staging SQL cancellable and shield transaction teardown."""
-    stack = AsyncExitStack()
-    try:
-        connection = await stack.enter_async_context(pool.connection())
-        _ = await stack.enter_async_context(connection.transaction())
-    except BaseException as exc:
-        with anyio.CancelScope(shield=True):
-            _ = await stack.__aexit__(type(exc), exc, exc.__traceback__)
-        raise
-
-    try:
-        yield connection
-        await anyio.lowlevel.checkpoint()
-    except BaseException as exc:
-        with anyio.CancelScope(shield=True):
-            _ = await stack.__aexit__(type(exc), exc, exc.__traceback__)
-        raise
-    else:
-        with anyio.CancelScope(shield=True):
-            _ = await stack.__aexit__(None, None, None)
-
-
-class PostgresDocumentStore(DocumentStore, CombinedDocumentRefreshStore):
-    def __init__(self, pool: AsyncConnectionPool) -> None:
-        self._pool: AsyncConnectionPool = pool
-
+class PostgresDocumentStore(
+    CombinedOperationStoreMethods,
+    DocumentIngestionStoreMethods,
+    PostgresPoolStore,
+    DocumentStore,
+    CombinedDocumentRefreshStore,
+):
     async def delete_all_metadata(self) -> bool:
-        async with _staging_transaction(self._pool) as connection:
+        async with staging_transaction(self._pool) as connection:
             _ = await connection.execute(
-                "SELECT pg_advisory_xact_lock(%s)", (_METADATA_RESET_LOCK,)
+                "SELECT pg_advisory_xact_lock(%s)", (METADATA_RESET_LOCK,)
             )
             cursor = await connection.execute(
                 """SELECT id FROM operation_runs
@@ -154,7 +130,7 @@ class PostgresDocumentStore(DocumentStore, CombinedDocumentRefreshStore):
                        FROM (SELECT pg_advisory_xact_lock(%s)) AS reset_lock
                        LEFT JOIN document_metadata_cursors AS cursors
                          ON cursors.principal_id = %s AND cursors.drive_id = %s""",
-                    (_METADATA_RESET_LOCK, principal_id, drive_id),
+                    (METADATA_RESET_LOCK, principal_id, drive_id),
                 )
                 row = cast(tuple[object, ...] | None, await cursor.fetchone())
                 if row is not None and row[0] is not None:
@@ -197,62 +173,6 @@ class PostgresDocumentStore(DocumentStore, CombinedDocumentRefreshStore):
         )
 
     @override
-    async def begin_group_operation(self, principal_id: str, group_id: str) -> UUID:
-        operation_id = uuid4()
-        async with self._pool.connection() as connection:
-            _ = await connection.execute(
-                "SELECT pg_advisory_xact_lock(%s)", (_METADATA_RESET_LOCK,)
-            )
-            _ = await connection.execute(
-                """INSERT INTO operation_runs
-                   (id, principal_id, kind, status, domain_ids)
-                   VALUES (%s, %s, 'metadata.ingest', 'running', %s::jsonb)""",
-                (
-                    operation_id,
-                    principal_id,
-                    dumps(
-                        {
-                            "group_id": group_id,
-                            "drive_run_ids": [],
-                        }
-                    ),
-                ),
-            )
-        return operation_id
-
-    async def _set_drive_outcome(
-        self,
-        connection: AsyncConnection[tuple[object, ...]],
-        operation_id: UUID,
-        drive_id: str,
-        outcome: dict[str, object],
-    ) -> None:
-        cursor = await connection.execute(
-            """UPDATE operation_runs
-               SET summary = jsonb_set(
-                 jsonb_set(summary, '{drive_outcomes}',
-                   COALESCE(summary->'drive_outcomes', '{}'::jsonb), TRUE),
-                 ARRAY['drive_outcomes', %s],
-                 CASE WHEN summary->'drive_outcomes'->%s->>'status' IN
-                   ('published', 'failed', 'skipped', 'interrupted')
-                   THEN summary->'drive_outcomes'->%s
-                   ELSE %s::jsonb END,
-                 TRUE)
-               WHERE id = %s AND status = 'running'
-               RETURNING id""",
-            (drive_id, drive_id, drive_id, dumps(outcome), operation_id),
-        )
-        if await cursor.fetchone() is None:
-            raise ValueError("Combined metadata operation is not active")
-
-    @override
-    async def record_metadata_drive_outcome(
-        self, operation_id: UUID, drive_id: str, outcome: dict[str, object]
-    ) -> None:
-        async with _staging_transaction(self._pool) as connection:
-            await self._set_drive_outcome(connection, operation_id, drive_id, outcome)
-
-    @override
     async def publish_metadata_drive(
         self,
         operation_id: UUID,
@@ -261,7 +181,7 @@ class PostgresDocumentStore(DocumentStore, CombinedDocumentRefreshStore):
         outcome: dict[str, object],
     ) -> None:
         """Publish one drive snapshot and its parent outcome atomically."""
-        async with _staging_transaction(self._pool) as connection:
+        async with staging_transaction(self._pool) as connection:
             cursor = await connection.execute(
                 """SELECT drive_id, operation_id FROM document_metadata_runs
                    WHERE id = %s AND status = 'running' FOR UPDATE""",
@@ -281,47 +201,9 @@ class PostgresDocumentStore(DocumentStore, CombinedDocumentRefreshStore):
             )
 
     @override
-    async def complete_group_operation(
-        self, operation_id: UUID, summary: dict[str, object]
-    ) -> None:
-        async with _staging_transaction(self._pool) as connection:
-            cursor = await connection.execute(
-                """UPDATE operation_runs SET status = 'complete', finished_at = now(),
-                   summary = summary || %s::jsonb
-                   WHERE id = %s AND status = 'running'
-                   RETURNING id""",
-                (dumps(summary), operation_id),
-            )
-            if await cursor.fetchone() is None:
-                raise ValueError("Combined metadata operation is not active")
-
-    @override
-    async def fail_group_operation(
-        self,
-        operation_id: UUID,
-        failure_code: str,
-        *,
-        interrupted: bool = False,
-        summary: dict[str, object] | None = None,
-    ) -> None:
-        async with self._pool.connection() as connection:
-            _ = await connection.execute(
-                """UPDATE operation_runs SET status = %s, finished_at = now(),
-                   failure_code = %s,
-                   summary = summary || COALESCE(%s::jsonb, '{}'::jsonb)
-                   WHERE id = %s AND status = 'running'""",
-                (
-                    "interrupted" if interrupted else "failed",
-                    failure_code,
-                    dumps(summary) if summary is not None else None,
-                    operation_id,
-                ),
-            )
-
-    @override
     async def stage_document(self, run_id: UUID, document: Document) -> None:
         file = document.file_metadata
-        async with _staging_transaction(self._pool) as connection:
+        async with staging_transaction(self._pool) as connection:
             _ = await connection.execute(
                 """INSERT INTO document_metadata_staging (
                      run_id, item_id, visible, relative_path, name, mime_type, size_bytes,
@@ -358,7 +240,7 @@ class PostgresDocumentStore(DocumentStore, CombinedDocumentRefreshStore):
 
     @override
     async def stage_deleted_item(self, run_id: UUID, item_id: str) -> None:
-        async with _staging_transaction(self._pool) as connection:
+        async with staging_transaction(self._pool) as connection:
             _ = await connection.execute(
                 """INSERT INTO document_metadata_staging (run_id, item_id, visible)
                    VALUES (%s, %s, FALSE)
@@ -523,7 +405,7 @@ class PostgresDocumentStore(DocumentStore, CombinedDocumentRefreshStore):
 
     async def interrupt_metadata_runs(self) -> None:
         """Recover per-drive runs orphaned by a process crash at startup."""
-        async with _staging_transaction(self._pool) as connection:
+        async with staging_transaction(self._pool) as connection:
             _ = await connection.execute(
                 """DELETE FROM document_metadata_staging AS staging
                    USING document_metadata_runs AS run
@@ -550,199 +432,4 @@ class PostgresDocumentStore(DocumentStore, CombinedDocumentRefreshStore):
                        )) AS outcome
                      ), '{}'::jsonb), TRUE)
                    WHERE kind = 'metadata.ingest' AND status = 'running'"""
-            )
-
-    @override
-    async def query_visible_document_candidates(
-        self, principal_id: str, drive_id: str, published_run_id: UUID
-    ) -> tuple[DocumentProcessingCandidate, ...]:
-        async with self._pool.connection() as connection:
-            cursor = await connection.execute(
-                """SELECT observation.drive_id, observation.item_id, observation.name,
-                          observation.relative_path, observation.content_version,
-                          state.active_content_version, state.active_policy_version,
-                          state.last_attempt_content_version,
-                          state.last_attempt_policy_version, state.last_outcome,
-                          state.drive_id,
-                          COALESCE(state.deferred, FALSE)
-                   FROM document_metadata_cursors AS cursor
-                   JOIN document_metadata_runs AS run
-                     ON run.id = cursor.published_run_id
-                    AND run.principal_id = cursor.principal_id
-                    AND run.drive_id = cursor.drive_id
-                    AND run.selection = cursor.selection
-                   JOIN document_metadata_observations AS observation
-                     ON observation.principal_id = cursor.principal_id
-                    AND observation.drive_id = cursor.drive_id
-                    AND observation.selection = cursor.selection
-                    AND observation.visible
-                   JOIN document_ms_graph_sources AS source
-                     ON source.drive_id = observation.drive_id
-                    AND source.item_id = observation.item_id
-                   LEFT JOIN document_processing_state AS state
-                     ON state.drive_id = source.drive_id
-                    AND state.item_id = source.item_id
-                   WHERE cursor.principal_id = %s AND cursor.drive_id = %s
-                     AND cursor.published_run_id = %s AND cursor.delta_link <> ''
-                     AND run.status = 'complete'
-                   ORDER BY observation.item_id""",
-                (principal_id, drive_id, published_run_id),
-            )
-            rows = cast(list[tuple[object, ...]], await cursor.fetchall())
-            if not rows:
-                cursor = await connection.execute(
-                    """SELECT EXISTS (
-                           SELECT 1 FROM document_metadata_cursors AS cursor
-                           JOIN document_metadata_runs AS run
-                             ON run.id = cursor.published_run_id
-                            AND run.principal_id = cursor.principal_id
-                            AND run.drive_id = cursor.drive_id
-                            AND run.selection = cursor.selection
-                           WHERE cursor.principal_id = %s AND cursor.drive_id = %s
-                             AND cursor.published_run_id = %s
-                             AND cursor.delta_link <> '' AND run.status = 'complete'
-                       )""",
-                    (principal_id, drive_id, published_run_id),
-                )
-                validity_row = cast(tuple[bool] | None, await cursor.fetchone())
-                if validity_row is None or not validity_row[0]:
-                    raise ValueError(
-                        "Published metadata snapshot is no longer current"
-                    )
-        candidates: list[DocumentProcessingCandidate] = []
-        for row in rows:
-            (
-                row_drive,
-                item_id,
-                name,
-                relative_path,
-                content_version,
-                active_content,
-                active_policy,
-                attempt_content,
-                attempt_policy,
-                outcome,
-                state_drive_id,
-                deferred,
-            ) = row
-            state = None
-            if state_drive_id is not None:
-                state = DocumentProcessingState(
-                    cast(str | None, active_content),
-                    cast(str | None, active_policy),
-                    cast(str | None, attempt_content),
-                    cast(str | None, attempt_policy),
-                    ProcessingOutcome(cast(str, outcome)) if outcome else None,
-                    bool(deferred),
-                )
-            candidates.append(
-                DocumentProcessingCandidate(
-                    cast(str, row_drive),
-                    cast(str, item_id),
-                    cast(str, name),
-                    cast(str | None, relative_path),
-                    cast(str | None, content_version),
-                    state,
-                )
-            )
-        return tuple(candidates)
-
-    @override
-    async def record_document_ingest_selections(
-        self,
-        operation_id: UUID,
-        selections: tuple[DocumentIngestFileSelection, ...],
-    ) -> None:
-        async with _staging_transaction(self._pool) as connection:
-            for selection in selections:
-                _ = await connection.execute(
-                    """INSERT INTO document_ingest_file_runs (
-                         operation_id, drive_id, item_id, relative_path,
-                         source_content_version, processing_policy_version,
-                         statuses, selection_reasons, outcome
-                       ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                       ON CONFLICT (operation_id, drive_id, item_id) DO UPDATE SET
-                         relative_path = EXCLUDED.relative_path,
-                         source_content_version = EXCLUDED.source_content_version,
-                         processing_policy_version = EXCLUDED.processing_policy_version,
-                         statuses = EXCLUDED.statuses,
-                         selection_reasons = EXCLUDED.selection_reasons,
-                         outcome = EXCLUDED.outcome, updated_at = now()""",
-                    (
-                        operation_id,
-                        selection.drive_id,
-                        selection.item_id,
-                        selection.relative_path,
-                        selection.source_content_version,
-                        selection.processing_policy_version,
-                        Jsonb([status.value for status in selection.statuses]),
-                        Jsonb(list(selection.selection_reasons)),
-                        selection.outcome,
-                    ),
-                )
-
-    @override
-    async def record_document_processing_outcome(
-        self,
-        drive_id: str,
-        item_id: str,
-        source_content_version: str | None,
-        processing_policy_version: str,
-        outcome: ProcessingOutcome | str,
-        *,
-        deferred: bool = False,
-        failure_stage: str | None = None,
-        failure_detail: str | None = None,
-    ) -> None:
-        outcome_value = (
-            outcome.value if isinstance(outcome, ProcessingOutcome) else outcome
-        )
-        if outcome_value == "deferred":
-            async with self._pool.connection() as connection:
-                _ = await connection.execute(
-                    """INSERT INTO document_processing_state
-                         (drive_id, item_id, deferred, updated_at)
-                       VALUES (%s, %s, TRUE, now())
-                       ON CONFLICT (drive_id, item_id) DO UPDATE SET
-                         deferred = TRUE, updated_at = now()""",
-                    (drive_id, item_id),
-                )
-            return
-        if outcome_value not in {item.value for item in ProcessingOutcome}:
-            raise ValueError("Unsupported document processing outcome")
-        active_update = outcome_value == ProcessingOutcome.SUCCEEDED.value
-        async with self._pool.connection() as connection:
-            _ = await connection.execute(
-                """INSERT INTO document_processing_state (
-                     drive_id, item_id, active_content_version, active_policy_version,
-                     last_attempt_content_version, last_attempt_policy_version,
-                     last_outcome, deferred, failure_stage, failure_detail, updated_at
-                   ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
-                   ON CONFLICT (drive_id, item_id) DO UPDATE SET
-                     active_content_version = CASE WHEN %s THEN EXCLUDED.active_content_version
-                       ELSE document_processing_state.active_content_version END,
-                     active_policy_version = CASE WHEN %s THEN EXCLUDED.active_policy_version
-                       ELSE document_processing_state.active_policy_version END,
-                     last_attempt_content_version = EXCLUDED.last_attempt_content_version,
-                     last_attempt_policy_version = EXCLUDED.last_attempt_policy_version,
-                     last_outcome = EXCLUDED.last_outcome,
-                     deferred = %s,
-                     failure_stage = EXCLUDED.failure_stage,
-                     failure_detail = EXCLUDED.failure_detail,
-                     updated_at = now()""",
-                (
-                    drive_id,
-                    item_id,
-                    source_content_version if active_update else None,
-                    processing_policy_version if active_update else None,
-                    source_content_version,
-                    processing_policy_version,
-                    outcome_value,
-                    deferred,
-                    failure_stage,
-                    failure_detail,
-                    active_update,
-                    active_update,
-                    deferred,
-                ),
             )

@@ -131,8 +131,16 @@ class MsGraphGroupDriveSource(GroupDriveSource):
     async def stream_group_drive_locations(
         self, group_id: str
     ) -> AsyncIterator[GroupDriveLocation]:
-        builder = self.client.groups.by_group_id(group_id).drives
         seen_drive_ids: set[str] = set()
+        async for location in self._stream_sharepoint_drives(group_id, seen_drive_ids):
+            yield location
+        async for location in self._stream_channel_drives(group_id, seen_drive_ids):
+            yield location
+
+    async def _stream_sharepoint_drives(
+        self, group_id: str, seen_drive_ids: set[str]
+    ) -> AsyncIterator[GroupDriveLocation]:
+        builder = self.client.groups.by_group_id(group_id).drives
         next_url: str | None = (
             f"https://graph.microsoft.com/v1.0/groups/{quote(group_id, safe='')}/drives"
         )
@@ -156,16 +164,35 @@ class MsGraphGroupDriveSource(GroupDriveSource):
                 break
             page = _parse_page(response)
             for drive in page.value:
-                if drive.id not in seen_drive_ids and await self._can_scan_drive(
-                    drive.id
-                ):
-                    seen_drive_ids.add(drive.id)
-                    yield GroupDriveLocation(drive.id, name=drive.name)
+                if drive.id in seen_drive_ids:
+                    continue
+                if not await self._can_scan_drive(drive.id):
+                    continue
+                seen_drive_ids.add(drive.id)
+                yield GroupDriveLocation(drive.id, name=drive.name)
             next_url = page.next_link
 
+    async def _stream_channel_drives(
+        self, group_id: str, seen_drive_ids: set[str]
+    ) -> AsyncIterator[GroupDriveLocation]:
+        async for channel in self._stream_channels(group_id):
+            if channel.membership_type == "standard":
+                continue
+            location = await self._channel_drive_location(group_id, channel.id)
+            if location is None:
+                continue
+            drive_id, folder_id = location
+            if drive_id in seen_drive_ids:
+                continue
+            seen_drive_ids.add(drive_id)
+            yield GroupDriveLocation(
+                drive_id, folder_id, await self._get_drive_name(drive_id)
+            )
+
+    async def _stream_channels(self, group_id: str) -> AsyncIterator[GraphResource]:
         channel_builder = self.client.teams.by_team_id(group_id).channels
         next_url = f"https://graph.microsoft.com/v1.0/teams/{quote(group_id, safe='')}/channels"
-        seen_urls = set()
+        seen_urls: set[str] = set()
         seen_channel_ids: set[str] = set()
         while next_url is not None:
             validate_graph_url(next_url)
@@ -189,33 +216,36 @@ class MsGraphGroupDriveSource(GroupDriveSource):
                 if channel.id in seen_channel_ids:
                     continue
                 seen_channel_ids.add(channel.id)
-                if channel.membership_type == "standard":
-                    continue
-                folder_url = (
-                    f"https://graph.microsoft.com/v1.0/teams/{quote(group_id, safe='')}"
-                    f"/channels/{quote(channel.id, safe='')}/filesFolder"
-                )
-                folder_builder = channel_builder.by_channel_id(channel.id).files_folder
-                folder_response = cast(
-                    Response | None,
-                    await folder_builder.with_url(folder_url).get(
-                        request_configuration=RequestConfiguration(
-                            options=[ResponseHandlerOption(NativeResponseHandler())]
-                        )
-                    ),
-                )
-                if folder_response is None:
-                    raise ValueError("Graph returned no channel files folder")
-                if folder_response.status_code in {403, 404}:
-                    continue
-                raise_for_graph_error(
-                    folder_response, "Graph rejected the channel files folder request"
-                )
-                folder = GraphChannelFolder.model_validate_json(folder_response.content)
-                drive_id = folder.parent_reference.drive_id
-                if drive_id not in seen_drive_ids:
-                    seen_drive_ids.add(drive_id)
-                    yield GroupDriveLocation(
-                        drive_id, folder.id, await self._get_drive_name(drive_id)
-                    )
+                yield channel
             next_url = page.next_link
+
+    async def _channel_drive_location(
+        self, group_id: str, channel_id: str
+    ) -> tuple[str, str] | None:
+        folder_url = (
+            f"https://graph.microsoft.com/v1.0/teams/{quote(group_id, safe='')}"
+            f"/channels/{quote(channel_id, safe='')}/filesFolder"
+        )
+        folder_builder = (
+            self.client.teams.by_team_id(group_id)
+            .channels.by_channel_id(channel_id)
+            .files_folder
+        )
+        folder_response = cast(
+            Response | None,
+            await folder_builder.with_url(folder_url).get(
+                request_configuration=RequestConfiguration(
+                    options=[ResponseHandlerOption(NativeResponseHandler())]
+                )
+            ),
+        )
+        if folder_response is None:
+            raise ValueError("Graph returned no channel files folder")
+        if folder_response.status_code in {403, 404}:
+            return None
+        raise_for_graph_error(
+            folder_response, "Graph rejected the channel files folder request"
+        )
+        folder = GraphChannelFolder.model_validate_json(folder_response.content)
+        drive_id = folder.parent_reference.drive_id
+        return drive_id, folder.id

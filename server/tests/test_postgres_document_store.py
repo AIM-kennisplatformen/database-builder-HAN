@@ -115,7 +115,9 @@ def test_startup_recovery_discards_only_staged_rows_and_interrupts_running_runs(
     assert "document_metadata_observations" not in delete_sql + update_sql
 
 
-def test_candidate_query_uses_current_published_run_and_visible_operator_observations() -> None:
+def test_candidate_query_uses_current_published_run_and_visible_operator_observations() -> (
+    None
+):
     published_run_id = uuid4()
     result_cursor = MagicMock()
     result_cursor.fetchall = AsyncMock(
@@ -142,9 +144,9 @@ def test_candidate_query_uses_current_published_run_and_visible_operator_observa
     pool.connection.return_value.__aenter__.return_value = connection
 
     candidates = asyncio.run(
-        PostgresDocumentStore(cast(AsyncConnectionPool, pool)).query_visible_document_candidates(
-            "operator", "drive", published_run_id
-        )
+        PostgresDocumentStore(
+            cast(AsyncConnectionPool, pool)
+        ).query_visible_document_candidates("operator", "drive", published_run_id)
     )
 
     assert len(candidates) == 1
@@ -189,7 +191,9 @@ def test_empty_candidate_result_requires_the_published_snapshot_to_remain_curren
     if current_snapshot:
         assert asyncio.run(query()) == ()
     else:
-        with pytest.raises(ValueError, match="Published metadata snapshot is no longer current"):
+        with pytest.raises(
+            ValueError, match="Published metadata snapshot is no longer current"
+        ):
             asyncio.run(query())
 
     assert connection.execute.await_count == 2
@@ -224,9 +228,9 @@ def test_selected_file_run_records_are_persisted_with_statuses_and_reasons() -> 
     )
 
     asyncio.run(
-        PostgresDocumentStore(cast(AsyncConnectionPool, pool)).record_document_ingest_selections(
-            operation_id, (selection,)
-        )
+        PostgresDocumentStore(
+            cast(AsyncConnectionPool, pool)
+        ).record_document_ingest_selections(operation_id, (selection,))
     )
 
     sql, parameters = connection.execute.await_args.args
@@ -300,7 +304,9 @@ def test_legacy_metadata_cursor_forces_baseline_before_candidate_query() -> None
     assert run.same_selection
     assert run.cursor is None
     migration = Path("migrations/versions/009_document_ingestion_state.sql").read_text()
-    assert "SET name = source.name, content_version = source.content_version" in migration
+    assert (
+        "SET name = source.name, content_version = source.content_version" in migration
+    )
     assert "UPDATE document_metadata_cursors SET delta_link = '';" in migration
 
 
@@ -310,9 +316,7 @@ def test_single_drive_publication_and_run_outcome_share_one_transaction(
 ) -> None:
     operation_id = uuid4()
     ownership_cursor = MagicMock()
-    ownership_cursor.fetchone = AsyncMock(
-        return_value=("drive", operation_id)
-    )
+    ownership_cursor.fetchone = AsyncMock(return_value=("drive", operation_id))
     run_cursor = MagicMock()
     run_cursor.fetchone = AsyncMock(return_value=("operator", "drive", "selection"))
     outcome_cursor = MagicMock()
@@ -344,7 +348,9 @@ def test_single_drive_publication_and_run_outcome_share_one_transaction(
     publication = MetadataRunPublication(uuid4(), "cursor", True, True)
 
     async def publish() -> None:
-        await PostgresDocumentStore(cast(AsyncConnectionPool, pool)).publish_metadata_drive(
+        await PostgresDocumentStore(
+            cast(AsyncConnectionPool, pool)
+        ).publish_metadata_drive(
             operation_id,
             "drive",
             publication,
@@ -352,7 +358,9 @@ def test_single_drive_publication_and_run_outcome_share_one_transaction(
         )
 
     if fail_outcome_update:
-        with pytest.raises(ValueError, match="Combined metadata operation is not active"):
+        with pytest.raises(
+            ValueError, match="Combined metadata operation is not active"
+        ):
             asyncio.run(publish())
         transaction.__aexit__.assert_awaited_once()
         assert transaction.__aexit__.await_args.args[0] is ValueError
@@ -361,8 +369,14 @@ def test_single_drive_publication_and_run_outcome_share_one_transaction(
         transaction.__aexit__.assert_awaited_once_with(None, None, None)
 
     sql_statements = [call.args[0] for call in connection.execute.await_args_list]
-    assert any("INSERT INTO document_ms_graph_sources" in statement for statement in sql_statements)
-    assert any("INSERT INTO document_metadata_cursors" in statement for statement in sql_statements)
+    assert any(
+        "INSERT INTO document_ms_graph_sources" in statement
+        for statement in sql_statements
+    )
+    assert any(
+        "INSERT INTO document_metadata_cursors" in statement
+        for statement in sql_statements
+    )
     outcome_sql = sql_statements[-1]
     assert "UPDATE operation_runs" in outcome_sql
     assert "drive_outcomes" in outcome_sql
@@ -414,7 +428,9 @@ def test_drive_outcome_fallback_does_not_replace_terminal_outcome() -> None:
     operation_id = uuid4()
 
     asyncio.run(
-        PostgresDocumentStore(cast(AsyncConnectionPool, pool)).record_metadata_drive_outcome(
+        PostgresDocumentStore(
+            cast(AsyncConnectionPool, pool)
+        ).record_metadata_drive_outcome(
             operation_id,
             "drive",
             {"status": "failed", "failure_code": "metadata.publish_failed"},
@@ -426,5 +442,8 @@ def test_drive_outcome_fallback_does_not_replace_terminal_outcome() -> None:
     assert "('published', 'failed', 'skipped', 'interrupted')" in sql
     assert "THEN summary->'drive_outcomes'->%s" in sql
     assert parameters[0:3] == ("drive", "drive", "drive")
-    assert parameters[3] == '{"status": "failed", "failure_code": "metadata.publish_failed"}'
+    assert (
+        parameters[3]
+        == '{"status": "failed", "failure_code": "metadata.publish_failed"}'
+    )
     assert parameters[4] == operation_id

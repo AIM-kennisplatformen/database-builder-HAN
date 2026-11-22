@@ -195,7 +195,7 @@ async def discard_metadata_runs(
             await _discard_metadata_run(store, run_id)
 
 
-async def prepare_metadata(
+async def stage_metadata_refresh(
     principal_id: str,
     req: MetadataIngestDriveRequest,
     source: DocumentRefreshSource,
@@ -212,13 +212,13 @@ async def prepare_metadata(
         scan = await _scan_metadata_source(
             source, req, run.cursor, capture_relative_paths
         )
-        updates = _stage_metadata(store, run.id, scan)
+        staged_document_events = _stage_metadata(store, run.id, scan)
         try:
-            async for update in updates:
-                yield update
+            async for document_event in staged_document_events:
+                yield document_event
         finally:
             with anyio.CancelScope(shield=True):
-                await updates.aclose()
+                await staged_document_events.aclose()
         yield MetadataIngestPrepared(
             MetadataRunPublication(
                 run.id, scan.delta_link, scan.baseline, run.same_selection
@@ -229,7 +229,7 @@ async def prepare_metadata(
         raise
 
 
-async def ingest_metadata(
+async def refresh_drive_metadata_atomically(
     principal_id: str,
     req: MetadataIngestDriveRequest,
     source: DocumentRefreshSource,
@@ -238,16 +238,17 @@ async def ingest_metadata(
     """Scan, stage, then publish one drive's metadata and cursor atomically."""
     publication: MetadataRunPublication | None = None
     try:
-        updates = prepare_metadata(principal_id, req, source, store)
+        preparation_events = stage_metadata_refresh(principal_id, req, source, store)
         try:
-            async for update in updates:
-                if isinstance(update, MetadataIngestPrepared):
-                    publication = update.publication
-                else:
-                    yield update
+            async for preparation_event in preparation_events:
+                match preparation_event:
+                    case MetadataIngestPrepared(publication=prepared_publication):
+                        publication = prepared_publication
+                    case MetadataIngestDriveProgress():
+                        yield preparation_event
         finally:
             with anyio.CancelScope(shield=True):
-                await updates.aclose()
+                await preparation_events.aclose()
         if publication is None:
             raise RuntimeError("Metadata preparation ended without a run")
         await _publish_metadata_run(store, publication)

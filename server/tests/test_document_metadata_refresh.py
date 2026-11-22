@@ -24,7 +24,10 @@ from domain.ports.documents.document_store import (
     DocumentRefreshStore,
     MetadataIngestRun,
 )
-from domain.use_cases.metadata_ingest import MetadataIngestDriveRequest, ingest_metadata
+from domain.use_cases.metadata_refresh.drive.refresh import (
+    MetadataIngestDriveRequest,
+    refresh_drive_metadata_atomically,
+)
 
 
 def document(item_id: str = "item") -> Document:
@@ -122,7 +125,7 @@ def test_refresh_publishes_documents_deletions_and_cursor_together() -> None:
     async def collect() -> list[str]:
         return [
             update.document.id.id[1]
-            async for update in ingest_metadata(
+            async for update in refresh_drive_metadata_atomically(
                 "operator",
                 MetadataIngestDriveRequest("drive"),
                 cast(DocumentRefreshSource, cast(object, source)),
@@ -145,7 +148,7 @@ def test_failed_scan_preserves_published_data_and_cursor() -> None:
     store.published["old"] = old
 
     async def collect() -> None:
-        async for _ in ingest_metadata(
+        async for _ in refresh_drive_metadata_atomically(
             "operator",
             MetadataIngestDriveRequest("drive"),
             cast(DocumentRefreshSource, cast(object, source)),
@@ -181,7 +184,7 @@ def test_cleanup_failure_is_logged_without_masking_scan_failure(
     source = Source(RuntimeError("Graph failed"))
 
     async def collect() -> None:
-        async for _ in ingest_metadata(
+        async for _ in refresh_drive_metadata_atomically(
             "operator",
             MetadataIngestDriveRequest("drive"),
             cast(DocumentRefreshSource, cast(object, source)),
@@ -204,7 +207,7 @@ def test_path_scope_uses_baseline_even_when_cursor_exists() -> None:
     store = Store("old-cursor")
 
     async def collect() -> None:
-        async for _ in ingest_metadata(
+        async for _ in refresh_drive_metadata_atomically(
             "operator",
             MetadataIngestDriveRequest(
                 "drive",
@@ -225,7 +228,7 @@ def test_root_extension_filter_reuses_incremental_cursor() -> None:
     store = Store("old-cursor")
 
     async def collect() -> None:
-        async for _ in ingest_metadata(
+        async for _ in refresh_drive_metadata_atomically(
             "operator",
             MetadataIngestDriveRequest(
                 "drive",
@@ -265,7 +268,7 @@ def test_cancelled_refresh_discards_staging_and_preserves_published_catalog() ->
         )
 
         async def consume() -> None:
-            async for _ in ingest_metadata(
+            async for _ in refresh_drive_metadata_atomically(
                 "operator",
                 MetadataIngestDriveRequest("drive"),
                 cast(DocumentRefreshSource, cast(object, source)),

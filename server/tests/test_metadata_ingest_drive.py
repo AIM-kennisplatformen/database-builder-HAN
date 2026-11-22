@@ -20,9 +20,9 @@ from domain.ports.documents.document_store import (
     MetadataIngestRun,
     MetadataRunPublication,
 )
-from domain.use_cases.metadata_ingest import (
+from domain.use_cases.metadata_refresh.drive.refresh import (
     MetadataIngestDriveRequest,
-    ingest_metadata,
+    refresh_drive_metadata_atomically,
 )
 
 
@@ -109,7 +109,7 @@ def test_inventory_saves_each_document_before_reporting_progress() -> None:
     async def collect() -> list[Document]:
         return [
             update.document
-            async for update in ingest_metadata(
+            async for update in refresh_drive_metadata_atomically(
                 "operator",
                 MetadataIngestDriveRequest(
                     "drive",
@@ -212,7 +212,7 @@ def test_inventory_does_not_report_progress_when_save_fails() -> None:
     async def collect() -> list[Document]:
         return [
             update.document
-            async for update in ingest_metadata(
+            async for update in refresh_drive_metadata_atomically(
                 "operator",
                 MetadataIngestDriveRequest(
                     "drive",

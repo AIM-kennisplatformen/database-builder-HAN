@@ -9,7 +9,7 @@ from domain.exceptions.metadata_ingest_errors import (
     StoreUnavailable,
 )
 from domain.use_cases.group_drive_discovery import GroupNotAccessible
-from domain.use_cases.metadata_ingest import MetadataIngestDriveFailure
+from domain.use_cases.metadata_refresh import MetadataIngestDriveFailure
 
 
 class MetadataErrorMapper:

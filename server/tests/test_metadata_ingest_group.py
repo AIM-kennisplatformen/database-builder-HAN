@@ -6,7 +6,6 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from api.routes.operations import get_operation_run
 from domain.exceptions.metadata_ingest_errors import MetadataSourceError
 from domain.models.documents.content_version import ContentVersion
 from domain.models.documents.document import (
@@ -26,16 +25,15 @@ from domain.ports.documents.document_store import (
 )
 from domain.ports.documents.group_drive_source import GroupDriveLocation, UserGroup
 from domain.ports.operation_run_store import OperationRun
-from domain.use_cases.group_drive_discovery import GroupNotAccessible
-from domain.use_cases.metadata_ingest import (
+from domain.use_cases.metadata_refresh import (
     DriveMetadataSelector,
-    MetadataIngestDriveFailure,
     MetadataIngestProgress,
     MetadataIngestRequest,
     MetadataIngestResult,
     MetadataIngestSkipped,
-    MetadataIngestStarted,
-    ingest_group_metadata,
+)
+from domain.use_cases.metadata_refresh.refresh import (
+    refresh_group_metadata_atomically,
 )
 
 
@@ -244,7 +242,7 @@ def test_include_and_exclude_apply_per_drive_filters() -> None:
     async def collect():
         return [
             update
-            async for update in ingest_group_metadata(
+            async for update in refresh_group_metadata_atomically(
                 "user", request, Groups(), metadata, store
             )
         ]
@@ -272,7 +270,7 @@ def test_empty_include_uses_all_drives_and_excludes_selected_extensions() -> Non
     async def collect() -> list[str]:
         return [
             update.drive_id
-            async for update in ingest_group_metadata(
+            async for update in refresh_group_metadata_atomically(
                 "user",
                 MetadataIngestRequest(
                     "group",
@@ -308,7 +306,7 @@ def test_channel_folder_root_is_passed_to_metadata_scan() -> None:
     async def collect() -> list[str]:
         return [
             update.drive_id
-            async for update in ingest_group_metadata(
+            async for update in refresh_group_metadata_atomically(
                 "user", MetadataIngestRequest("group"), ChannelGroup(), metadata, store
             )
             if isinstance(update, MetadataIngestProgress)
@@ -334,7 +332,7 @@ def test_invalid_selection_fails_before_any_write(
     metadata, store = Metadata(), Store()
 
     async def collect() -> None:
-        async for _ in ingest_group_metadata(
+        async for _ in refresh_group_metadata_atomically(
             "user", selection, Groups(), metadata, store
         ):
             pass
@@ -362,7 +360,7 @@ def test_nested_path_rules_inherit_parent_extension_selection() -> None:
     async def collect() -> list[object]:
         return [
             update
-            async for update in ingest_group_metadata(
+            async for update in refresh_group_metadata_atomically(
                 "user", request, Groups(), metadata, store
             )
         ]
@@ -395,7 +393,7 @@ def test_overlapping_equal_path_selectors_fail_before_metadata_run_starts() -> N
     )
 
     async def collect() -> None:
-        async for _ in ingest_group_metadata(
+        async for _ in refresh_group_metadata_atomically(
             "user", request, Groups(), metadata, store
         ):
             pass
@@ -416,7 +414,7 @@ def test_disjoint_equal_path_selectors_are_valid() -> None:
     )
 
     async def collect() -> None:
-        async for _ in ingest_group_metadata(
+        async for _ in refresh_group_metadata_atomically(
             "user", request, Groups(), metadata, store
         ):
             pass
@@ -437,252 +435,10 @@ def test_duplicate_identical_directives_are_deduplicated() -> None:
     )
 
     async def collect() -> None:
-        async for _ in ingest_group_metadata(
+        async for _ in refresh_group_metadata_atomically(
             "user", request, Groups(), metadata, store
         ):
             pass
 
     asyncio.run(collect())
     assert store.selections[0].include_rules == (MetadataPathRule("a", ("pdf",)),)
-
-
-def test_unavailable_explicit_include_fails_before_any_write() -> None:
-    metadata, store = Metadata(), Store()
-
-    async def collect() -> None:
-        async for _ in ingest_group_metadata(
-            "user",
-            MetadataIngestRequest("group", include=[DriveMetadataSelector("unknown")]),
-            Groups(),
-            metadata,
-            store,
-        ):
-            pass
-
-    with pytest.raises(MetadataIngestDriveFailure) as error:
-        asyncio.run(collect())
-    assert error.value.drive_id == "unknown"
-    assert isinstance(error.value.cause, MetadataSourceError)
-    assert error.value.cause.status_code == 403
-    assert metadata.calls == []
-    assert store.saved == []
-
-
-def test_excluded_drive_is_not_scanned() -> None:
-    metadata, store = Metadata(), Store()
-
-    async def collect():
-        return [
-            update
-            async for update in ingest_group_metadata(
-                "user",
-                MetadataIngestRequest(
-                    "group", exclude=[DriveMetadataSelector("team-drive")]
-                ),
-                Groups(),
-                metadata,
-                store,
-            )
-        ]
-
-    assert _drive_ids(asyncio.run(collect())) == ["private-drive"]
-
-
-def test_inaccessible_drive_is_skipped_and_later_drive_continues() -> None:
-    class ThreeDrives(Groups):
-        @override
-        async def stream_group_drive_ids(self, group_id: str) -> AsyncIterator[str]:
-            assert group_id == "group"
-            yield "team-drive"
-            yield "private-drive"
-            yield "other-drive"
-
-    metadata, store = Metadata("private-drive"), Store()
-
-    async def collect():
-        return [
-            update
-            async for update in ingest_group_metadata(
-                "user", MetadataIngestRequest("group"), ThreeDrives(), metadata, store
-            )
-        ]
-
-    updates = asyncio.run(collect())
-    assert _drive_ids(updates) == [
-        "team-drive",
-        "private-drive",
-        "other-drive",
-    ]
-    assert [
-        (update.drive_id, update.processed)
-        for update in updates
-        if isinstance(update, (MetadataIngestProgress, MetadataIngestSkipped))
-    ] == [
-        ("team-drive", 1),
-        ("private-drive", 1),
-        ("other-drive", 2),
-    ]
-    assert isinstance(updates[-1], MetadataIngestResult)
-    assert updates[-1].processed == 2
-    assert updates[-1].skipped_drive_ids == ("private-drive",)
-    assert [document.id.id[0] for document in store.saved] == [
-        "team-drive",
-        "other-drive",
-    ]
-    assert len(store.published_batches) == 1
-    assert len(store.published_batches[0]) == 2
-
-
-def test_explicitly_included_drive_denial_stops_run() -> None:
-    metadata, store = Metadata("private-drive"), Store()
-
-    async def collect() -> list[str]:
-        return [
-            update.drive_id
-            async for update in ingest_group_metadata(
-                "user",
-                MetadataIngestRequest(
-                    "group",
-                    include=[
-                        DriveMetadataSelector("team-drive"),
-                        DriveMetadataSelector("private-drive"),
-                    ],
-                ),
-                Groups(),
-                metadata,
-                store,
-            )
-            if isinstance(update, MetadataIngestProgress)
-        ]
-
-    with pytest.raises(MetadataIngestDriveFailure) as error:
-        asyncio.run(collect())
-    assert error.value.drive_id == "private-drive"
-    assert isinstance(error.value.cause, MetadataSourceError)
-    assert error.value.cause.status_code == 403
-    assert store.saved == []
-    assert store.staged == {}
-
-
-def test_unavailable_explicit_include_is_inspectable_in_operation_status() -> None:
-    metadata, store = Metadata(), Store()
-
-    async def run() -> MetadataIngestStarted:
-        updates = ingest_group_metadata(
-            "user",
-            MetadataIngestRequest(
-                "group", include=[DriveMetadataSelector("unlisted-drive")]
-            ),
-            Groups(),
-            metadata,
-            store,
-        )
-        started = await anext(updates)
-        assert isinstance(started, MetadataIngestStarted)
-        with pytest.raises(MetadataIngestDriveFailure) as error:
-            await anext(updates)
-        assert error.value.drive_id == "unlisted-drive"
-        assert isinstance(error.value.cause, MetadataSourceError)
-        assert error.value.cause.status_code == 403
-        return started
-
-    started = asyncio.run(run())
-    operation = asyncio.run(get_operation_run(started.operation_id, "user", store))
-
-    assert operation.status == "failed"
-    assert operation.failure_code == "metadata.source_error"
-    assert operation.summary == {
-        "processed": 0,
-        "skipped_drive_ids": [],
-        "failed_drive_id": "unlisted-drive",
-        "source_status": 403,
-        "reason": "Drive is not accessible",
-    }
-    assert operation.domain_ids == {"group_id": "group", "drive_run_ids": []}
-    assert store.metadata_runs_started == 0
-    assert metadata.calls == []
-    assert store.operation_status == "failed"
-    assert store.published_batches == []
-
-
-def test_cancellation_before_group_completion_discards_all_staged_drives() -> None:
-    metadata, store = Metadata(), Store()
-
-    async def cancel_after_first_progress() -> None:
-        updates = ingest_group_metadata(
-            "user", MetadataIngestRequest("group"), Groups(), metadata, store
-        )
-        started = await anext(updates)
-        assert isinstance(started, MetadataIngestStarted)
-        first = await anext(updates)
-        assert isinstance(first, MetadataIngestProgress)
-        await updates.aclose()
-
-    asyncio.run(cancel_after_first_progress())
-
-    assert store.saved == []
-    assert store.staged == {}
-    assert store.published_batches == []
-    assert store.operation_status == "interrupted"
-
-
-def test_later_drive_failure_discards_all_staged_drives() -> None:
-    metadata, store = Metadata("private-drive", 403), Store()
-    seen: list[str] = []
-    operation_ids: list[UUID] = []
-
-    async def collect() -> None:
-        async for update in ingest_group_metadata(
-            "user",
-            MetadataIngestRequest(
-                "group",
-                include=[
-                    DriveMetadataSelector("team-drive"),
-                    DriveMetadataSelector("private-drive"),
-                ],
-            ),
-            Groups(),
-            metadata,
-            store,
-        ):
-            if isinstance(update, MetadataIngestStarted):
-                operation_ids.append(update.operation_id)
-            elif isinstance(update, MetadataIngestProgress | MetadataIngestSkipped):
-                seen.append(update.drive_id)
-
-    with pytest.raises(MetadataIngestDriveFailure) as error:
-        asyncio.run(collect())
-    assert error.value.drive_id == "private-drive"
-    assert isinstance(error.value.cause, MetadataSourceError)
-    assert seen == ["team-drive"]
-    assert store.saved == []
-    assert store.staged == {}
-    assert store.published_batches == []
-    assert len(operation_ids) == 1
-    operation = asyncio.run(get_operation_run(operation_ids[0], "user", store))
-    assert operation is not None
-    assert operation.status == "failed"
-    assert operation.failure_code == "metadata.source_error"
-    assert operation.summary == {
-        "processed": 1,
-        "skipped_drive_ids": [],
-        "failed_drive_id": "private-drive",
-        "source_status": 403,
-        "reason": "Drive is not accessible",
-    }
-    assert operation.domain_ids["group_id"] == "group"
-    assert len(cast(list[str], operation.domain_ids["drive_run_ids"])) == 2
-
-
-def test_nonmember_group_is_rejected_before_drive_listing() -> None:
-    metadata, store = Metadata(), Store()
-
-    async def collect() -> None:
-        async for _ in ingest_group_metadata(
-            "user", MetadataIngestRequest("other"), Groups(), metadata, store
-        ):
-            pass
-
-    with pytest.raises(GroupNotAccessible):
-        asyncio.run(collect())
-    assert metadata.calls == []

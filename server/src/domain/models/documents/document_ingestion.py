@@ -172,32 +172,34 @@ def _validate_status_conflicts(
     for drive_id in by_drive_include.keys() & by_drive_exclude.keys():
         for included in by_drive_include[drive_id]:
             for excluded in by_drive_exclude[drive_id]:
-                if included.paths != excluded.paths:
-                    continue
-                if (
-                    included.extensions
-                    and excluded.extensions
-                    and not (set(included.extensions) & set(excluded.extensions))
-                ):
-                    continue
-                include_statuses = (
-                    included.statuses
-                    if included.statuses is not None
-                    else DEFAULT_INCLUDE_STATUSES
-                )
-                exclude_statuses = (
-                    excluded.statuses
-                    if excluded.statuses is not None
-                    else tuple(ProcessingStatus)
-                )
-                if any(
-                    _statuses_can_coexist(include_status, exclude_status)
-                    for include_status in include_statuses
-                    for exclude_status in exclude_statuses
-                ):
+                if _status_selectors_conflict(included, excluded):
                     raise InvalidMetadataSelection(
                         f"include and exclude ingestion selectors overlap for drive {drive_id} at {included.paths[0] or '/'}"
                     )
+
+
+def _status_selectors_conflict(
+    included: IngestionDriveSelector, excluded: IngestionDriveSelector
+) -> bool:
+    if included.paths != excluded.paths:
+        return False
+    if (
+        included.extensions
+        and excluded.extensions
+        and not set(included.extensions) & set(excluded.extensions)
+    ):
+        return False
+    include_statuses = (
+        included.statuses if included.statuses is not None else DEFAULT_INCLUDE_STATUSES
+    )
+    exclude_statuses = (
+        excluded.statuses if excluded.statuses is not None else tuple(ProcessingStatus)
+    )
+    return any(
+        _statuses_can_coexist(include_status, exclude_status)
+        for include_status in include_statuses
+        for exclude_status in exclude_statuses
+    )
 
 
 def derive_processing_statuses(
@@ -300,15 +302,9 @@ def select_ingest_file(
     candidate: DocumentProcessingCandidate, request: DocumentIngestRequest
 ) -> DocumentIngestFileSelection | None:
     """Select a candidate by path, extension, and its current processing tags."""
-    if request.include and not any(
-        selector.drive_id == candidate.drive_id for selector in request.include
-    ):
+    if not _candidate_drive_is_included(candidate, request):
         return None
-    path_scoped = any(
-        selector.drive_id == candidate.drive_id and any(path for path in selector.paths)
-        for selector in request.include + request.exclude
-    )
-    if path_scoped and candidate.relative_path is None:
+    if _needs_candidate_path(candidate, request) and candidate.relative_path is None:
         raise InvalidMetadataSelection(
             "candidate folder path is unavailable for path-scoped ingestion"
         )
@@ -324,47 +320,12 @@ def select_ingest_file(
         if selector.drive_id == candidate.drive_id
     )
     default_include = not include
-    matching: list[tuple[int, bool, str]] = []
-    all_directives = tuple((rule, True, include) for rule in include) + tuple(
-        (rule, False, exclude) for rule in exclude
-    )
-    for rule, included, side in all_directives:
-        if not _matches_path(candidate.relative_path, rule) or not _matches_extension(
-            candidate.name, rule
-        ):
-            continue
-        allowed_statuses = _effective_statuses(rule, side, candidate, include=included)
-        if not statuses & allowed_statuses:
-            continue
-        depth = len(rule.paths[0].split("/")) if rule.paths[0] else 0
-        matching.append(
-            (
-                depth,
-                included,
-                (
-                    f"{rule.paths[0] or '/'};extensions={','.join(rule.extensions) or '*'};"
-                    f"statuses={','.join(sorted(status.value for status in statuses & allowed_statuses))}"
-                ),
-            )
-        )
-
-    if default_include and statuses & DEFAULT_INCLUDE_STATUSES:
-        matching.append(
-            (
-                0,
-                True,
-                f"default:{','.join(sorted(status.value for status in statuses & DEFAULT_INCLUDE_STATUSES))}",
-            )
-        )
-    if not matching:
+    matching = _matching_ingest_rules(candidate, statuses, include, exclude)
+    if default_include:
+        matching.extend(_default_include_rule(statuses))
+    reasons = _included_rule_reasons(matching)
+    if reasons is None:
         return None
-    specificity = max(depth for depth, _, _ in matching)
-    at_specificity = [entry for entry in matching if entry[0] == specificity]
-    if not any(included for _, included, _ in at_specificity):
-        return None
-    if any(not included for _, included, _ in at_specificity):
-        return None
-    reasons = tuple(sorted({reason for _, _, reason in at_specificity}))
     if candidate.content_version is None:
         reasons += ("source_content_version_unknown",)
     return DocumentIngestFileSelection(
@@ -375,4 +336,89 @@ def select_ingest_file(
         request.processing_policy_version,
         tuple(sorted(statuses)),
         reasons,
+    )
+
+
+def _candidate_drive_is_included(
+    candidate: DocumentProcessingCandidate, request: DocumentIngestRequest
+) -> bool:
+    return not request.include or any(
+        selector.drive_id == candidate.drive_id for selector in request.include
+    )
+
+
+def _needs_candidate_path(
+    candidate: DocumentProcessingCandidate, request: DocumentIngestRequest
+) -> bool:
+    return any(
+        selector.drive_id == candidate.drive_id and any(path for path in selector.paths)
+        for selector in request.include + request.exclude
+    )
+
+
+def _matching_ingest_rules(
+    candidate: DocumentProcessingCandidate,
+    statuses: frozenset[ProcessingStatus],
+    include: tuple[IngestionDriveSelector, ...],
+    exclude: tuple[IngestionDriveSelector, ...],
+) -> list[tuple[int, bool, str]]:
+    matches: list[tuple[int, bool, str]] = []
+    directives = tuple((rule, True, include) for rule in include) + tuple(
+        (rule, False, exclude) for rule in exclude
+    )
+    for rule, included, side in directives:
+        if _matches_path(candidate.relative_path, rule) and _matches_extension(
+            candidate.name, rule
+        ):
+            allowed = _effective_statuses(rule, side, candidate, include=included)
+            if statuses & allowed:
+                matches.append(
+                    (
+                        _path_depth(rule),
+                        included,
+                        _selection_reason(rule, statuses & allowed),
+                    )
+                )
+    return matches
+
+
+def _default_include_rule(
+    statuses: frozenset[ProcessingStatus],
+) -> list[tuple[int, bool, str]]:
+    included_statuses = statuses & DEFAULT_INCLUDE_STATUSES
+    if not included_statuses:
+        return []
+    return [
+        (
+            0,
+            True,
+            f"default:{','.join(sorted(status.value for status in included_statuses))}",
+        )
+    ]
+
+
+def _included_rule_reasons(
+    matches: list[tuple[int, bool, str]],
+) -> tuple[str, ...] | None:
+    if not matches:
+        return None
+    specificity = max(depth for depth, _, _ in matches)
+    most_specific = [entry for entry in matches if entry[0] == specificity]
+    if not any(included for _, included, _ in most_specific):
+        return None
+    if any(not included for _, included, _ in most_specific):
+        return None
+    return tuple(sorted({reason for _, _, reason in most_specific}))
+
+
+def _path_depth(selector: IngestionDriveSelector) -> int:
+    return len(selector.paths[0].split("/")) if selector.paths[0] else 0
+
+
+def _selection_reason(
+    selector: IngestionDriveSelector, statuses: frozenset[ProcessingStatus]
+) -> str:
+    return (
+        f"{selector.paths[0] or '/'};extensions={','.join(selector.extensions) or '*'};"
+        f"statuses={','.join(sorted(status.value for status in statuses))}"
     )

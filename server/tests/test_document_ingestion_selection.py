@@ -167,9 +167,7 @@ def test_omitted_drive_paths_select_candidates_nested_below_root() -> None:
 
 def test_root_extension_rule_matches_candidate_without_relative_path() -> None:
     request = _request(
-        include=(
-            IngestionDriveSelector(drive_id="drive", extensions=("pdf",)),
-        ),
+        include=(IngestionDriveSelector(drive_id="drive", extensions=("pdf",)),),
     )
     candidate = _candidate(None, relative_path=None)
 
@@ -186,7 +184,7 @@ def test_explicit_root_include_and_equal_path_failed_exclude_conflict() -> None:
                 IngestionDriveSelector(
                     drive_id="drive", statuses=(ProcessingStatus.FAILED,)
                 ),
-            )
+            ),
         )
 
 
@@ -194,12 +192,16 @@ def test_equal_path_impossible_status_overlap_is_accepted() -> None:
     request = _request(
         include=(
             IngestionDriveSelector(
-                drive_id="drive", paths=("Folder",), statuses=(ProcessingStatus.UNCHANGED,)
+                drive_id="drive",
+                paths=("Folder",),
+                statuses=(ProcessingStatus.UNCHANGED,),
             ),
         ),
         exclude=(
             IngestionDriveSelector(
-                drive_id="drive", paths=("Folder",), statuses=(ProcessingStatus.OUTDATED,)
+                drive_id="drive",
+                paths=("Folder",),
+                statuses=(ProcessingStatus.OUTDATED,),
             ),
         ),
     )
@@ -240,9 +242,12 @@ def test_ingestion_selection_uses_path_precedence_and_casefolded_boundaries() ->
     assert selected.selection_reasons == (
         "library/reports;extensions=pdf;statuses=outdated",
     )
-    assert select_ingest_file(
-        _candidate(candidate.state, relative_path="Library-old/report.pdf"), request
-    ) is None
+    assert (
+        select_ingest_file(
+            _candidate(candidate.state, relative_path="Library-old/report.pdf"), request
+        )
+        is None
+    )
 
 
 def test_extensionless_files_match_only_wildcard_extension_selector() -> None:
@@ -264,9 +269,7 @@ def test_extensionless_files_match_only_wildcard_extension_selector() -> None:
 
 def test_empty_status_selector_matches_no_statuses() -> None:
     request = _request(
-        include=(
-            IngestionDriveSelector(drive_id="drive", statuses=()),
-        ),
+        include=(IngestionDriveSelector(drive_id="drive", statuses=()),),
     )
 
     assert select_ingest_file(_candidate(None), request) is None
