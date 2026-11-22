@@ -9,20 +9,20 @@ import pytest
 from api.routes.employees import sync as employee_sync_route
 from api.routes.employees.sync import EmployeesSyncRequestBody, sync_employees_endpoint
 from api.routes.operations import get_operation_run
-from domain.exceptions.employee_sync_errors import SourceUnavailable
+from domain.exceptions.employee_sync_errors import EmployeeSourceUnavailable
 from domain.models.employee import Employee
 from domain.ports.employees.employee_source import EmployeeStreamItem
 from domain.ports.employees.employee_store import (
     EmployeeSyncCounts,
+    EmployeeWriteOutcome,
     EmployeeWriter,
-    WriteEmployeeOutcome,
 )
 from domain.ports.operation_run_store import OperationRun
 from domain.use_cases.employee_sync import (
-    EmployeesSyncProgress,
-    EmployeesSyncRequest,
-    EmployeesSyncResult,
-    EmployeesSyncStarted,
+    EmployeeSyncProgress,
+    EmployeeSyncRequest,
+    EmployeeSyncResult,
+    EmployeeSyncStarted,
     sync_employees,
 )
 
@@ -62,9 +62,9 @@ class EmployeeStore:
 
     async def stage_employee(
         self, run_id: UUID, employee: Employee
-    ) -> WriteEmployeeOutcome:
+    ) -> EmployeeWriteOutcome:
         self.staged[run_id].append(employee)
-        return WriteEmployeeOutcome.CREATED
+        return EmployeeWriteOutcome.CREATED
 
     async def publish_sync(self, run_id: UUID) -> EmployeeSyncCounts:
         employees = self.staged.pop(run_id)
@@ -122,14 +122,14 @@ def test_employee_sync_yields_success_result_after_progress() -> None:
         return [
             update
             async for update in sync_employees(
-                EmployeesSyncRequest(), EmployeeSource(), store, "operator"
+                EmployeeSyncRequest(), EmployeeSource(), store, "operator"
             )
         ]
 
     updates = asyncio.run(collect())
-    assert isinstance(updates[0], EmployeesSyncStarted)
-    assert isinstance(updates[1], EmployeesSyncProgress)
-    assert isinstance(updates[-1], EmployeesSyncResult)
+    assert isinstance(updates[0], EmployeeSyncStarted)
+    assert isinstance(updates[1], EmployeeSyncProgress)
+    assert isinstance(updates[-1], EmployeeSyncResult)
     assert updates[-1].processed == 3
     assert updates[-1].total == 3
     assert len(store.committed) == 3
@@ -142,11 +142,11 @@ def test_employee_sync_failure_discards_all_staged_employees() -> None:
 
     async def collect() -> None:
         async for _ in sync_employees(
-            EmployeesSyncRequest(), EmployeeSource(fail_after=1), store, "operator"
+            EmployeeSyncRequest(), EmployeeSource(fail_after=1), store, "operator"
         ):
             pass
 
-    with pytest.raises(SourceUnavailable):
+    with pytest.raises(EmployeeSourceUnavailable):
         asyncio.run(collect())
 
     assert store.committed == []
@@ -159,11 +159,11 @@ def test_employee_sync_cancellation_discards_all_staged_employees() -> None:
     source = EmployeeSource()
 
     async def cancel_after_progress() -> None:
-        updates = sync_employees(EmployeesSyncRequest(), source, store, "operator")
+        updates = sync_employees(EmployeeSyncRequest(), source, store, "operator")
         started = await anext(updates)
-        assert isinstance(started, EmployeesSyncStarted)
+        assert isinstance(started, EmployeeSyncStarted)
         first = await anext(updates)
-        assert isinstance(first, EmployeesSyncProgress)
+        assert isinstance(first, EmployeeSyncProgress)
         assert store.committed == []
         assert sum(map(len, store.staged.values())) == 1
         await updates.aclose()
@@ -195,11 +195,11 @@ def test_employee_sync_cancellation_closes_source_iterator() -> None:
     store, source = EmployeeStore(), CloseTrackingSource()
 
     async def cancel_after_progress() -> None:
-        updates = sync_employees(EmployeesSyncRequest(), source, store, "operator")
+        updates = sync_employees(EmployeeSyncRequest(), source, store, "operator")
         started = await anext(updates)
-        assert isinstance(started, EmployeesSyncStarted)
+        assert isinstance(started, EmployeeSyncStarted)
         first = await anext(updates)
-        assert isinstance(first, EmployeesSyncProgress)
+        assert isinstance(first, EmployeeSyncProgress)
         await updates.aclose()
 
     asyncio.run(cancel_after_progress())
@@ -301,13 +301,13 @@ def test_employee_sync_emits_generic_unexpected_error_payload(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     async def broken_sync(
-        request: EmployeesSyncRequest,
+        request: EmployeeSyncRequest,
         source: EmployeeSource,
         store: EmployeeWriter,
         principal_id: str,
-    ) -> AsyncIterator[EmployeesSyncProgress | EmployeesSyncResult]:
+    ) -> AsyncIterator[EmployeeSyncProgress | EmployeeSyncResult]:
         _ = (request, source, store, principal_id)
-        yield EmployeesSyncProgress(
+        yield EmployeeSyncProgress(
             total=3,
             available=5,
             created=1,
@@ -364,17 +364,17 @@ def test_employee_sync_emits_generic_unexpected_error_payload(
 def test_employee_sync_subclass_inherits_known_error_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class SpecializedSourceUnavailable(SourceUnavailable):
+    class SpecializedSourceUnavailable(EmployeeSourceUnavailable):
         pass
 
     async def broken_sync(
-        request: EmployeesSyncRequest,
+        request: EmployeeSyncRequest,
         source: EmployeeSource,
         store: EmployeeWriter,
         principal_id: str,
-    ) -> AsyncIterator[EmployeesSyncProgress | EmployeesSyncResult]:
+    ) -> AsyncIterator[EmployeeSyncProgress | EmployeeSyncResult]:
         _ = (request, source, store, principal_id)
-        yield EmployeesSyncProgress(
+        yield EmployeeSyncProgress(
             total=3,
             available=5,
             created=1,

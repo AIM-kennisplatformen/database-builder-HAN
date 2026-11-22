@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from api.errors import (
     PublicError,
-    internal_error,
+    build_internal_error,
     log_api_failure,
     log_missing_outcome,
 )
@@ -32,13 +32,13 @@ from domain.ports.documents.document_store import (
 )
 from domain.ports.documents.group_drive_source import GroupDriveSource
 from domain.use_cases.metadata_refresh import (
-    DriveMetadataSelector,
-    MetadataIngestDriveFailure,
-    MetadataIngestProgress,
-    MetadataIngestRequest,
-    MetadataIngestResult,
-    MetadataIngestSkipped,
-    MetadataIngestStarted,
+    MetadataDriveIngestFailure,
+    MetadataDriveSelector,
+    MetadataGroupIngestProgress,
+    MetadataGroupIngestRequest,
+    MetadataGroupIngestResult,
+    MetadataGroupIngestSkipped,
+    MetadataGroupIngestStarted,
 )
 from domain.use_cases.metadata_refresh.refresh import refresh_group_metadata_atomically
 
@@ -105,16 +105,16 @@ class MetadataIngestEvent(BaseModel):
     operation_id: str | None = None
 
 
-def _event(
-    event: MetadataIngestStarted
-    | MetadataIngestProgress
-    | MetadataIngestSkipped
-    | MetadataIngestResult,
+def _build_event(
+    event: MetadataGroupIngestStarted
+    | MetadataGroupIngestProgress
+    | MetadataGroupIngestSkipped
+    | MetadataGroupIngestResult,
     group_id: str,
     operation_id: str | None,
 ) -> StreamEvent:
     match event:
-        case MetadataIngestStarted(operation_id=started_operation_id):
+        case MetadataGroupIngestStarted(operation_id=started_operation_id):
             return StreamEvent(
                 "started",
                 {
@@ -124,7 +124,7 @@ def _event(
                 },
                 StreamEventKind.NON_TERMINAL,
             )
-        case MetadataIngestResult(processed=processed_count, skipped_drive_ids=skipped):
+        case MetadataGroupIngestResult(processed=processed_count, skipped_drive_ids=skipped):
             api_event = MetadataIngestEvent(
                 status=MetadataIngestEventStatus.COMPLETE,
                 group_id=group_id,
@@ -137,7 +137,7 @@ def _event(
                 api_event.model_dump(exclude_none=True),
                 StreamEventKind.COMPLETE,
             )
-        case MetadataIngestSkipped(processed=processed_count, drive_id=drive_id):
+        case MetadataGroupIngestSkipped(processed=processed_count, drive_id=drive_id):
             api_event = MetadataIngestEvent(
                 status=MetadataIngestEventStatus.SKIPPED,
                 group_id=group_id,
@@ -152,7 +152,7 @@ def _event(
                 api_event.model_dump(exclude_none=True),
                 StreamEventKind.NON_TERMINAL,
             )
-        case MetadataIngestProgress(
+        case MetadataGroupIngestProgress(
             processed=processed_count, drive_id=drive_id, progress=progress
         ):
             api_event = MetadataIngestEvent(
@@ -173,14 +173,14 @@ def _event(
             )
 
 
-def _failure_event(
+def _build_failure_event(
     public_error: PublicError,
-    exc: Exception | MetadataIngestDriveFailure,
+    exc: Exception | MetadataDriveIngestFailure,
     group_id: str,
-    last_progress_event: MetadataIngestProgress | MetadataIngestSkipped | None,
+    last_progress_event: MetadataGroupIngestProgress | MetadataGroupIngestSkipped | None,
     operation_id: str | None,
 ) -> StreamEvent:
-    drive_id = exc.drive_id if isinstance(exc, MetadataIngestDriveFailure) else None
+    drive_id = exc.drive_id if isinstance(exc, MetadataDriveIngestFailure) else None
     return StreamEvent(
         MetadataIngestEventStatus.ERROR.value,
         {
@@ -203,20 +203,20 @@ def _failure_event(
     )
 
 
-def _refresh_event_context(
-    event: MetadataIngestStarted
-    | MetadataIngestProgress
-    | MetadataIngestSkipped
-    | MetadataIngestResult,
+def _build_refresh_event_context(
+    event: MetadataGroupIngestStarted
+    | MetadataGroupIngestProgress
+    | MetadataGroupIngestSkipped
+    | MetadataGroupIngestResult,
     operation_id: str | None,
-    last_progress_event: MetadataIngestProgress | MetadataIngestSkipped | None,
-) -> tuple[str | None, MetadataIngestProgress | MetadataIngestSkipped | None]:
+    last_progress_event: MetadataGroupIngestProgress | MetadataGroupIngestSkipped | None,
+) -> tuple[str | None, MetadataGroupIngestProgress | MetadataGroupIngestSkipped | None]:
     match event:
-        case MetadataIngestStarted(operation_id=started_operation_id):
+        case MetadataGroupIngestStarted(operation_id=started_operation_id):
             return str(started_operation_id), last_progress_event
-        case MetadataIngestProgress() | MetadataIngestSkipped():
+        case MetadataGroupIngestProgress() | MetadataGroupIngestSkipped():
             return operation_id, event
-        case MetadataIngestResult():
+        case MetadataGroupIngestResult():
             return operation_id, last_progress_event
 
 
@@ -233,10 +233,10 @@ async def ingest_group_metadata_endpoint(
     source: Annotated[DocumentRefreshSource, Depends(get_document_metadata_source)],
     store: Annotated[DocumentRefreshStore, Depends(get_document_store)],
 ) -> AsyncGenerator[ServerSentEvent]:
-    last_progress_event: MetadataIngestProgress | MetadataIngestSkipped | None = None
+    last_progress_event: MetadataGroupIngestProgress | MetadataGroupIngestSkipped | None = None
     operation_id: str | None = None
-    missing_outcome = _failure_event(
-        internal_error(),
+    missing_outcome = _build_failure_event(
+        build_internal_error(),
         RuntimeError("Metadata inventory ended without an outcome"),
         group_id,
         None,
@@ -246,16 +246,16 @@ async def ingest_group_metadata_endpoint(
         ProgressEventLimiter(config.stream_progress_interval_seconds),
         missing_outcome,
     )
-    selection = MetadataIngestRequest(
+    selection = MetadataGroupIngestRequest(
         group_id,
         [
-            DriveMetadataSelector(
+            MetadataDriveSelector(
                 selector.drive_id, selector.paths, selector.extensions
             )
             for selector in request.include
         ],
         [
-            DriveMetadataSelector(
+            MetadataDriveSelector(
                 selector.drive_id, selector.paths, selector.extensions
             )
             for selector in request.exclude
@@ -267,10 +267,10 @@ async def ingest_group_metadata_endpoint(
 
     try:
         async for event in refresh_events:
-            operation_id, last_progress_event = _refresh_event_context(
+            operation_id, last_progress_event = _build_refresh_event_context(
                 event, operation_id, last_progress_event
             )
-            response = lifecycle.encode(_event(event, group_id, operation_id))
+            response = lifecycle.encode(_build_event(event, group_id, operation_id))
             if response is not None:
                 yield response
     except Exception as exc:  # noqa: BLE001 - terminate the SSE stream on failures
@@ -283,12 +283,12 @@ async def ingest_group_metadata_endpoint(
                 "operation": "metadata.ingest",
                 "group_id": group_id,
                 "drive_id": exc.drive_id
-                if isinstance(exc, MetadataIngestDriveFailure)
+                if isinstance(exc, MetadataDriveIngestFailure)
                 else None,
             },
         )
         response = lifecycle.encode(
-            _failure_event(
+            _build_failure_event(
                 public_error, exc, group_id, last_progress_event, operation_id
             )
         )

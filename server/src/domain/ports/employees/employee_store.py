@@ -6,7 +6,7 @@ from uuid import UUID
 from domain.models.employee import Employee
 
 
-class WriteEmployeeOutcome(StrEnum):
+class EmployeeWriteOutcome(StrEnum):
     CREATED = "created"
     UPDATED = "updated"
     UNCHANGED = "unchanged"
@@ -24,7 +24,7 @@ class EmployeeWriter(Protocol):
 
     async def stage_employee(
         self, run_id: UUID, employee: Employee
-    ) -> WriteEmployeeOutcome: ...
+    ) -> EmployeeWriteOutcome: ...
 
     async def publish_sync(self, run_id: UUID) -> EmployeeSyncCounts: ...
 

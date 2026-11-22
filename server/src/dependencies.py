@@ -22,12 +22,12 @@ from infrastructure.excel.ubwfris_parser import (
     UbwfrisIbExcelParser,
     UbwfrisRhaExcelParser,
 )
-from infrastructure.postgres.document_store import PostgresDocumentStore
-from infrastructure.postgres.employee_writer import EmployeePostgresWriter
-from infrastructure.postgres.operation_run_store import PostgresOperationRunStore
+from infrastructure.postgres.document_store import DocumentStorePostgres
+from infrastructure.postgres.employee_writer import EmployeeWriterPostgres
+from infrastructure.postgres.operation_run_store import OperationRunReaderPostgres
 from infrastructure.postgres.ubwfris_writer import (
-    PostgresIbWriter,
-    PostgresRhaWriter,
+    IbWriterPostgres,
+    RhaWriterPostgres,
 )
 
 
@@ -54,19 +54,19 @@ def get_postgres_pool(request: Request) -> AsyncConnectionPool:
 def get_operation_run_reader(
     pool: Annotated[AsyncConnectionPool, Depends(get_postgres_pool)],
 ) -> OperationRunReader:
-    return PostgresOperationRunStore(pool)
+    return OperationRunReaderPostgres(pool)
 
 
 def get_employee_store(
     pool: Annotated[AsyncConnectionPool, Depends(get_postgres_pool)],
 ) -> EmployeeWriter:
-    return EmployeePostgresWriter(pool)
+    return EmployeeWriterPostgres(pool)
 
 
 def get_employee_data_deleter(
     pool: Annotated[AsyncConnectionPool, Depends(get_postgres_pool)],
 ) -> EmployeeDataDeleter:
-    return EmployeePostgresWriter(pool)
+    return EmployeeWriterPostgres(pool)
 
 
 def get_ubwfris_ib_parser() -> UbwfrisParser[IbRow]:
@@ -80,25 +80,25 @@ def get_ubwfris_rha_parser() -> UbwfrisParser[RhaRow]:
 def get_ubwfris_ib_writer(
     pool: Annotated[AsyncConnectionPool, Depends(get_postgres_pool)],
 ) -> UbwfrisWriter[IbRow]:
-    return PostgresIbWriter(pool)
+    return IbWriterPostgres(pool)
 
 
 def get_ubwfris_rha_writer(
     pool: Annotated[AsyncConnectionPool, Depends(get_postgres_pool)],
 ) -> UbwfrisWriter[RhaRow]:
-    return PostgresRhaWriter(pool)
+    return RhaWriterPostgres(pool)
 
 
 def get_ubwfris_ib_deleter(
     pool: Annotated[AsyncConnectionPool, Depends(get_postgres_pool)],
 ) -> UbwfrisSnapshotDeleter:
-    return PostgresIbWriter(pool)
+    return IbWriterPostgres(pool)
 
 
 def get_ubwfris_rha_deleter(
     pool: Annotated[AsyncConnectionPool, Depends(get_postgres_pool)],
 ) -> UbwfrisSnapshotDeleter:
-    return PostgresRhaWriter(pool)
+    return RhaWriterPostgres(pool)
 
 
 def get_document_metadata_source(request: Request) -> DocumentRefreshSource:
@@ -108,13 +108,13 @@ def get_document_metadata_source(request: Request) -> DocumentRefreshSource:
 def get_document_store(
     pool: Annotated[AsyncConnectionPool, Depends(get_postgres_pool)],
 ) -> DocumentRefreshStore:
-    return PostgresDocumentStore(pool)
+    return DocumentStorePostgres(pool)
 
 
 def get_document_metadata_deleter(
     pool: Annotated[AsyncConnectionPool, Depends(get_postgres_pool)],
 ) -> DocumentMetadataDeleter:
-    return PostgresDocumentStore(pool)
+    return DocumentStorePostgres(pool)
 
 
 def get_group_drive_source(request: Request) -> GroupDriveSource:

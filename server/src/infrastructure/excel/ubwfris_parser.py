@@ -85,15 +85,15 @@ def _open_workbook(
         raise InvalidWorkbook("The upload is not a readable Excel workbook") from exc
 
 
-def _blank(value: object) -> bool:
+def _is_blank(value: object) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
-def _populated(values: tuple[object, ...], indices: tuple[int, ...]) -> bool:
-    return any(index < len(values) and not _blank(values[index]) for index in indices)
+def _has_populated_values(values: tuple[object, ...], indices: tuple[int, ...]) -> bool:
+    return any(index < len(values) and not _is_blank(values[index]) for index in indices)
 
 
-def _header_positions(values: tuple[object, ...]) -> dict[str, int]:
+def _build_header_positions(values: tuple[object, ...]) -> dict[str, int]:
     return {
         value.strip(): index
         for index, value in enumerate(values)
@@ -108,7 +108,7 @@ def _find_ib_sheet(
         for header_row, values in enumerate(sheet.iter_rows(values_only=True), start=1):
             if header_row > 20:
                 break
-            positions = _header_positions(values)
+            positions = _build_header_positions(values)
             if all(header in positions for header in _IB_HEADERS):
                 return (
                     cast(_Worksheet, cast(object, sheet)),
@@ -122,7 +122,7 @@ def _parse_ib_row(
     values: tuple[object, ...], indices: tuple[int, ...], row_number: int
 ) -> IbRow:
     cells = [values[index] for index in indices]
-    if any(_blank(value) for value in cells):
+    if any(_is_blank(value) for value in cells):
         raise ValueError("Required IB cell is empty")
     if any(isinstance(value, bool) for value in cells[3:8]):
         raise ValueError("Boolean is not a numeric IB value")
@@ -152,14 +152,14 @@ async def _stream_ib_rows(
     try:
         sheet, header_row, indices = _find_ib_sheet(source)
         total_rows = sum(
-            _populated(values, indices)
+            _has_populated_values(values, indices)
             for values in sheet.iter_rows(min_row=header_row + 1, values_only=True)
         )
         for row_number, values in enumerate(
             sheet.iter_rows(min_row=header_row + 1, values_only=True),
             start=header_row + 1,
         ):
-            if not _populated(values, indices):
+            if not _has_populated_values(values, indices):
                 continue
             try:
                 row = _parse_ib_row(values, indices, row_number)
@@ -171,7 +171,7 @@ async def _stream_ib_rows(
         source.close()
 
 
-def _rha_header_indices(values: tuple[object, ...]) -> tuple[int, ...] | None:
+def _find_rha_header_indices(values: tuple[object, ...]) -> tuple[int, ...] | None:
     occurrences: dict[str, list[int]] = {}
     for index, value in enumerate(values):
         if isinstance(value, str):
@@ -198,20 +198,20 @@ def _find_rha_sheet(source: Workbook) -> tuple[_Worksheet, int, tuple[int, ...]]
         for row_number, values in enumerate(sheet.iter_rows(values_only=True), start=1):
             if row_number > 20:
                 break
-            indices = _rha_header_indices(values)
+            indices = _find_rha_header_indices(values)
             if indices is not None:
                 return cast(_Worksheet, cast(object, sheet)), row_number, indices
     raise InvalidWorkbook("No worksheet has the required RHA headers")
 
 
-def _required_text(value: object) -> str:
-    if _blank(value):
+def _parse_required_text(value: object) -> str:
+    if _is_blank(value):
         raise ValueError("Required RHA cell is empty")
     return str(value).strip()
 
 
-def _decimal(value: object) -> Decimal:
-    if _blank(value) or isinstance(value, bool):
+def _parse_decimal(value: object) -> Decimal:
+    if _is_blank(value) or isinstance(value, bool):
         raise ValueError("Invalid RHA number")
     number = Decimal(str(value))
     if not number.is_finite():
@@ -219,14 +219,14 @@ def _decimal(value: object) -> Decimal:
     return number
 
 
-def _integer(value: object) -> int:
-    number = _decimal(value)
+def _parse_integer(value: object) -> int:
+    number = _parse_decimal(value)
     if number != number.to_integral_value():
         raise ValueError("RHA percentage is not an integer")
     return int(number)
 
 
-def _registration_date(value: object, epoch: datetime) -> date:
+def _parse_registration_date(value: object, epoch: datetime) -> date:
     if isinstance(value, datetime):
         return value.date()
     if isinstance(value, date):
@@ -247,24 +247,24 @@ def _parse_rha_row(
     cells = [values[index] for index in indices]
     return RhaRow(
         row_number=row_number,
-        employee_number=_required_text(cells[0]),
-        employee_name=_required_text(cells[1]),
-        project_manager=_required_text(cells[2]),
-        project_id=_required_text(cells[3]),
-        project_status=_required_text(cells[4]),
-        project_name=_required_text(cells[5]),
-        subproject_id=_required_text(cells[6]),
-        subproject_status=_required_text(cells[7]),
-        subproject_name=_required_text(cells[8]),
-        cost_center=_required_text(cells[9]),
-        registration_date=_registration_date(cells[10], epoch),
-        hours=_decimal(cells[11]),
-        project_type=_required_text(cells[12]),
-        parttime_percentage=None if _blank(cells[13]) else _integer(cells[13]),
-        main_department=_required_text(cells[14]),
-        academy=_required_text(cells[15]),
-        main_department_name=_required_text(cells[16]),
-        employment_cost_center=_required_text(cells[17]),
+        employee_number=_parse_required_text(cells[0]),
+        employee_name=_parse_required_text(cells[1]),
+        project_manager=_parse_required_text(cells[2]),
+        project_id=_parse_required_text(cells[3]),
+        project_status=_parse_required_text(cells[4]),
+        project_name=_parse_required_text(cells[5]),
+        subproject_id=_parse_required_text(cells[6]),
+        subproject_status=_parse_required_text(cells[7]),
+        subproject_name=_parse_required_text(cells[8]),
+        cost_center=_parse_required_text(cells[9]),
+        registration_date=_parse_registration_date(cells[10], epoch),
+        hours=_parse_decimal(cells[11]),
+        project_type=_parse_required_text(cells[12]),
+        parttime_percentage=None if _is_blank(cells[13]) else _parse_integer(cells[13]),
+        main_department=_parse_required_text(cells[14]),
+        academy=_parse_required_text(cells[15]),
+        main_department_name=_parse_required_text(cells[16]),
+        employment_cost_center=_parse_required_text(cells[17]),
     )
 
 
@@ -275,14 +275,14 @@ async def _stream_rha_rows(
     try:
         sheet, header_row, indices = _find_rha_sheet(source)
         total_rows = sum(
-            _populated(values, indices)
+            _has_populated_values(values, indices)
             for values in sheet.iter_rows(min_row=header_row + 1, values_only=True)
         )
         for row_number, values in enumerate(
             sheet.iter_rows(min_row=header_row + 1, values_only=True),
             start=header_row + 1,
         ):
-            if not _populated(values, indices):
+            if not _has_populated_values(values, indices):
                 continue
             try:
                 row = _parse_rha_row(values, indices, row_number, source.epoch)

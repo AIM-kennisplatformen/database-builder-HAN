@@ -6,7 +6,7 @@ from httpx import Response
 from msgraph.graph_service_client import GraphServiceClient
 
 from domain.ports.documents.group_drive_source import GroupDriveLocation
-from infrastructure.msgraph.group_drive_source import MsGraphGroupDriveSource
+from infrastructure.msgraph.group_drive_source import GroupDriveSourceMsGraph
 
 
 def test_duplicate_channel_drives_skip_name_lookup_before_deduplication() -> None:
@@ -85,7 +85,7 @@ def test_duplicate_channel_drives_skip_name_lookup_before_deduplication() -> Non
         ),
     ]
     client.drives.by_drive_id.return_value.with_url.side_effect = drive_name_lookups
-    source = MsGraphGroupDriveSource(cast(GraphServiceClient, client))
+    source = GroupDriveSourceMsGraph(cast(GraphServiceClient, client))
 
     async def collect() -> list[GroupDriveLocation]:
         return [

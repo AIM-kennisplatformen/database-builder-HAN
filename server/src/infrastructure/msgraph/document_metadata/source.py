@@ -27,7 +27,7 @@ from domain.ports.documents.document_metadata_source import (
     DocumentRefreshSource,
 )
 from infrastructure.msgraph.base import raise_for_graph_error
-from infrastructure.msgraph.document_metadata_models import (
+from infrastructure.msgraph.document_metadata.models import (
     GraphDeltaPage,
     GraphDriveItem,
     GraphFileFacet,
@@ -39,6 +39,7 @@ from infrastructure.msgraph.document_metadata_models import (
 )
 
 __all__ = [
+    "DocumentMetadataSourceSharePoint",
     "GraphDeltaPage",
     "GraphDriveItem",
     "GraphFileFacet",
@@ -47,11 +48,10 @@ __all__ = [
     "GraphIdentity",
     "GraphIdentitySet",
     "GraphParentReference",
-    "SharePointDocumentMetadataSource",
 ]
 
 
-def _audit_actor(identities: GraphIdentitySet | None) -> AuditActor | None:
+def _build_audit_actor(identities: GraphIdentitySet | None) -> AuditActor | None:
     if identities is not None:
         for identity in (identities.user, identities.application, identities.device):
             if (
@@ -63,11 +63,11 @@ def _audit_actor(identities: GraphIdentitySet | None) -> AuditActor | None:
     return None
 
 
-class SharePointDocumentMetadataSource(DocumentMetadataSource, DocumentRefreshSource):
+class DocumentMetadataSourceSharePoint(DocumentMetadataSource, DocumentRefreshSource):
     def __init__(self, client: GraphServiceClient) -> None:
         self.client: GraphServiceClient = client
 
-    async def _folder_id(
+    async def _resolve_folder_id(
         self, drive_id: str, path: str, root_item_id: str = "root"
     ) -> str:
         base_url = f"https://graph.microsoft.com/v1.0/drives/{quote(drive_id, safe='')}"
@@ -101,7 +101,7 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource, DocumentRefreshSo
         return folder.id
 
     async def folder_id(self, drive_id: str, path: str, root_item_id: str) -> str:
-        return await self._folder_id(drive_id, path, root_item_id)
+        return await self._resolve_folder_id(drive_id, path, root_item_id)
 
     def _document(
         self, drive_id: str, item: GraphDriveItem, relative_path: str | None = None
@@ -128,7 +128,7 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource, DocumentRefreshSo
                 created=(
                     AuditEntry(
                         timestamp=item.created_date_time,
-                        actor=_audit_actor(item.created_by),
+                        actor=_build_audit_actor(item.created_by),
                     )
                     if item.created_date_time is not None
                     else None
@@ -136,7 +136,7 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource, DocumentRefreshSo
                 updated=(
                     AuditEntry(
                         timestamp=item.last_modified_date_time,
-                        actor=_audit_actor(item.last_modified_by),
+                        actor=_build_audit_actor(item.last_modified_by),
                     )
                     if item.last_modified_date_time is not None
                     else None
@@ -158,7 +158,7 @@ class SharePointDocumentMetadataSource(DocumentMetadataSource, DocumentRefreshSo
         cursor: str | None = None,
         capture_relative_paths: bool = False,
     ) -> DocumentMetadataScan:
-        from infrastructure.msgraph.document_metadata_scan import (
+        from infrastructure.msgraph.document_metadata.scan import (
             scan_document_metadata,
         )
 

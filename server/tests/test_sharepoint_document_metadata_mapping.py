@@ -13,8 +13,8 @@ from domain.exceptions.metadata_ingest_errors import (
 from domain.ports.documents.document_metadata_source import (
     DocumentMetadataItem,
 )
-from infrastructure.msgraph.document_metadata_source import (
-    SharePointDocumentMetadataSource,
+from infrastructure.msgraph.document_metadata.source import (
+    DocumentMetadataSourceSharePoint,
 )
 
 
@@ -49,7 +49,7 @@ def test_stream_metadata_reports_total_after_repeated_and_deleted_items() -> Non
         client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value
     )
     item_builder.delta = delta
-    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    source = DocumentMetadataSourceSharePoint(cast(GraphServiceClient, client))
 
     async def collect() -> list[DocumentMetadataItem]:
         return [
@@ -87,7 +87,7 @@ def test_stream_metadata_excludes_file_extensions() -> None:
     client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
         delta
     )
-    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    source = DocumentMetadataSourceSharePoint(cast(GraphServiceClient, client))
 
     async def collect() -> list[DocumentMetadataItem]:
         return [
@@ -120,7 +120,7 @@ def test_extensionless_file_does_not_match_a_filter_for_its_basename() -> None:
     client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
         delta
     )
-    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    source = DocumentMetadataSourceSharePoint(cast(GraphServiceClient, client))
 
     async def collect() -> list[DocumentMetadataItem]:
         return [
@@ -164,7 +164,7 @@ def test_stream_metadata_maps_creation_and_latest_update_without_version_request
         client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value
     )
     item_builder.delta = delta
-    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    source = DocumentMetadataSourceSharePoint(cast(GraphServiceClient, client))
 
     async def collect() -> list[DocumentMetadataItem]:
         return [item async for item in source.stream_metadata("drive", selection())]
@@ -207,7 +207,7 @@ def test_stream_metadata_keeps_audit_timestamps_when_actors_are_missing() -> Non
         client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value
     )
     item_builder.delta = delta
-    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    source = DocumentMetadataSourceSharePoint(cast(GraphServiceClient, client))
 
     async def collect() -> list[DocumentMetadataItem]:
         return [item async for item in source.stream_metadata("drive", selection())]
@@ -236,7 +236,7 @@ def test_graph_drive_error_is_reported_before_page_validation() -> None:
     client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
         delta
     )
-    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    source = DocumentMetadataSourceSharePoint(cast(GraphServiceClient, client))
 
     async def collect() -> None:
         async for _ in source.stream_metadata(

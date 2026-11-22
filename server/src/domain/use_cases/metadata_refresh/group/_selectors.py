@@ -5,11 +5,11 @@ from domain.models.documents.metadata_selection import (
     MetadataPathRule,
     normalize_metadata_rules,
 )
-from domain.use_cases.metadata_refresh.group._models import DriveMetadataSelector
+from domain.use_cases.metadata_refresh.group._models import MetadataDriveSelector
 
 
-def selector_rules(
-    selectors: list[DriveMetadataSelector],
+def build_selector_rules(
+    selectors: list[MetadataDriveSelector],
 ) -> dict[str, tuple[MetadataPathRule, ...]]:
     grouped: dict[str, list[MetadataPathRule]] = {}
     for selector in selectors:
@@ -46,11 +46,11 @@ def validate_selector_conflicts(
                     )
 
 
-def selected_drive_ids(
+def select_drive_ids(
     group_drive_ids: tuple[str, ...],
     included_drive_ids: set[str],
     excluded_drive_ids: set[str],
-    exclude_selectors: list[DriveMetadataSelector],
+    exclude_selectors: list[MetadataDriveSelector],
 ) -> tuple[str, ...]:
     whole_drive_excludes = {
         selector.drive_id

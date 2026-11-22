@@ -8,7 +8,7 @@ from httpx import Response
 from msgraph.graph_service_client import GraphServiceClient
 
 from domain.ports.employees.employee_source import EmployeeStreamItem
-from infrastructure.msgraph.employee_source import MsGraphEmployeeSource
+from infrastructure.msgraph.employee_source import EmployeeSourceMsGraph
 
 
 def _profile_response(member_id: str) -> Response:
@@ -59,7 +59,7 @@ def test_employee_source_pages_members_and_maps_each_profile() -> None:
             Response(200, json={"value": [{"id": "c"}]}),
         ]
     )
-    source = MsGraphEmployeeSource(cast(GraphServiceClient, client), "group")
+    source = EmployeeSourceMsGraph(cast(GraphServiceClient, client), "group")
 
     async def collect() -> list[EmployeeStreamItem]:
         return [item async for item in source.stream_employees(None)]
@@ -113,7 +113,7 @@ def test_employee_source_limit_stops_before_fetching_later_pages() -> None:
             Response(200, json={"value": [{"id": "c"}]}),
         ]
     )
-    source = MsGraphEmployeeSource(cast(GraphServiceClient, client), "group")
+    source = EmployeeSourceMsGraph(cast(GraphServiceClient, client), "group")
 
     async def collect() -> list[EmployeeStreamItem]:
         return [item async for item in source.stream_employees(1)]
@@ -129,7 +129,7 @@ def test_employee_source_limit_stops_before_fetching_later_pages() -> None:
 
 def test_employee_source_rejects_invalid_limit_without_graph_calls() -> None:
     client = _client([])
-    source = MsGraphEmployeeSource(cast(GraphServiceClient, client), "group")
+    source = EmployeeSourceMsGraph(cast(GraphServiceClient, client), "group")
 
     async def collect() -> None:
         async for _item in source.stream_employees(0):
@@ -142,7 +142,7 @@ def test_employee_source_rejects_invalid_limit_without_graph_calls() -> None:
 
 def test_employee_source_requires_count_on_first_page() -> None:
     client = _client([Response(200, json={"value": []})])
-    source = MsGraphEmployeeSource(cast(GraphServiceClient, client), "group")
+    source = EmployeeSourceMsGraph(cast(GraphServiceClient, client), "group")
 
     async def collect() -> None:
         async for _item in source.stream_employees(None):

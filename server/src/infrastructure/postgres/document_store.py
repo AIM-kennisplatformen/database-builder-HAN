@@ -18,8 +18,8 @@ from domain.models.documents.metadata_selection import MetadataSelection
 from domain.ports.documents.document_store import (
     CombinedDocumentRefreshStore,
     DocumentStore,
-    MetadataIngestRun,
-    MetadataRunPublication,
+    MetadataDriveIngestRun,
+    MetadataDriveRunPublication,
 )
 from infrastructure.postgres.combined_operation_store import (
     CombinedOperationStoreMethods,
@@ -28,16 +28,16 @@ from infrastructure.postgres.document_ingestion_store import (
     DocumentIngestionStoreMethods,
 )
 from infrastructure.postgres.document_store_constants import METADATA_RESET_LOCK
-from infrastructure.postgres.pool_store import PostgresPoolStore
+from infrastructure.postgres.pool_store import PoolStorePostgres
 from infrastructure.postgres.transactions import staging_transaction
 
 _metadata_adapter = TypeAdapter(DocumentMetadata)
 
 
-class PostgresDocumentStore(
+class DocumentStorePostgres(
     CombinedOperationStoreMethods,
     DocumentIngestionStoreMethods,
-    PostgresPoolStore,
+    PoolStorePostgres,
     DocumentStore,
     CombinedDocumentRefreshStore,
 ):
@@ -120,7 +120,7 @@ class PostgresDocumentStore(
         drive_id: str,
         selection: MetadataSelection,
         operation_id: UUID | None = None,
-    ) -> MetadataIngestRun:
+    ) -> MetadataDriveIngestRun:
         run_id = uuid4()
         serialized_selection = dumps(asdict(selection), sort_keys=True)
         try:
@@ -166,7 +166,7 @@ class PostgresDocumentStore(
             raise MetadataRunAlreadyActive(
                 "A metadata run is already active for this operator and drive"
             ) from exc
-        return MetadataIngestRun(
+        return MetadataDriveIngestRun(
             run_id,
             delta_link,
             same_selection,
@@ -177,7 +177,7 @@ class PostgresDocumentStore(
         self,
         operation_id: UUID,
         drive_id: str,
-        publication: MetadataRunPublication,
+        publication: MetadataDriveRunPublication,
         outcome: dict[str, object],
     ) -> None:
         """Publish one drive snapshot and its parent outcome atomically."""
@@ -253,13 +253,13 @@ class PostgresDocumentStore(
         self, run_id: UUID, delta_link: str, baseline: bool, reconcile: bool
     ) -> None:
         await self.publish_metadata_runs(
-            (MetadataRunPublication(run_id, delta_link, baseline, reconcile),)
+            (MetadataDriveRunPublication(run_id, delta_link, baseline, reconcile),)
         )
 
     @override
     async def publish_metadata_runs(
         self,
-        publications: tuple[MetadataRunPublication, ...],
+        publications: tuple[MetadataDriveRunPublication, ...],
         operation_id: UUID | None = None,
         summary: dict[str, object] | None = None,
         domain_ids: dict[str, object] | None = None,
@@ -306,7 +306,7 @@ class PostgresDocumentStore(
     async def _publish_metadata_run(
         self,
         connection: AsyncConnection[tuple[object, ...]],
-        publication: MetadataRunPublication,
+        publication: MetadataDriveRunPublication,
     ) -> None:
         run_id = publication.run_id
         delta_link = publication.delta_link

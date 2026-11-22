@@ -20,14 +20,14 @@ from domain.models.documents.metadata_selection import MetadataSelection
 from domain.models.employee import Employee
 from domain.ports.documents.document_metadata_source import DocumentMetadataScan
 from domain.ports.documents.document_store import (
-    MetadataIngestRun,
-    MetadataRunPublication,
+    MetadataDriveIngestRun,
+    MetadataDriveRunPublication,
 )
 from domain.ports.documents.group_drive_source import GroupDriveLocation, UserGroup
 from domain.ports.employees.employee_source import EmployeeStreamItem
 from domain.ports.employees.employee_store import (
     EmployeeSyncCounts,
-    WriteEmployeeOutcome,
+    EmployeeWriteOutcome,
 )
 
 
@@ -56,10 +56,10 @@ class EmployeeStore:
 
     async def stage_employee(
         self, run_id: UUID, employee: Employee
-    ) -> WriteEmployeeOutcome:
+    ) -> EmployeeWriteOutcome:
         _ = run_id
         self.staged.append(employee)
-        return WriteEmployeeOutcome.CREATED
+        return EmployeeWriteOutcome.CREATED
 
     async def publish_sync(self, run_id: UUID) -> EmployeeSyncCounts:
         _ = run_id
@@ -168,12 +168,12 @@ class BlockingMetadataStore:
         drive_id: str,
         selection: MetadataSelection,
         operation_id: UUID | None = None,
-    ) -> MetadataIngestRun:
+    ) -> MetadataDriveIngestRun:
         assert (principal_id, drive_id) == ("user", "drive")
         _ = (selection, operation_id)
         run_id = uuid4()
         self.run_id = run_id
-        return MetadataIngestRun(run_id, None, True)
+        return MetadataDriveIngestRun(run_id, None, True)
 
     async def stage_document(self, run_id: UUID, document: Document) -> None:
         assert run_id == self.run_id
@@ -194,7 +194,7 @@ class BlockingMetadataStore:
 
     async def publish_metadata_runs(
         self,
-        publications: tuple[MetadataRunPublication, ...],
+        publications: tuple[MetadataDriveRunPublication, ...],
         operation_id: UUID | None = None,
         summary: dict[str, object] | None = None,
         domain_ids: dict[str, object] | None = None,

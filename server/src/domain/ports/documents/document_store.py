@@ -4,7 +4,7 @@ from uuid import UUID
 
 from domain.models.documents.document import Document
 from domain.models.documents.document_ingestion import (
-    DocumentIngestFileSelection,
+    DocumentFileIngestSelection,
     DocumentProcessingCandidate,
     ProcessingOutcome,
 )
@@ -12,14 +12,14 @@ from domain.models.documents.metadata_selection import MetadataSelection
 
 
 @dataclass(frozen=True)
-class MetadataIngestRun:
+class MetadataDriveIngestRun:
     id: UUID
     cursor: str | None
     same_selection: bool
 
 
 @dataclass(frozen=True)
-class MetadataRunPublication:
+class MetadataDriveRunPublication:
     run_id: UUID
     delta_link: str
     baseline: bool
@@ -39,7 +39,7 @@ class DocumentRefreshStore(Protocol):
         drive_id: str,
         selection: MetadataSelection,
         operation_id: UUID | None = None,
-    ) -> MetadataIngestRun: ...
+    ) -> MetadataDriveIngestRun: ...
 
     async def stage_document(self, run_id: UUID, document: Document) -> None: ...
 
@@ -51,7 +51,7 @@ class DocumentRefreshStore(Protocol):
 
     async def publish_metadata_runs(
         self,
-        publications: tuple[MetadataRunPublication, ...],
+        publications: tuple[MetadataDriveRunPublication, ...],
         operation_id: UUID | None = None,
         summary: dict[str, object] | None = None,
         domain_ids: dict[str, object] | None = None,
@@ -76,7 +76,7 @@ class CombinedDocumentRefreshStore(DocumentRefreshStore, Protocol):
         self,
         operation_id: UUID,
         drive_id: str,
-        publication: MetadataRunPublication,
+        publication: MetadataDriveRunPublication,
         outcome: dict[str, object],
     ) -> None: ...
 
@@ -95,7 +95,7 @@ class CombinedDocumentRefreshStore(DocumentRefreshStore, Protocol):
     async def record_document_ingest_selections(
         self,
         operation_id: UUID,
-        selections: tuple[DocumentIngestFileSelection, ...],
+        selections: tuple[DocumentFileIngestSelection, ...],
     ) -> None: ...
 
     async def record_document_processing_outcome(
@@ -106,7 +106,7 @@ class CombinedDocumentRefreshStore(DocumentRefreshStore, Protocol):
         processing_policy_version: str,
         outcome: ProcessingOutcome | str,
         *,
-        deferred: bool = False,
+        is_deferred: bool = False,
         failure_stage: str | None = None,
         failure_detail: str | None = None,
     ) -> None: ...

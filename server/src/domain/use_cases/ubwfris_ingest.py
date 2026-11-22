@@ -11,7 +11,7 @@ from domain.exceptions.ubwfris_ingest_errors import (
     DuplicateUpload,
     InvalidWorkbook,
     ParserFailure,
-    StoreUnavailable,
+    UbwfrisStoreUnavailable,
 )
 from domain.models.ubwfris import (
     IbRow,
@@ -49,7 +49,7 @@ async def _stage_ubwfris_rows[T: UbwfrisRow](
     except DuplicateUpload, InvalidWorkbook:
         raise
     except Exception as exc:
-        raise StoreUnavailable(
+        raise UbwfrisStoreUnavailable(
             "Failed to save rows from the uploaded workbook"
         ) from exc
 
@@ -62,7 +62,7 @@ async def _begin_snapshot[T: UbwfrisRow](
     except DuplicateUpload:
         raise
     except Exception as exc:
-        raise StoreUnavailable("Failed to create the workbook snapshot") from exc
+        raise UbwfrisStoreUnavailable("Failed to create the workbook snapshot") from exc
 
 
 async def _begin_operation[T: UbwfrisRow](
@@ -75,7 +75,7 @@ async def _begin_operation[T: UbwfrisRow](
         with anyio.CancelScope(shield=True):
             await writer.begin_operation(operation_id, principal_id, snapshot_id)
     except Exception as exc:
-        raise StoreUnavailable("Failed to create the upload operation") from exc
+        raise UbwfrisStoreUnavailable("Failed to create the upload operation") from exc
 
 
 async def _discard_snapshot[T: UbwfrisRow](
@@ -84,7 +84,7 @@ async def _discard_snapshot[T: UbwfrisRow](
     try:
         await writer.discard_snapshot(snapshot_id)
     except Exception as exc:
-        raise StoreUnavailable("Failed to remove the incomplete snapshot") from exc
+        raise UbwfrisStoreUnavailable("Failed to remove the incomplete snapshot") from exc
 
 
 async def _publish_snapshot[T: UbwfrisRow](
@@ -96,7 +96,7 @@ async def _publish_snapshot[T: UbwfrisRow](
     try:
         await writer.publish_snapshot(snapshot_id, operation_id, summary)
     except Exception as exc:
-        raise StoreUnavailable("Failed to complete the workbook snapshot") from exc
+        raise UbwfrisStoreUnavailable("Failed to complete the workbook snapshot") from exc
 
 
 def _validate_ubwfris_row(row: UbwfrisRow) -> tuple[UbwfrisRow, bool]:
@@ -200,7 +200,7 @@ class _WorkbookProgress[T: UbwfrisRow]:
     batch: list[T] = field(default_factory=list)
 
 
-async def _flush_workbook_batch[T: UbwfrisRow](
+async def _flush_workbook_row_batch[T: UbwfrisRow](
     writer: UbwfrisWriter[T], snapshot_id: str, progress: _WorkbookProgress[T]
 ) -> None:
     if not progress.batch:
@@ -231,7 +231,7 @@ async def _accept_workbook_row[T: UbwfrisRow](
         return
     progress.batch.append(cast(T, normalized_row))
     if len(progress.batch) >= 1000:
-        await _flush_workbook_batch(writer, snapshot_id, progress)
+        await _flush_workbook_row_batch(writer, snapshot_id, progress)
 
 
 async def _consume_workbook_rows[T: UbwfrisRow](
@@ -249,9 +249,9 @@ async def _consume_workbook_rows[T: UbwfrisRow](
             total_rows=progress.total_rows,
             processed_rows=progress.processed_rows,
             created_rows=progress.created_rows,
-            invalid_rows=len(progress.invalid_row_numbers),
+            invalid_row_count=len(progress.invalid_row_numbers),
         )
-    await _flush_workbook_batch(writer, snapshot_id, progress)
+    await _flush_workbook_row_batch(writer, snapshot_id, progress)
     if progress.processed_rows == 0:
         raise InvalidWorkbook("The uploaded workbook is empty")
     if progress.invalid_row_numbers:
@@ -354,7 +354,7 @@ async def ingest_ubwfris_workbook[T: UbwfrisRow](
             total_rows=progress.total_rows,
             processed_rows=progress.processed_rows,
             created_rows=progress.created_rows,
-            invalid_rows=len(progress.invalid_row_numbers),
+            invalid_row_count=len(progress.invalid_row_numbers),
             invalid_row_numbers=tuple(progress.invalid_row_numbers),
         )
     except BaseException as exc:
@@ -381,6 +381,6 @@ def _ubwfris_failure(exc: BaseException, interrupted: bool) -> tuple[str, str]:
         return "ubwfris.duplicate_upload", "This workbook was already imported"
     if isinstance(exc, ParserFailure):
         return "ubwfris.parser_failure", "Workbook parsing failed"
-    if isinstance(exc, StoreUnavailable):
+    if isinstance(exc, UbwfrisStoreUnavailable):
         return "ubwfris.store_unavailable", "UBWFRIS store is unavailable"
     return "ubwfris.ingest_failed", "UBWFRIS upload failed"

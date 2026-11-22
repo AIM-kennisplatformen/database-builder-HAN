@@ -17,30 +17,30 @@ from domain.models.documents.metadata_selection import MetadataPathRule
 from domain.ports.documents.document_metadata_source import DocumentRefreshSource
 from domain.ports.documents.document_store import (
     CombinedDocumentRefreshStore,
-    MetadataRunPublication,
+    MetadataDriveRunPublication,
 )
 from domain.ports.documents.group_drive_source import GroupDriveSource
-from domain.use_cases.group_drive_discovery import get_group_drives
+from domain.use_cases.group_drive_discovery import list_group_drives
 from domain.use_cases.metadata_refresh.drive.refresh import (
-    MetadataIngestDriveRequest,
-    MetadataIngestPrepared,
+    MetadataDriveIngestPrepared,
+    MetadataDriveIngestRequest,
     discard_metadata_runs,
 )
 from domain.use_cases.metadata_refresh.drive.staging import stage_drive_metadata_refresh
-from domain.use_cases.metadata_refresh.group._failures import failure_details
+from domain.use_cases.metadata_refresh.group._failures import build_failure_details
 from domain.use_cases.metadata_refresh.group._models import (
+    MetadataDriveIngestFailure,
     MetadataDrivePublished,
     MetadataDriveRefreshFailure,
-    MetadataIngestDriveFailure,
-    MetadataIngestProgress,
-    MetadataIngestRequest,
-    MetadataIngestSkipped,
-    MetadataIngestStarted,
+    MetadataGroupIngestProgress,
+    MetadataGroupIngestRequest,
+    MetadataGroupIngestSkipped,
+    MetadataGroupIngestStarted,
     MetadataRefreshRunResult,
 )
 from domain.use_cases.metadata_refresh.group._selectors import (
-    selected_drive_ids,
-    selector_rules,
+    build_selector_rules,
+    select_drive_ids,
     validate_selector_conflicts,
 )
 
@@ -53,10 +53,10 @@ class _CombinedRefreshState:
     failed_drive_ids: list[str] = dataclass_field(default_factory=list)
     skipped_drive_ids: list[str] = dataclass_field(default_factory=list)
     active_drive_id: str | None = None
-    prepared_publication: MetadataRunPublication | None = None
+    prepared_publication: MetadataDriveRunPublication | None = None
     drive_event_stream: (
         AsyncGenerator[
-            MetadataIngestProgress | MetadataIngestSkipped | MetadataIngestPrepared
+            MetadataGroupIngestProgress | MetadataGroupIngestSkipped | MetadataDriveIngestPrepared
         ]
         | None
     ) = None
@@ -65,15 +65,15 @@ class _CombinedRefreshState:
 
 async def _select_independent_refresh_drives(
     user_id: str,
-    request: MetadataIngestRequest,
+    request: MetadataGroupIngestRequest,
     drive_source: GroupDriveSource,
     operation_id: UUID,
     included_rules: dict[str, tuple[MetadataPathRule, ...]],
     excluded_rules: dict[str, tuple[MetadataPathRule, ...]],
     validation_include_drive_ids: frozenset[str] | None,
     validation_exclude_drive_ids: frozenset[str] | None,
-) -> tuple[list[MetadataIngestDriveRequest], bool]:
-    group = await get_group_drives(user_id, request.group_id, drive_source)
+) -> tuple[list[MetadataDriveIngestRequest], bool]:
+    group = await list_group_drives(user_id, request.group_id, drive_source)
     drive_locations_by_id = {
         location.drive_id: location for location in group.locations
     }
@@ -86,7 +86,7 @@ async def _select_independent_refresh_drives(
     excluded_drive_ids = set(excluded_rules)
     unavailable_included = included_drive_ids - available_drive_ids
     if unavailable_included:
-        raise MetadataIngestDriveFailure(
+        raise MetadataDriveIngestFailure(
             next(iter(unavailable_included)),
             MetadataSourceError(403, "Included drive is not accessible in this group"),
         )
@@ -102,11 +102,11 @@ async def _select_independent_refresh_drives(
         and (excluded_drive_ids | validation_excluded) - included_drive_ids
     ):
         raise InvalidMetadataSelection("excluded drives must also be included")
-    drive_ids_to_refresh = selected_drive_ids(
+    drive_ids_to_refresh = select_drive_ids(
         group.drive_ids, included_drive_ids, excluded_drive_ids, request.exclude
     )
     drive_requests = [
-        MetadataIngestDriveRequest(
+        MetadataDriveIngestRequest(
             drive_id,
             include_rules=included_rules.get(drive_id, ()),
             exclude_rules=excluded_rules.get(drive_id, ()),
@@ -123,32 +123,32 @@ async def _select_independent_refresh_drives(
 
 async def _forward_drive_refresh_events(
     drive_event_stream: AsyncGenerator[
-        MetadataIngestProgress | MetadataIngestSkipped | MetadataIngestPrepared
+        MetadataGroupIngestProgress | MetadataGroupIngestSkipped | MetadataDriveIngestPrepared
     ],
     state: _CombinedRefreshState,
 ) -> AsyncGenerator[
-    MetadataIngestProgress | MetadataIngestSkipped | MetadataIngestPrepared
+    MetadataGroupIngestProgress | MetadataGroupIngestSkipped | MetadataDriveIngestPrepared
 ]:
     async for event in drive_event_stream:
         match event:
-            case MetadataIngestPrepared() | MetadataIngestSkipped():
+            case MetadataDriveIngestPrepared() | MetadataGroupIngestSkipped():
                 yield event
-            case MetadataIngestProgress(drive_id=drive_id, progress=drive_progress):
+            case MetadataGroupIngestProgress(drive_id=drive_id, progress=drive_progress):
                 state.processed_document_count += 1
                 state.drive_processed_document_count += 1
-                yield MetadataIngestProgress(
+                yield MetadataGroupIngestProgress(
                     drive_id, drive_progress, state.processed_document_count
                 )
 
 
-async def _record_failed_drive(
+async def _record_drive_refresh_failure(
     store: CombinedDocumentRefreshStore,
     operation_id: UUID,
     drive_id: str,
-    exc: MetadataIngestDriveFailure,
+    exc: MetadataDriveIngestFailure,
     state: _CombinedRefreshState,
 ) -> MetadataDriveRefreshFailure:
-    failure_code, failure_summary = failure_details(
+    failure_code, failure_summary = build_failure_details(
         exc, state.processed_document_count, state.skipped_drive_ids
     )
     detail = str(failure_summary.get("reason", str(exc)))
@@ -203,7 +203,7 @@ async def _publish_refreshed_drive(
     store: CombinedDocumentRefreshStore,
     operation_id: UUID,
     drive_id: str,
-    publication: MetadataRunPublication,
+    publication: MetadataDriveRunPublication,
     state: _CombinedRefreshState,
 ) -> MetadataDrivePublished:
     with anyio.CancelScope(shield=True):
@@ -224,9 +224,9 @@ async def _publish_refreshed_drive(
     )
 
 
-async def _refresh_one_drive_independently(
+async def _refresh_drive_metadata_independently(
     user_id: str,
-    drive_request: MetadataIngestDriveRequest,
+    drive_request: MetadataDriveIngestRequest,
     has_explicit_include_drive_selector: bool,
     capture_relative_paths: bool,
     operation_id: UUID,
@@ -234,7 +234,7 @@ async def _refresh_one_drive_independently(
     store: CombinedDocumentRefreshStore,
     state: _CombinedRefreshState,
 ) -> AsyncGenerator[
-    MetadataIngestProgress | MetadataDriveRefreshFailure | MetadataDrivePublished
+    MetadataGroupIngestProgress | MetadataDriveRefreshFailure | MetadataDrivePublished
 ]:
     drive_id = drive_request.drive_id
     state.active_drive_id = drive_id
@@ -252,19 +252,19 @@ async def _refresh_one_drive_independently(
         capture_relative_paths=capture_relative_paths,
     )
     state.drive_event_stream = drive_event_stream
-    skipped: MetadataIngestSkipped | None = None
+    skipped: MetadataGroupIngestSkipped | None = None
     try:
         try:
             async for event in _forward_drive_refresh_events(drive_event_stream, state):
                 match event:
-                    case MetadataIngestPrepared(publication=publication):
+                    case MetadataDriveIngestPrepared(publication=publication):
                         state.prepared_publication = publication
-                    case MetadataIngestSkipped():
+                    case MetadataGroupIngestSkipped():
                         skipped = event
-                    case MetadataIngestProgress():
+                    case MetadataGroupIngestProgress():
                         yield event
-        except MetadataIngestDriveFailure as exc:
-            yield await _record_failed_drive(store, operation_id, drive_id, exc, state)
+        except MetadataDriveIngestFailure as exc:
+            yield await _record_drive_refresh_failure(store, operation_id, drive_id, exc, state)
             return
     finally:
         with anyio.CancelScope(shield=True):
@@ -284,7 +284,7 @@ async def _refresh_one_drive_independently(
 
 async def _refresh_requested_drives(
     user_id: str,
-    drive_requests: list[MetadataIngestDriveRequest],
+    drive_requests: list[MetadataDriveIngestRequest],
     has_explicit_include_drive_selector: bool,
     capture_relative_paths_drive_ids: frozenset[str] | None,
     operation_id: UUID,
@@ -292,10 +292,10 @@ async def _refresh_requested_drives(
     store: CombinedDocumentRefreshStore,
     state: _CombinedRefreshState,
 ) -> AsyncGenerator[
-    MetadataIngestProgress | MetadataDriveRefreshFailure | MetadataDrivePublished
+    MetadataGroupIngestProgress | MetadataDriveRefreshFailure | MetadataDrivePublished
 ]:
     for drive_request in drive_requests:
-        drive_refresh_events = _refresh_one_drive_independently(
+        drive_refresh_events = _refresh_drive_metadata_independently(
             user_id,
             drive_request,
             has_explicit_include_drive_selector,
@@ -330,7 +330,7 @@ async def _fail_combined_refresh(
         failure_code = exc.failure_code
         summary.update(exc.failure_summary or {})
     elif not cancelled and isinstance(exc, Exception):
-        failure_code, failure_summary = failure_details(
+        failure_code, failure_summary = build_failure_details(
             exc, state.processed_document_count, state.skipped_drive_ids
         )
         summary.update(failure_summary)
@@ -378,7 +378,7 @@ async def _record_active_drive_failure(
 
 async def refresh_group_metadata_per_drive(
     user_id: str,
-    request: MetadataIngestRequest,
+    request: MetadataGroupIngestRequest,
     drive_source: GroupDriveSource,
     metadata_source: DocumentRefreshSource,
     store: CombinedDocumentRefreshStore,
@@ -387,20 +387,20 @@ async def refresh_group_metadata_per_drive(
     validation_exclude_drive_ids: frozenset[str] | None = None,
     capture_relative_paths_drive_ids: frozenset[str] | None = None,
 ) -> AsyncGenerator[
-    MetadataIngestStarted
-    | MetadataIngestProgress
+    MetadataGroupIngestStarted
+    | MetadataGroupIngestProgress
     | MetadataDrivePublished
     | MetadataDriveRefreshFailure
     | MetadataRefreshRunResult
 ]:
     """Refresh and publish each selected drive independently for document work."""
-    included_rules = selector_rules(request.include)
-    excluded_rules = selector_rules(request.exclude)
+    included_rules = build_selector_rules(request.include)
+    excluded_rules = build_selector_rules(request.exclude)
     validate_selector_conflicts(included_rules, excluded_rules)
     operation_id = await store.begin_group_operation(user_id, request.group_id)
     state = _CombinedRefreshState()
     try:
-        yield MetadataIngestStarted(operation_id)
+        yield MetadataGroupIngestStarted(operation_id)
         (
             drive_requests,
             has_explicit_include_drive_selector,

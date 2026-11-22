@@ -37,7 +37,7 @@ class DocumentProcessingState:
     last_attempt_content_version: str | None = None
     last_attempt_policy_version: str | None = None
     last_outcome: ProcessingOutcome | None = None
-    deferred: bool = False
+    is_deferred: bool = False
 
 
 @dataclass(frozen=True)
@@ -51,7 +51,7 @@ class DocumentProcessingCandidate:
 
 
 @dataclass(frozen=True)
-class DocumentIngestFileSelection:
+class DocumentFileIngestSelection:
     drive_id: str
     item_id: str
     relative_path: str
@@ -211,7 +211,7 @@ def derive_processing_statuses(
         return frozenset({ProcessingStatus.NEW})
 
     statuses: set[ProcessingStatus] = set()
-    if state.deferred:
+    if state.is_deferred:
         statuses.add(ProcessingStatus.DEFERRED)
     if state.last_outcome is ProcessingOutcome.FAILED:
         statuses.add(ProcessingStatus.FAILED)
@@ -300,7 +300,7 @@ def _effective_statuses(
 
 def select_ingest_file(
     candidate: DocumentProcessingCandidate, request: DocumentIngestRequest
-) -> DocumentIngestFileSelection | None:
+) -> DocumentFileIngestSelection | None:
     """Select a candidate by path, extension, and its current processing tags."""
     if not _candidate_drive_is_included(candidate, request):
         return None
@@ -328,7 +328,7 @@ def select_ingest_file(
         return None
     if candidate.content_version is None:
         reasons += ("source_content_version_unknown",)
-    return DocumentIngestFileSelection(
+    return DocumentFileIngestSelection(
         candidate.drive_id,
         candidate.item_id,
         candidate.relative_path or "",

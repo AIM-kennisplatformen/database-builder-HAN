@@ -295,7 +295,7 @@ async def _delete_all_snapshots(
         return True
 
 
-class PostgresIbWriter(UbwfrisWriter[IbRow]):
+class IbWriterPostgres(UbwfrisWriter[IbRow]):
     def __init__(self, pool: AsyncConnectionPool) -> None:
         self._pool: AsyncConnectionPool = pool
 
@@ -399,7 +399,7 @@ class PostgresIbWriter(UbwfrisWriter[IbRow]):
             raise InvalidWorkbook("Workbook contains duplicate row numbers") from exc
 
 
-class PostgresRhaWriter(UbwfrisWriter[RhaRow]):
+class RhaWriterPostgres(UbwfrisWriter[RhaRow]):
     def __init__(self, pool: AsyncConnectionPool) -> None:
         self._pool: AsyncConnectionPool = pool
 

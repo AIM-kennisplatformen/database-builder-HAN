@@ -2,18 +2,18 @@
 
 from domain.models.documents.document_ingestion import DocumentIngestRequest
 from domain.use_cases.metadata_refresh.group._models import (
-    DriveMetadataSelector,
-    MetadataIngestRequest,
+    MetadataDriveSelector,
+    MetadataGroupIngestRequest,
 )
 
 
-def metadata_refresh_request(
+def build_metadata_refresh_request(
     request: DocumentIngestRequest,
-) -> MetadataIngestRequest:
-    return MetadataIngestRequest(
+) -> MetadataGroupIngestRequest:
+    return MetadataGroupIngestRequest(
         request.group_id,
         include=[
-            DriveMetadataSelector(
+            MetadataDriveSelector(
                 selector.drive_id,
                 paths=[path for path in selector.paths if path],
                 extensions=list(selector.extensions),
@@ -21,7 +21,7 @@ def metadata_refresh_request(
             for selector in request.include
         ],
         exclude=[
-            DriveMetadataSelector(
+            MetadataDriveSelector(
                 selector.drive_id,
                 paths=[path for path in selector.paths if path],
                 extensions=list(selector.extensions),
@@ -32,7 +32,7 @@ def metadata_refresh_request(
     )
 
 
-def path_capture_drive_ids(request: DocumentIngestRequest) -> frozenset[str]:
+def select_path_capture_drive_ids(request: DocumentIngestRequest) -> frozenset[str]:
     return frozenset(
         selector.drive_id
         for selector in request.include + request.exclude

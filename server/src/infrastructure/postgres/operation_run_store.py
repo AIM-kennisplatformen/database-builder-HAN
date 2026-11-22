@@ -7,7 +7,7 @@ from psycopg_pool import AsyncConnectionPool
 from domain.ports.operation_run_store import OperationRun, OperationRunReader
 
 
-class PostgresOperationRunStore(OperationRunReader):
+class OperationRunReaderPostgres(OperationRunReader):
     def __init__(self, pool: AsyncConnectionPool) -> None:
         self._pool: AsyncConnectionPool = pool
 

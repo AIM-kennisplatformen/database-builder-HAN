@@ -3,7 +3,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from domain.exceptions.metadata_ingest_errors import StoreUnavailable
+from domain.exceptions.metadata_ingest_errors import MetadataStoreUnavailable
 from domain.models.documents.content_version import ContentVersion
 from domain.models.documents.document import (
     Document,
@@ -17,11 +17,11 @@ from domain.models.documents.metadata_selection import (
 )
 from domain.ports.documents.document_metadata_source import DocumentMetadataScan
 from domain.ports.documents.document_store import (
-    MetadataIngestRun,
-    MetadataRunPublication,
+    MetadataDriveIngestRun,
+    MetadataDriveRunPublication,
 )
 from domain.use_cases.metadata_refresh.drive.refresh import (
-    MetadataIngestDriveRequest,
+    MetadataDriveIngestRequest,
     refresh_drive_metadata_atomically,
 )
 
@@ -63,9 +63,9 @@ def test_inventory_saves_each_document_before_reporting_progress() -> None:
             drive_id: str,
             selection: MetadataSelection,
             operation_id: UUID | None = None,
-        ) -> MetadataIngestRun:
+        ) -> MetadataDriveIngestRun:
             _ = (principal_id, drive_id, selection, operation_id)
-            return MetadataIngestRun(uuid4(), None, True)
+            return MetadataDriveIngestRun(uuid4(), None, True)
 
         async def begin_group_operation(self, principal_id: str, group_id: str) -> UUID:
             _ = (principal_id, group_id)
@@ -85,7 +85,7 @@ def test_inventory_saves_each_document_before_reporting_progress() -> None:
 
         async def publish_metadata_runs(
             self,
-            publications: tuple[MetadataRunPublication, ...],
+            publications: tuple[MetadataDriveRunPublication, ...],
             operation_id: UUID | None = None,
             summary: dict[str, object] | None = None,
             domain_ids: dict[str, object] | None = None,
@@ -111,7 +111,7 @@ def test_inventory_saves_each_document_before_reporting_progress() -> None:
             update.document
             async for update in refresh_drive_metadata_atomically(
                 "operator",
-                MetadataIngestDriveRequest(
+                MetadataDriveIngestRequest(
                     "drive",
                     include_rules=(MetadataPathRule("", ("pdf",)),),
                 ),
@@ -166,9 +166,9 @@ def test_inventory_does_not_report_progress_when_save_fails() -> None:
             drive_id: str,
             selection: MetadataSelection,
             operation_id: UUID | None = None,
-        ) -> MetadataIngestRun:
+        ) -> MetadataDriveIngestRun:
             _ = (principal_id, drive_id, selection, operation_id)
-            return MetadataIngestRun(uuid4(), None, True)
+            return MetadataDriveIngestRun(uuid4(), None, True)
 
         async def begin_group_operation(self, principal_id: str, group_id: str) -> UUID:
             _ = (principal_id, group_id)
@@ -189,7 +189,7 @@ def test_inventory_does_not_report_progress_when_save_fails() -> None:
 
         async def publish_metadata_runs(
             self,
-            publications: tuple[MetadataRunPublication, ...],
+            publications: tuple[MetadataDriveRunPublication, ...],
             operation_id: UUID | None = None,
             summary: dict[str, object] | None = None,
             domain_ids: dict[str, object] | None = None,
@@ -214,7 +214,7 @@ def test_inventory_does_not_report_progress_when_save_fails() -> None:
             update.document
             async for update in refresh_drive_metadata_atomically(
                 "operator",
-                MetadataIngestDriveRequest(
+                MetadataDriveIngestRequest(
                     "drive",
                     include_rules=(MetadataPathRule("", ("pdf",)),),
                 ),
@@ -223,12 +223,12 @@ def test_inventory_does_not_report_progress_when_save_fails() -> None:
             )
         ]
 
-    with pytest.raises(StoreUnavailable, match="store is unavailable"):
+    with pytest.raises(MetadataStoreUnavailable, match="store is unavailable"):
         asyncio.run(collect())
 
 
 def test_inventory_request_normalizes_optional_filters() -> None:
-    request = MetadataIngestDriveRequest(
+    request = MetadataDriveIngestRequest(
         "drive",
         include_rules=(
             MetadataPathRule("/Reports/2026/", (".PDF", "md")),
@@ -243,12 +243,12 @@ def test_inventory_request_normalizes_optional_filters() -> None:
 @pytest.mark.parametrize("path", ["Reports//2026", "Reports/../2026", " ", "/", "///"])
 def test_inventory_request_rejects_invalid_folder_paths(path: str) -> None:
     with pytest.raises(ValueError, match="folder paths relative"):
-        MetadataIngestDriveRequest("drive", include_rules=(MetadataPathRule(path, ()),))
+        MetadataDriveIngestRequest("drive", include_rules=(MetadataPathRule(path, ()),))
 
 
 @pytest.mark.parametrize("extension", ["pdf/docx", "pdf*", "  "])
 def test_inventory_request_rejects_invalid_rule_extensions(extension: str) -> None:
     with pytest.raises(ValueError, match="extensions must be alphanumeric"):
-        MetadataIngestDriveRequest(
+        MetadataDriveIngestRequest(
             "drive", include_rules=(MetadataPathRule("Reports", (extension,)),)
         )

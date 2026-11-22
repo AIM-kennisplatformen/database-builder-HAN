@@ -21,7 +21,7 @@ class PublicError:
         }
 
 
-def internal_error() -> PublicError:
+def build_internal_error() -> PublicError:
     """Return the generic safe description for an unexpected failure."""
     return PublicError("internal_error", 500, "The operation failed")
 

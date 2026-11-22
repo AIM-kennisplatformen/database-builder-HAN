@@ -9,8 +9,8 @@ from domain.models.documents.metadata_selection import (
     MetadataSelection,
 )
 from domain.ports.documents.document_store import (
-    MetadataIngestRun,
-    MetadataRunPublication,
+    MetadataDriveIngestRun,
+    MetadataDriveRunPublication,
 )
 from domain.ports.documents.group_drive_source import (
     GroupDriveLocation,
@@ -96,9 +96,9 @@ class MetadataRefreshStore:
         drive_id: str,
         selection: MetadataSelection,
         operation_id: UUID | None = None,
-    ) -> MetadataIngestRun:
+    ) -> MetadataDriveIngestRun:
         _ = (principal_id, drive_id, selection, operation_id)
-        return MetadataIngestRun(uuid4(), self.cursor, True)
+        return MetadataDriveIngestRun(uuid4(), self.cursor, True)
 
     async def stage_document(self, run_id: UUID, document: Document) -> None:
         _ = run_id
@@ -117,7 +117,7 @@ class MetadataRefreshStore:
 
     async def publish_metadata_runs(
         self,
-        publications: tuple[MetadataRunPublication, ...],
+        publications: tuple[MetadataDriveRunPublication, ...],
         operation_id: UUID | None = None,
         summary: dict[str, object] | None = None,
         domain_ids: dict[str, object] | None = None,

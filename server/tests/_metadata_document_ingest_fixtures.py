@@ -17,15 +17,15 @@ from domain.models.documents.document import (
     FileMetadata,
 )
 from domain.models.documents.document_ingestion import (
-    DocumentIngestFileSelection,
+    DocumentFileIngestSelection,
     DocumentProcessingCandidate,
     ProcessingOutcome,
 )
 from domain.models.documents.metadata_selection import MetadataSelection
 from domain.ports.documents.document_metadata_source import DocumentMetadataScan
 from domain.ports.documents.document_store import (
-    MetadataIngestRun,
-    MetadataRunPublication,
+    MetadataDriveIngestRun,
+    MetadataDriveRunPublication,
 )
 from domain.ports.documents.group_drive_source import GroupDriveLocation, UserGroup
 from domain.ports.operation_run_store import OperationRun
@@ -124,7 +124,7 @@ class CombinedStore:
         self.candidates: dict[str, tuple[DocumentProcessingCandidate, ...]] = {}
         self.candidate_queries: list[tuple[str, str, UUID]] = []
         self.file_selections: list[
-            tuple[UUID, tuple[DocumentIngestFileSelection, ...]]
+            tuple[UUID, tuple[DocumentFileIngestSelection, ...]]
         ] = []
 
     async def begin_group_operation(self, principal_id: str, group_id: str) -> UUID:
@@ -142,14 +142,14 @@ class CombinedStore:
         drive_id: str,
         selection: MetadataSelection,
         operation_id: UUID | None = None,
-    ) -> MetadataIngestRun:
+    ) -> MetadataDriveIngestRun:
         _ = (principal_id, selection)
         assert operation_id == self.operation_id
         run_id = uuid4()
         self.run_drives[run_id] = drive_id
         self.operation_domain_ids.setdefault("drive_run_ids", [])
         cast(list[str], self.operation_domain_ids["drive_run_ids"]).append(str(run_id))
-        return MetadataIngestRun(run_id, None, True)
+        return MetadataDriveIngestRun(run_id, None, True)
 
     async def stage_document(self, run_id: UUID, document: Document) -> None:
         self.staged.setdefault(run_id, []).append(document)
@@ -168,7 +168,7 @@ class CombinedStore:
 
     async def publish_metadata_runs(
         self,
-        publications: tuple[MetadataRunPublication, ...],
+        publications: tuple[MetadataDriveRunPublication, ...],
         operation_id: UUID | None = None,
         summary: dict[str, object] | None = None,
         domain_ids: dict[str, object] | None = None,
@@ -180,7 +180,7 @@ class CombinedStore:
         self,
         operation_id: UUID,
         drive_id: str,
-        publication: MetadataRunPublication,
+        publication: MetadataDriveRunPublication,
         outcome: dict[str, object],
     ) -> None:
         assert operation_id == self.operation_id
@@ -247,7 +247,7 @@ class CombinedStore:
     async def record_document_ingest_selections(
         self,
         operation_id: UUID,
-        selections: tuple[DocumentIngestFileSelection, ...],
+        selections: tuple[DocumentFileIngestSelection, ...],
     ) -> None:
         assert operation_id == self.operation_id
         self.file_selections.append((operation_id, selections))
@@ -260,7 +260,7 @@ class CombinedStore:
         processing_policy_version: str,
         outcome: ProcessingOutcome | str,
         *,
-        deferred: bool = False,
+        is_deferred: bool = False,
         failure_stage: str | None = None,
         failure_detail: str | None = None,
     ) -> None:
@@ -270,7 +270,7 @@ class CombinedStore:
             source_content_version,
             processing_policy_version,
             outcome,
-            deferred,
+            is_deferred,
             failure_stage,
             failure_detail,
         )
@@ -319,7 +319,7 @@ class CandidateStoreFailure(CombinedStore):
     async def record_document_ingest_selections(
         self,
         operation_id: UUID,
-        selections: tuple[DocumentIngestFileSelection, ...],
+        selections: tuple[DocumentFileIngestSelection, ...],
     ) -> None:
         if self.failure_stage == "record":
             raise RuntimeError("selection persistence failed")

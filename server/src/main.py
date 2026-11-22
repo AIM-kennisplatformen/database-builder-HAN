@@ -12,15 +12,15 @@ from api.routes.employees.router import router as employees_router
 from api.routes.operations import router as operations_router
 from api.routes.ubwfris.snapshots.router import router as ubwfris_snapshots_router
 from config import config
-from infrastructure.msgraph.document_metadata_source import (
-    SharePointDocumentMetadataSource,
+from infrastructure.msgraph.document_metadata.source import (
+    DocumentMetadataSourceSharePoint,
 )
 from infrastructure.msgraph.employee_source import (
-    MsGraphEmployeeSource,
+    EmployeeSourceMsGraph,
 )
-from infrastructure.msgraph.group_drive_source import MsGraphGroupDriveSource
-from infrastructure.postgres.document_store import PostgresDocumentStore
-from infrastructure.postgres.employee_writer import EmployeePostgresWriter
+from infrastructure.msgraph.group_drive_source import GroupDriveSourceMsGraph
+from infrastructure.postgres.document_store import DocumentStorePostgres
+from infrastructure.postgres.employee_writer import EmployeeWriterPostgres
 from infrastructure.postgres.ubwfris_writer import interrupt_ubwfris_snapshots
 
 
@@ -44,11 +44,11 @@ async def lifespan(app: FastAPI):
             scopes=[],
         )
 
-        app.state.employee_source = MsGraphEmployeeSource(
+        app.state.employee_source = EmployeeSourceMsGraph(
             client, config.graph.employee_group.id
         )
-        app.state.document_metadata_source = SharePointDocumentMetadataSource(client)
-        app.state.group_drive_source = MsGraphGroupDriveSource(client)
+        app.state.document_metadata_source = DocumentMetadataSourceSharePoint(client)
+        app.state.group_drive_source = GroupDriveSourceMsGraph(client)
         app.state.graph_client = client
 
         pool: AsyncConnectionPool = AsyncConnectionPool(conninfo=conninfo, open=False)
@@ -56,8 +56,8 @@ async def lifespan(app: FastAPI):
             app.state.postgres_pool = pool
             # Crash recovery clears only staging from unfinished runs.
             # The single-instance deployment makes prior running rows orphaned.
-            await PostgresDocumentStore(pool).interrupt_metadata_runs()
-            await EmployeePostgresWriter(pool).interrupt_employee_sync_runs()
+            await DocumentStorePostgres(pool).interrupt_metadata_runs()
+            await EmployeeWriterPostgres(pool).interrupt_employee_sync_runs()
             await interrupt_ubwfris_snapshots(pool)
             yield
     finally:

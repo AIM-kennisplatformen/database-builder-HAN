@@ -20,15 +20,15 @@ from domain.models.documents.document import (
     FileMetadata,
 )
 from domain.models.documents.document_ingestion import (
-    DocumentIngestFileSelection,
+    DocumentFileIngestSelection,
     ProcessingStatus,
 )
 from domain.models.documents.metadata_selection import (
     MetadataPathRule,
     MetadataSelection,
 )
-from domain.ports.documents.document_store import MetadataRunPublication
-from infrastructure.postgres.document_store import PostgresDocumentStore
+from domain.ports.documents.document_store import MetadataDriveRunPublication
+from infrastructure.postgres.document_store import DocumentStorePostgres
 
 
 def test_document_store_upserts_full_source_metadata() -> None:
@@ -59,7 +59,7 @@ def test_document_store_upserts_full_source_metadata() -> None:
     pool.connection.return_value.__aenter__.return_value = connection
 
     asyncio.run(
-        PostgresDocumentStore(cast(AsyncConnectionPool, pool)).save_document(document)
+        DocumentStorePostgres(cast(AsyncConnectionPool, pool)).save_document(document)
     )
 
     sql, values = connection.execute.call_args.args
@@ -94,7 +94,7 @@ def test_startup_recovery_discards_only_staged_rows_and_interrupts_running_runs(
     pool.connection.return_value.__aenter__.return_value = connection
 
     asyncio.run(
-        PostgresDocumentStore(cast(AsyncConnectionPool, pool)).interrupt_metadata_runs()
+        DocumentStorePostgres(cast(AsyncConnectionPool, pool)).interrupt_metadata_runs()
     )
 
     assert connection.execute.await_count == 3
@@ -144,7 +144,7 @@ def test_candidate_query_uses_current_published_run_and_visible_operator_observa
     pool.connection.return_value.__aenter__.return_value = connection
 
     candidates = asyncio.run(
-        PostgresDocumentStore(
+        DocumentStorePostgres(
             cast(AsyncConnectionPool, pool)
         ).query_visible_document_candidates("operator", "drive", published_run_id)
     )
@@ -184,7 +184,7 @@ def test_empty_candidate_result_requires_the_published_snapshot_to_remain_curren
     pool.connection.return_value.__aenter__.return_value = connection
 
     async def query() -> tuple[object, ...]:
-        return await PostgresDocumentStore(
+        return await DocumentStorePostgres(
             cast(AsyncConnectionPool, pool)
         ).query_visible_document_candidates("operator", "drive", published_run_id)
 
@@ -217,7 +217,7 @@ def test_selected_file_run_records_are_persisted_with_statuses_and_reasons() -> 
     connection_context.__aexit__ = AsyncMock(return_value=False)
     pool = MagicMock()
     pool.connection.return_value = connection_context
-    selection = DocumentIngestFileSelection(
+    selection = DocumentFileIngestSelection(
         drive_id="drive",
         item_id="item",
         relative_path="reports/Report.pdf",
@@ -228,7 +228,7 @@ def test_selected_file_run_records_are_persisted_with_statuses_and_reasons() -> 
     )
 
     asyncio.run(
-        PostgresDocumentStore(
+        DocumentStorePostgres(
             cast(AsyncConnectionPool, pool)
         ).record_document_ingest_selections(operation_id, (selection,))
     )
@@ -262,7 +262,7 @@ def test_metadata_selection_serialization_matches_persisted_cursor_key() -> None
     pool.connection.return_value.__aenter__.return_value = connection
 
     run = asyncio.run(
-        PostgresDocumentStore(cast(AsyncConnectionPool, pool)).begin_metadata_run(
+        DocumentStorePostgres(cast(AsyncConnectionPool, pool)).begin_metadata_run(
             "operator",
             "drive",
             MetadataSelection(
@@ -291,7 +291,7 @@ def test_legacy_metadata_cursor_forces_baseline_before_candidate_query() -> None
     pool.connection.return_value.__aenter__.return_value = connection
 
     run = asyncio.run(
-        PostgresDocumentStore(cast(AsyncConnectionPool, pool)).begin_metadata_run(
+        DocumentStorePostgres(cast(AsyncConnectionPool, pool)).begin_metadata_run(
             "operator",
             "drive",
             MetadataSelection(
@@ -345,10 +345,10 @@ def test_single_drive_publication_and_run_outcome_share_one_transaction(
     connection_context.__aexit__ = AsyncMock(return_value=False)
     pool = MagicMock()
     pool.connection.return_value = connection_context
-    publication = MetadataRunPublication(uuid4(), "cursor", True, True)
+    publication = MetadataDriveRunPublication(uuid4(), "cursor", True, True)
 
     async def publish() -> None:
-        await PostgresDocumentStore(
+        await DocumentStorePostgres(
             cast(AsyncConnectionPool, pool)
         ).publish_metadata_drive(
             operation_id,
@@ -395,7 +395,7 @@ def test_failing_parent_run_merges_summary_and_preserves_drive_outcomes() -> Non
     operation_id = uuid4()
 
     asyncio.run(
-        PostgresDocumentStore(cast(AsyncConnectionPool, pool)).fail_group_operation(
+        DocumentStorePostgres(cast(AsyncConnectionPool, pool)).fail_group_operation(
             operation_id,
             "request_interrupted",
             interrupted=True,
@@ -428,7 +428,7 @@ def test_drive_outcome_fallback_does_not_replace_terminal_outcome() -> None:
     operation_id = uuid4()
 
     asyncio.run(
-        PostgresDocumentStore(
+        DocumentStorePostgres(
             cast(AsyncConnectionPool, pool)
         ).record_metadata_drive_outcome(
             operation_id,

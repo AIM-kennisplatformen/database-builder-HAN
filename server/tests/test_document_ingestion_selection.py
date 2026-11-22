@@ -46,7 +46,7 @@ def _candidate(
 
 def test_processing_statuses_are_coexisting_tags() -> None:
     new_deferred = _candidate(
-        DocumentProcessingState(deferred=True),
+        DocumentProcessingState(is_deferred=True),
     )
     outdated_failed = _candidate(
         DocumentProcessingState(

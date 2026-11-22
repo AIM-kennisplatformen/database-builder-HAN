@@ -29,8 +29,8 @@ from domain.ports.documents.document_metadata_source import (
 )
 from domain.ports.documents.document_store import (
     DocumentRefreshStore,
-    MetadataIngestRun,
-    MetadataRunPublication,
+    MetadataDriveIngestRun,
+    MetadataDriveRunPublication,
 )
 
 
@@ -85,9 +85,9 @@ def test_metadata_endpoint_streams_progress_and_completion() -> None:
             drive_id: str,
             selection: MetadataSelection,
             operation_id: UUID | None = None,
-        ) -> MetadataIngestRun:
+        ) -> MetadataDriveIngestRun:
             _ = (principal_id, drive_id, selection, operation_id)
-            return MetadataIngestRun(uuid4(), None, True)
+            return MetadataDriveIngestRun(uuid4(), None, True)
 
         async def stage_document(self, run_id: UUID, document: Document) -> None:
             _ = run_id
@@ -103,7 +103,7 @@ def test_metadata_endpoint_streams_progress_and_completion() -> None:
 
         async def publish_metadata_runs(
             self,
-            publications: tuple[MetadataRunPublication, ...],
+            publications: tuple[MetadataDriveRunPublication, ...],
             operation_id: UUID | None = None,
             summary: dict[str, object] | None = None,
             domain_ids: dict[str, object] | None = None,
@@ -287,9 +287,9 @@ def test_metadata_endpoint_close_discards_staged_refresh() -> None:
             drive_id: str,
             selection: MetadataSelection,
             operation_id: UUID | None = None,
-        ) -> MetadataIngestRun:
+        ) -> MetadataDriveIngestRun:
             _ = (principal_id, drive_id, selection, operation_id)
-            return MetadataIngestRun(uuid4(), self.cursor, True)
+            return MetadataDriveIngestRun(uuid4(), self.cursor, True)
 
         async def stage_document(self, run_id: object, document: Document) -> None:
             _ = run_id
@@ -307,7 +307,7 @@ def test_metadata_endpoint_close_discards_staged_refresh() -> None:
 
         async def publish_metadata_runs(
             self,
-            publications: tuple[MetadataRunPublication, ...],
+            publications: tuple[MetadataDriveRunPublication, ...],
             operation_id: UUID | None = None,
             summary: dict[str, object] | None = None,
             domain_ids: dict[str, object] | None = None,

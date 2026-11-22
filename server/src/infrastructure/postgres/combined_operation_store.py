@@ -6,11 +6,11 @@ from uuid import UUID, uuid4
 from psycopg import AsyncConnection
 
 from infrastructure.postgres.document_store_constants import METADATA_RESET_LOCK
-from infrastructure.postgres.pool_store import PostgresPoolStore
+from infrastructure.postgres.pool_store import PoolStorePostgres
 from infrastructure.postgres.transactions import staging_transaction
 
 
-class CombinedOperationStoreMethods(PostgresPoolStore):
+class CombinedOperationStoreMethods(PoolStorePostgres):
     async def begin_group_operation(self, principal_id: str, group_id: str) -> UUID:
         operation_id = uuid4()
         async with self._pool.connection() as connection:

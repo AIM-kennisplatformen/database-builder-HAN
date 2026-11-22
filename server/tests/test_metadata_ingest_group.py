@@ -20,17 +20,17 @@ from domain.models.documents.metadata_selection import (
 )
 from domain.ports.documents.document_metadata_source import DocumentMetadataScan
 from domain.ports.documents.document_store import (
-    MetadataIngestRun,
-    MetadataRunPublication,
+    MetadataDriveIngestRun,
+    MetadataDriveRunPublication,
 )
 from domain.ports.documents.group_drive_source import GroupDriveLocation, UserGroup
 from domain.ports.operation_run_store import OperationRun
 from domain.use_cases.metadata_refresh import (
-    DriveMetadataSelector,
-    MetadataIngestProgress,
-    MetadataIngestRequest,
-    MetadataIngestResult,
-    MetadataIngestSkipped,
+    MetadataDriveSelector,
+    MetadataGroupIngestProgress,
+    MetadataGroupIngestRequest,
+    MetadataGroupIngestResult,
+    MetadataGroupIngestSkipped,
 )
 from domain.use_cases.metadata_refresh.refresh import (
     refresh_group_metadata_atomically,
@@ -140,7 +140,7 @@ class Store:
         drive_id: str,
         selection: MetadataSelection,
         operation_id: UUID | None = None,
-    ) -> MetadataIngestRun:
+    ) -> MetadataDriveIngestRun:
         _ = (principal_id, drive_id)
         self.metadata_runs_started += 1
         self.selections.append(selection)
@@ -152,7 +152,7 @@ class Store:
             cast(list[str], self.operation_domain_ids["drive_run_ids"]).append(
                 str(run_id)
             )
-        return MetadataIngestRun(run_id, None, True)
+        return MetadataDriveIngestRun(run_id, None, True)
 
     async def stage_document(self, run_id: UUID, document: Document) -> None:
         self.staged.setdefault(run_id, []).append(document)
@@ -169,7 +169,7 @@ class Store:
 
     async def publish_metadata_runs(
         self,
-        publications: tuple[MetadataRunPublication, ...],
+        publications: tuple[MetadataDriveRunPublication, ...],
         operation_id: UUID | None = None,
         summary: dict[str, object] | None = None,
         domain_ids: dict[str, object] | None = None,
@@ -227,16 +227,16 @@ def _drive_ids(updates: Sequence[object]) -> list[str]:
     return [
         update.drive_id
         for update in updates
-        if isinstance(update, (MetadataIngestProgress, MetadataIngestSkipped))
+        if isinstance(update, (MetadataGroupIngestProgress, MetadataGroupIngestSkipped))
     ]
 
 
 def test_include_and_exclude_apply_per_drive_filters() -> None:
     metadata, store = Metadata(), Store()
-    request = MetadataIngestRequest(
+    request = MetadataGroupIngestRequest(
         "group",
-        include=[DriveMetadataSelector("private-drive", ["/Reports/"], [".PDF"])],
-        exclude=[DriveMetadataSelector("private-drive", ["/Reports/Drafts/"])],
+        include=[MetadataDriveSelector("private-drive", ["/Reports/"], [".PDF"])],
+        exclude=[MetadataDriveSelector("private-drive", ["/Reports/Drafts/"])],
     )
 
     async def collect():
@@ -249,7 +249,7 @@ def test_include_and_exclude_apply_per_drive_filters() -> None:
 
     updates = asyncio.run(collect())
     assert _drive_ids(updates) == ["private-drive"]
-    assert isinstance(updates[-1], MetadataIngestResult)
+    assert isinstance(updates[-1], MetadataGroupIngestResult)
     assert updates[-1].processed == 1
     assert metadata.calls == [
         ("private-drive", ["pdf"], ["reports"], ["reports/drafts"], []),
@@ -272,17 +272,17 @@ def test_empty_include_uses_all_drives_and_excludes_selected_extensions() -> Non
             update.drive_id
             async for update in refresh_group_metadata_atomically(
                 "user",
-                MetadataIngestRequest(
+                MetadataGroupIngestRequest(
                     "group",
                     exclude=[
-                        DriveMetadataSelector("private-drive", extensions=[".DOCX"])
+                        MetadataDriveSelector("private-drive", extensions=[".DOCX"])
                     ],
                 ),
                 Groups(),
                 metadata,
                 store,
             )
-            if isinstance(update, MetadataIngestProgress)
+            if isinstance(update, MetadataGroupIngestProgress)
         ]
 
     assert asyncio.run(collect()) == ["team-drive", "private-drive"]
@@ -307,9 +307,9 @@ def test_channel_folder_root_is_passed_to_metadata_scan() -> None:
         return [
             update.drive_id
             async for update in refresh_group_metadata_atomically(
-                "user", MetadataIngestRequest("group"), ChannelGroup(), metadata, store
+                "user", MetadataGroupIngestRequest("group"), ChannelGroup(), metadata, store
             )
-            if isinstance(update, MetadataIngestProgress)
+            if isinstance(update, MetadataGroupIngestProgress)
         ]
 
     assert asyncio.run(collect()) == ["private-drive"]
@@ -319,15 +319,15 @@ def test_channel_folder_root_is_passed_to_metadata_scan() -> None:
 @pytest.mark.parametrize(
     "selection",
     [
-        MetadataIngestRequest("group", exclude=[DriveMetadataSelector("unknown")]),
-        MetadataIngestRequest(
+        MetadataGroupIngestRequest("group", exclude=[MetadataDriveSelector("unknown")]),
+        MetadataGroupIngestRequest(
             "group",
-            include=[DriveMetadataSelector("team-drive", paths=["../bad"])],
+            include=[MetadataDriveSelector("team-drive", paths=["../bad"])],
         ),
     ],
 )
 def test_invalid_selection_fails_before_any_write(
-    selection: MetadataIngestRequest,
+    selection: MetadataGroupIngestRequest,
 ) -> None:
     metadata, store = Metadata(), Store()
 
@@ -345,15 +345,15 @@ def test_invalid_selection_fails_before_any_write(
 
 def test_nested_path_rules_inherit_parent_extension_selection() -> None:
     metadata, store = Metadata(), Store()
-    request = MetadataIngestRequest(
+    request = MetadataGroupIngestRequest(
         "group",
         include=[
-            DriveMetadataSelector("private-drive", ["/A/"], [".PDF", ".md"]),
-            DriveMetadataSelector("private-drive", ["A/B"], ["docx"]),
+            MetadataDriveSelector("private-drive", ["/A/"], [".PDF", ".md"]),
+            MetadataDriveSelector("private-drive", ["A/B"], ["docx"]),
         ],
         exclude=[
-            DriveMetadataSelector("private-drive", ["A"], ["xlsx"]),
-            DriveMetadataSelector("private-drive", ["A/B"], ["pdf"]),
+            MetadataDriveSelector("private-drive", ["A"], ["xlsx"]),
+            MetadataDriveSelector("private-drive", ["A/B"], ["pdf"]),
         ],
     )
 
@@ -386,10 +386,10 @@ def test_nested_path_rules_inherit_parent_extension_selection() -> None:
 
 def test_overlapping_equal_path_selectors_fail_before_metadata_run_starts() -> None:
     metadata, store = Metadata(), Store()
-    request = MetadataIngestRequest(
+    request = MetadataGroupIngestRequest(
         "group",
-        include=[DriveMetadataSelector("private-drive", ["A"], ["pdf", "md"])],
-        exclude=[DriveMetadataSelector("private-drive", ["/A/"], [".PDF"])],
+        include=[MetadataDriveSelector("private-drive", ["A"], ["pdf", "md"])],
+        exclude=[MetadataDriveSelector("private-drive", ["/A/"], [".PDF"])],
     )
 
     async def collect() -> None:
@@ -407,10 +407,10 @@ def test_overlapping_equal_path_selectors_fail_before_metadata_run_starts() -> N
 
 def test_disjoint_equal_path_selectors_are_valid() -> None:
     metadata, store = Metadata(), Store()
-    request = MetadataIngestRequest(
+    request = MetadataGroupIngestRequest(
         "group",
-        include=[DriveMetadataSelector("private-drive", ["A"], ["pdf"])],
-        exclude=[DriveMetadataSelector("private-drive", ["A"], ["docx"])],
+        include=[MetadataDriveSelector("private-drive", ["A"], ["pdf"])],
+        exclude=[MetadataDriveSelector("private-drive", ["A"], ["docx"])],
     )
 
     async def collect() -> None:
@@ -426,11 +426,11 @@ def test_disjoint_equal_path_selectors_are_valid() -> None:
 
 def test_duplicate_identical_directives_are_deduplicated() -> None:
     metadata, store = Metadata(), Store()
-    request = MetadataIngestRequest(
+    request = MetadataGroupIngestRequest(
         "group",
         include=[
-            DriveMetadataSelector("private-drive", ["/A/"], [".PDF"]),
-            DriveMetadataSelector("private-drive", ["a"], ["pdf"]),
+            MetadataDriveSelector("private-drive", ["/A/"], [".PDF"]),
+            MetadataDriveSelector("private-drive", ["a"], ["pdf"]),
         ],
     )
 

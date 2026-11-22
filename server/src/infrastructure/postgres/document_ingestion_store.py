@@ -6,16 +6,16 @@ from uuid import UUID
 from psycopg.types.json import Jsonb
 
 from domain.models.documents.document_ingestion import (
-    DocumentIngestFileSelection,
+    DocumentFileIngestSelection,
     DocumentProcessingCandidate,
     DocumentProcessingState,
     ProcessingOutcome,
 )
-from infrastructure.postgres.pool_store import PostgresPoolStore
+from infrastructure.postgres.pool_store import PoolStorePostgres
 from infrastructure.postgres.transactions import staging_transaction
 
 
-class DocumentIngestionStoreMethods(PostgresPoolStore):
+class DocumentIngestionStoreMethods(PoolStorePostgres):
     async def query_visible_document_candidates(
         self, principal_id: str, drive_id: str, published_run_id: UUID
     ) -> tuple[DocumentProcessingCandidate, ...]:
@@ -84,7 +84,7 @@ class DocumentIngestionStoreMethods(PostgresPoolStore):
                 attempt_policy,
                 outcome,
                 state_drive_id,
-                deferred,
+                is_deferred,
             ) = row
             state = None
             if state_drive_id is not None:
@@ -94,7 +94,7 @@ class DocumentIngestionStoreMethods(PostgresPoolStore):
                     cast(str | None, attempt_content),
                     cast(str | None, attempt_policy),
                     ProcessingOutcome(cast(str, outcome)) if outcome else None,
-                    bool(deferred),
+                    bool(is_deferred),
                 )
             candidates.append(
                 DocumentProcessingCandidate(
@@ -111,7 +111,7 @@ class DocumentIngestionStoreMethods(PostgresPoolStore):
     async def record_document_ingest_selections(
         self,
         operation_id: UUID,
-        selections: tuple[DocumentIngestFileSelection, ...],
+        selections: tuple[DocumentFileIngestSelection, ...],
     ) -> None:
         async with staging_transaction(self._pool) as connection:
             for selection in selections:
@@ -149,7 +149,7 @@ class DocumentIngestionStoreMethods(PostgresPoolStore):
         processing_policy_version: str,
         outcome: ProcessingOutcome | str,
         *,
-        deferred: bool = False,
+        is_deferred: bool = False,
         failure_stage: str | None = None,
         failure_detail: str | None = None,
     ) -> None:
@@ -197,11 +197,11 @@ class DocumentIngestionStoreMethods(PostgresPoolStore):
                     source_content_version,
                     processing_policy_version,
                     outcome_value,
-                    deferred,
+                    is_deferred,
                     failure_stage,
                     failure_detail,
                     active_update,
                     active_update,
-                    deferred,
+                    is_deferred,
                 ),
             )

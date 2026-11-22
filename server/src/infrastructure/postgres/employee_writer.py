@@ -14,8 +14,8 @@ from psycopg_pool import AsyncConnectionPool
 from domain.models.employee import Employee
 from domain.ports.employees.employee_store import (
     EmployeeSyncCounts,
+    EmployeeWriteOutcome,
     EmployeeWriter,
-    WriteEmployeeOutcome,
 )
 
 _EMPLOYEE_FIELDS = (
@@ -65,7 +65,7 @@ async def _employee_transaction(
             _ = await stack.__aexit__(None, None, None)
 
 
-def _values(employee: Employee) -> tuple[object, ...]:
+def _extract_employee_values(employee: Employee) -> tuple[object, ...]:
     employment = employee.employment_details
     details = employee.self_reported_details
     return (
@@ -84,7 +84,7 @@ def _values(employee: Employee) -> tuple[object, ...]:
 
 async def _write_employee_values(
     cursor: AsyncCursor, employee_id: str, values: tuple[object, ...]
-) -> WriteEmployeeOutcome:
+) -> EmployeeWriteOutcome:
     _ = await cursor.execute(
         f"""SELECT is_present, {_EMPLOYEE_COLUMNS}
             FROM user_ms_graph_sources
@@ -94,7 +94,7 @@ async def _write_employee_values(
     )
     current = await cursor.fetchone()
     if current == (True, *values):
-        return WriteEmployeeOutcome.UNCHANGED
+        return EmployeeWriteOutcome.UNCHANGED
 
     _ = await cursor.execute(
         """SELECT GREATEST(
@@ -130,13 +130,13 @@ async def _write_employee_values(
         (employee_id, at, *values),
     )
     return (
-        WriteEmployeeOutcome.CREATED
+        EmployeeWriteOutcome.CREATED
         if current is None
-        else WriteEmployeeOutcome.UPDATED
+        else EmployeeWriteOutcome.UPDATED
     )
 
 
-class EmployeePostgresWriter(EmployeeWriter):
+class EmployeeWriterPostgres(EmployeeWriter):
     def __init__(self, pool: AsyncConnectionPool) -> None:
         self._pool: AsyncConnectionPool = pool
 
@@ -191,8 +191,8 @@ class EmployeePostgresWriter(EmployeeWriter):
     @override
     async def stage_employee(
         self, run_id: UUID, employee: Employee
-    ) -> WriteEmployeeOutcome:
-        values = _values(employee)
+    ) -> EmployeeWriteOutcome:
+        values = _extract_employee_values(employee)
         async with _employee_transaction(self._pool) as (_, cursor):
             _ = await cursor.execute(
                 "SELECT status FROM employee_sync_runs WHERE id = %s FOR UPDATE",
@@ -210,11 +210,11 @@ class EmployeePostgresWriter(EmployeeWriter):
             )
             current = await cursor.fetchone()
             if current is None:
-                outcome = WriteEmployeeOutcome.CREATED
+                outcome = EmployeeWriteOutcome.CREATED
             elif current == (True, *values):
-                outcome = WriteEmployeeOutcome.UNCHANGED
+                outcome = EmployeeWriteOutcome.UNCHANGED
             else:
-                outcome = WriteEmployeeOutcome.UPDATED
+                outcome = EmployeeWriteOutcome.UPDATED
 
             _ = await cursor.execute(
                 f"""INSERT INTO employee_sync_staging (
@@ -261,11 +261,11 @@ class EmployeePostgresWriter(EmployeeWriter):
                     cast(tuple[object, ...], tuple(row[1:])),
                 )
                 match outcome:
-                    case WriteEmployeeOutcome.CREATED:
+                    case EmployeeWriteOutcome.CREATED:
                         created += 1
-                    case WriteEmployeeOutcome.UPDATED:
+                    case EmployeeWriteOutcome.UPDATED:
                         updated += 1
-                    case WriteEmployeeOutcome.UNCHANGED:
+                    case EmployeeWriteOutcome.UNCHANGED:
                         unchanged += 1
 
             _ = await cursor.execute(

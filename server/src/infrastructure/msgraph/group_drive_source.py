@@ -44,7 +44,7 @@ def _parse_page(response: Response) -> GraphResourcePage:
     return GraphResourcePage.model_validate_json(response.content)
 
 
-class MsGraphGroupDriveSource(GroupDriveSource):
+class GroupDriveSourceMsGraph(GroupDriveSource):
     def __init__(self, client: GraphServiceClient) -> None:
         self.client: GraphServiceClient = client
 

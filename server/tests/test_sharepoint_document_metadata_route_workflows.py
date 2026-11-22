@@ -38,7 +38,7 @@ from domain.ports.documents.document_metadata_source import (
 )
 from domain.ports.documents.document_store import (
     DocumentRefreshStore,
-    MetadataIngestRun,
+    MetadataDriveIngestRun,
 )
 from domain.ports.documents.group_drive_source import (
     GroupDriveSource,
@@ -126,7 +126,7 @@ def test_metadata_known_error_subclass_inherits_status_and_hides_traceback(
             drive_id: str,
             selection: MetadataSelection,
             operation_id: UUID | None = None,
-        ) -> MetadataIngestRun:
+        ) -> MetadataDriveIngestRun:
             _ = (principal_id, drive_id, selection, operation_id)
             raise SpecializedRunAlreadyActive("metadata run is already active")
 

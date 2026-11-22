@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from domain.exceptions.metadata_ingest_errors import SourceUnavailable
+from domain.exceptions.metadata_ingest_errors import MetadataSourceUnavailable
 from domain.models.documents.content_version import ContentVersion
 from domain.models.documents.document import (
     Document,
@@ -22,10 +22,10 @@ from domain.ports.documents.document_metadata_source import (
 )
 from domain.ports.documents.document_store import (
     DocumentRefreshStore,
-    MetadataIngestRun,
+    MetadataDriveIngestRun,
 )
 from domain.use_cases.metadata_refresh.drive.refresh import (
-    MetadataIngestDriveRequest,
+    MetadataDriveIngestRequest,
     refresh_drive_metadata_atomically,
 )
 
@@ -84,11 +84,11 @@ class Store:
         drive_id: str,
         selection: MetadataSelection,
         operation_id: UUID | None = None,
-    ) -> MetadataIngestRun:
+    ) -> MetadataDriveIngestRun:
         assert (principal_id, drive_id) == ("operator", "drive")
         self.selection = selection
         _ = operation_id
-        return MetadataIngestRun(uuid4(), self.cursor, True)
+        return MetadataDriveIngestRun(uuid4(), self.cursor, True)
 
     async def stage_document(self, run_id: object, document: Document) -> None:
         _ = run_id
@@ -127,7 +127,7 @@ def test_refresh_publishes_documents_deletions_and_cursor_together() -> None:
             update.document.id.id[1]
             async for update in refresh_drive_metadata_atomically(
                 "operator",
-                MetadataIngestDriveRequest("drive"),
+                MetadataDriveIngestRequest("drive"),
                 cast(DocumentRefreshSource, cast(object, source)),
                 cast(DocumentRefreshStore, cast(object, store)),
             )
@@ -150,13 +150,13 @@ def test_failed_scan_preserves_published_data_and_cursor() -> None:
     async def collect() -> None:
         async for _ in refresh_drive_metadata_atomically(
             "operator",
-            MetadataIngestDriveRequest("drive"),
+            MetadataDriveIngestRequest("drive"),
             cast(DocumentRefreshSource, cast(object, source)),
             cast(DocumentRefreshStore, cast(object, store)),
         ):
             pass
 
-    with pytest.raises(SourceUnavailable):
+    with pytest.raises(MetadataSourceUnavailable):
         asyncio.run(collect())
     assert store.failed
     assert store.cursor == "old-cursor"
@@ -186,13 +186,13 @@ def test_cleanup_failure_is_logged_without_masking_scan_failure(
     async def collect() -> None:
         async for _ in refresh_drive_metadata_atomically(
             "operator",
-            MetadataIngestDriveRequest("drive"),
+            MetadataDriveIngestRequest("drive"),
             cast(DocumentRefreshSource, cast(object, source)),
             cast(DocumentRefreshStore, cast(object, store)),
         ):
             pass
 
-    with pytest.raises(SourceUnavailable, match="source is unavailable"):
+    with pytest.raises(MetadataSourceUnavailable, match="source is unavailable"):
         asyncio.run(collect())
 
     assert store.cleanup_attempted
@@ -209,7 +209,7 @@ def test_path_scope_uses_baseline_even_when_cursor_exists() -> None:
     async def collect() -> None:
         async for _ in refresh_drive_metadata_atomically(
             "operator",
-            MetadataIngestDriveRequest(
+            MetadataDriveIngestRequest(
                 "drive",
                 include_rules=(MetadataPathRule("Reports", ()),),
             ),
@@ -230,7 +230,7 @@ def test_root_extension_filter_reuses_incremental_cursor() -> None:
     async def collect() -> None:
         async for _ in refresh_drive_metadata_atomically(
             "operator",
-            MetadataIngestDriveRequest(
+            MetadataDriveIngestRequest(
                 "drive",
                 include_rules=(MetadataPathRule("", (".PDF",)),),
             ),
@@ -270,7 +270,7 @@ def test_cancelled_refresh_discards_staging_and_preserves_published_catalog() ->
         async def consume() -> None:
             async for _ in refresh_drive_metadata_atomically(
                 "operator",
-                MetadataIngestDriveRequest("drive"),
+                MetadataDriveIngestRequest("drive"),
                 cast(DocumentRefreshSource, cast(object, source)),
                 cast(DocumentRefreshStore, cast(object, store)),
             ):

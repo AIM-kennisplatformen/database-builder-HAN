@@ -7,11 +7,11 @@ class InvalidLimit(DomainError):
     """A sync limit must be a positive number of employees."""
 
 
-class SourceUnavailable(DomainError):
+class EmployeeSourceUnavailable(DomainError):
     """The configured employee source cannot provide a snapshot."""
 
 
-class StoreUnavailable(DomainError):
+class EmployeeStoreUnavailable(DomainError):
     """The employee store could not save the fetched employees."""
 
 

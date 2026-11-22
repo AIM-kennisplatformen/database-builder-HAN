@@ -4,23 +4,23 @@ from domain.exceptions.metadata_ingest_errors import (
     InvalidMetadataSelection,
     MetadataRunAlreadyActive,
     MetadataSourceError,
-    SourceUnavailable,
-    StoreUnavailable,
+    MetadataSourceUnavailable,
+    MetadataStoreUnavailable,
 )
-from domain.use_cases.group_drive_discovery import GroupNotAccessible
-from domain.use_cases.metadata_refresh.group._models import MetadataIngestDriveFailure
+from domain.use_cases.group_drive_discovery import GroupDriveNotAccessible
+from domain.use_cases.metadata_refresh.group._models import MetadataDriveIngestFailure
 
 
 def _failure_cause(exc: Exception, summary: dict[str, object]) -> Exception:
     match exc:
-        case MetadataIngestDriveFailure(drive_id=drive_id, cause=drive_cause):
+        case MetadataDriveIngestFailure(drive_id=drive_id, cause=drive_cause):
             summary["failed_drive_id"] = drive_id
             return drive_cause
         case _ as cause:
             return cause
 
 
-def failure_details(
+def build_failure_details(
     exc: Exception,
     processed_document_count: int,
     skipped_drive_ids: list[str],
@@ -43,16 +43,16 @@ def failure_details(
         case MetadataRunAlreadyActive():
             summary["reason"] = "A metadata run is already active"
             return "metadata.run_already_active", summary
-        case GroupNotAccessible():
+        case GroupDriveNotAccessible():
             summary["reason"] = "Group is not accessible"
             return "metadata.group_not_accessible", summary
         case InvalidMetadataSelection():
             summary["reason"] = "Metadata selection is invalid"
             return "metadata.invalid_selection", summary
-        case SourceUnavailable():
+        case MetadataSourceUnavailable():
             summary["reason"] = "Metadata source is unavailable"
             return "metadata.source_unavailable", summary
-        case StoreUnavailable():
+        case MetadataStoreUnavailable():
             summary["reason"] = "Metadata store is unavailable"
             return "metadata.store_unavailable", summary
         case _:

@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from api.errors import PublicError, internal_error, log_api_failure
+from api.errors import PublicError, build_internal_error, log_api_failure
 from config import config
 from dependencies import (
     get_current_graph_user_id,
@@ -25,7 +25,7 @@ from domain.exceptions.ubwfris_ingest_errors import (
     DuplicateUpload,
     InvalidWorkbook,
     ParserFailure,
-    StoreUnavailable,
+    UbwfrisStoreUnavailable,
 )
 from domain.models.ubwfris import (
     IbRow,
@@ -99,11 +99,11 @@ class UbwfrisErrorMapper:
             )
         if isinstance(exc, ParserFailure):
             return PublicError("ubwfris.parser_failure", 500, "Workbook parsing failed")
-        if isinstance(exc, StoreUnavailable):
+        if isinstance(exc, UbwfrisStoreUnavailable):
             return PublicError(
                 "ubwfris.store_unavailable", 503, "UBWFRIS store is unavailable"
             )
-        return internal_error()
+        return build_internal_error()
 
 
 async def _upload_ubwfris_workbook[T: UbwfrisRow](
@@ -178,7 +178,7 @@ async def _upload_ubwfris_workbook[T: UbwfrisRow](
         total_rows=result.total_rows,
         processed_rows=result.processed_rows,
         created_rows=result.created_rows,
-        invalid_rows=result.invalid_rows,
+        invalid_rows=result.invalid_row_count,
         invalid_row_numbers=list(result.invalid_row_numbers),
     )
 

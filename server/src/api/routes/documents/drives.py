@@ -8,7 +8,7 @@ from api.errors import PublicError, log_api_failure
 from api.routes.documents.error_mapping import MetadataErrorMapper
 from dependencies import get_current_graph_user_id, get_group_drive_source
 from domain.ports.documents.group_drive_source import GroupDriveSource
-from domain.use_cases.group_drive_discovery import get_user_group_drives
+from domain.use_cases.group_drive_discovery import list_user_group_drives
 
 router = APIRouter()
 
@@ -41,7 +41,7 @@ async def get_group_drives_endpoint(
     source: Annotated[GroupDriveSource, Depends(get_group_drive_source)],
 ) -> list[GroupDrivesResponse] | JSONResponse:
     try:
-        groups = await get_user_group_drives(user_id, source)
+        groups = await list_user_group_drives(user_id, source)
     except Exception as exc:  # noqa: BLE001 - map all discovery failures to safe HTTP errors
         public_error = MetadataErrorMapper.describe(exc)
         log_api_failure(

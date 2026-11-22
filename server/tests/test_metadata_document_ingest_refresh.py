@@ -25,8 +25,8 @@ from domain.use_cases.metadata_refresh import (
     MetadataDriveFilesSelected,
     MetadataDrivePublished,
     MetadataDriveRefreshFailure,
-    MetadataIngestRequest,
-    MetadataIngestStarted,
+    MetadataGroupIngestRequest,
+    MetadataGroupIngestStarted,
     MetadataRefreshRunResult,
 )
 from domain.use_cases.metadata_refresh.group.per_drive import (
@@ -45,13 +45,13 @@ def test_combined_refresh_publishes_success_and_records_partial_drive_outcomes()
         return [
             event
             async for event in refresh_group_metadata_per_drive(
-                "user", MetadataIngestRequest("group"), groups, source, store
+                "user", MetadataGroupIngestRequest("group"), groups, source, store
             )
         ]
 
     events = asyncio.run(collect())
 
-    assert isinstance(events[0], MetadataIngestStarted)
+    assert isinstance(events[0], MetadataGroupIngestStarted)
     published = [event for event in events if isinstance(event, MetadataDrivePublished)]
     failures = [
         event for event in events if isinstance(event, MetadataDriveRefreshFailure)

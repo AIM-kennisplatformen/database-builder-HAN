@@ -20,7 +20,7 @@ from domain.models.documents.metadata_selection import (
 )
 from domain.ports.documents.document_metadata_source import DocumentMetadataScan
 from infrastructure.msgraph.base import raise_for_graph_error, validate_graph_url
-from infrastructure.msgraph.document_metadata_models import (
+from infrastructure.msgraph.document_metadata.models import (
     GraphDeltaPage,
     GraphDriveItem,
 )
@@ -72,7 +72,7 @@ class _DocumentMetadataScan:
     path_scoped: bool
     capture_paths: bool
     root_id: str | None
-    rule_folder_ids: dict[str, str]
+    rule_resolve_folder_ids: dict[str, str]
 
     def __init__(
         self,
@@ -93,7 +93,7 @@ class _DocumentMetadataScan:
         )
         self.capture_paths = self.path_scoped or capture_relative_paths
         self.root_id = None
-        self.rule_folder_ids = {}
+        self.rule_resolve_folder_ids = {}
 
     async def run(self) -> DocumentMetadataScan:
         await self._resolve_path_scope()
@@ -128,7 +128,7 @@ class _DocumentMetadataScan:
                 if rule.path
             }
             for path in paths:
-                self.rule_folder_ids[path] = await self.source.folder_id(
+                self.rule_resolve_folder_ids[path] = await self.source.folder_id(
                     self.drive_id, path, self.root_item_id
                 )
 
@@ -289,7 +289,7 @@ class _DocumentMetadataScan:
         candidates: list[tuple[int, bool]],
     ) -> None:
         for rule in rules:
-            rule_id = self.rule_folder_ids.get(rule.path, self.root_id)
+            rule_id = self.rule_resolve_folder_ids.get(rule.path, self.root_id)
             if rule_id is not None and rule_id not in ancestors:
                 continue
             if rule.extensions and extension not in rule.extensions:

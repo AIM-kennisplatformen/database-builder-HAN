@@ -9,8 +9,8 @@ from domain.exceptions.metadata_ingest_errors import (
     InvalidMetadataSelection,
     MetadataRunAlreadyActive,
     MetadataSourceError,
-    SourceUnavailable,
-    StoreUnavailable,
+    MetadataSourceUnavailable,
+    MetadataStoreUnavailable,
 )
 from domain.models.documents.document import Document
 from domain.models.documents.metadata_selection import (
@@ -24,15 +24,15 @@ from domain.ports.documents.document_metadata_source import (
 )
 from domain.ports.documents.document_store import (
     DocumentRefreshStore,
-    MetadataIngestRun,
-    MetadataRunPublication,
+    MetadataDriveIngestRun,
+    MetadataDriveRunPublication,
 )
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class MetadataIngestDriveRequest:
+class MetadataDriveIngestRequest:
     drive_id: str
     include_rules: tuple[MetadataPathRule, ...] = ()
     exclude_rules: tuple[MetadataPathRule, ...] = ()
@@ -58,22 +58,22 @@ class MetadataIngestDriveRequest:
 
 
 @dataclass(frozen=True)
-class MetadataIngestDriveProgress:
+class MetadataDriveIngestProgress:
     document: Document
     total: int
     available: int
 
 
 @dataclass(frozen=True)
-class MetadataIngestPrepared:
-    publication: MetadataRunPublication
+class MetadataDriveIngestPrepared:
+    publication: MetadataDriveRunPublication
 
 
 async def _begin_metadata_run(
     store: DocumentRefreshStore,
     principal_id: str,
-    req: MetadataIngestDriveRequest,
-) -> MetadataIngestRun:
+    req: MetadataDriveIngestRequest,
+) -> MetadataDriveIngestRun:
     selection = MetadataSelection(req.include_rules, req.exclude_rules)
     try:
         return await store.begin_metadata_run(
@@ -82,12 +82,12 @@ async def _begin_metadata_run(
     except MetadataRunAlreadyActive:
         raise
     except Exception as exc:
-        raise StoreUnavailable("Document metadata store is unavailable") from exc
+        raise MetadataStoreUnavailable("Document metadata store is unavailable") from exc
 
 
 async def _scan_metadata_source(
     source: DocumentRefreshSource,
-    req: MetadataIngestDriveRequest,
+    req: MetadataDriveIngestRequest,
     cursor: str | None,
     capture_relative_paths: bool = False,
 ) -> DocumentMetadataScan:
@@ -114,7 +114,7 @@ async def _scan_metadata_source(
     except MetadataSourceError:
         raise
     except Exception as exc:
-        raise SourceUnavailable("Document metadata source is unavailable") from exc
+        raise MetadataSourceUnavailable("Document metadata source is unavailable") from exc
 
 
 async def _stage_document(
@@ -123,7 +123,7 @@ async def _stage_document(
     try:
         await store.stage_document(run_id, document)
     except Exception as exc:
-        raise StoreUnavailable("Document metadata store is unavailable") from exc
+        raise MetadataStoreUnavailable("Document metadata store is unavailable") from exc
 
 
 async def _stage_deleted_item(
@@ -132,22 +132,22 @@ async def _stage_deleted_item(
     try:
         await store.stage_deleted_item(run_id, item_id)
     except Exception as exc:
-        raise StoreUnavailable("Document metadata store is unavailable") from exc
+        raise MetadataStoreUnavailable("Document metadata store is unavailable") from exc
 
 
 async def publish_metadata_runs(
     store: DocumentRefreshStore,
-    publications: tuple[MetadataRunPublication, ...],
+    publications: tuple[MetadataDriveRunPublication, ...],
 ) -> None:
     try:
         await store.publish_metadata_runs(publications)
     except Exception as exc:
-        raise StoreUnavailable("Document metadata store is unavailable") from exc
+        raise MetadataStoreUnavailable("Document metadata store is unavailable") from exc
 
 
 async def _publish_metadata_run(
     store: DocumentRefreshStore,
-    publication: MetadataRunPublication,
+    publication: MetadataDriveRunPublication,
 ) -> None:
     try:
         await store.publish_metadata_run(
@@ -157,19 +157,19 @@ async def _publish_metadata_run(
             publication.reconcile,
         )
     except Exception as exc:
-        raise StoreUnavailable("Document metadata store is unavailable") from exc
+        raise MetadataStoreUnavailable("Document metadata store is unavailable") from exc
 
 
 async def _stage_metadata(
     store: DocumentRefreshStore,
     run_id: UUID,
     scan: DocumentMetadataScan,
-) -> AsyncGenerator[MetadataIngestDriveProgress]:
+) -> AsyncGenerator[MetadataDriveIngestProgress]:
     """Stage a completed scan and stream progress as each document is staged."""
     total = len(scan.documents)
     for document in scan.documents:
         await _stage_document(store, run_id, document)
-        yield MetadataIngestDriveProgress(document, total, total)
+        yield MetadataDriveIngestProgress(document, total, total)
     for item_id in scan.deleted_item_ids:
         await _stage_deleted_item(store, run_id, item_id)
 
@@ -197,14 +197,14 @@ async def discard_metadata_runs(
 
 async def stage_metadata_refresh(
     principal_id: str,
-    req: MetadataIngestDriveRequest,
+    req: MetadataDriveIngestRequest,
     source: DocumentRefreshSource,
     store: DocumentRefreshStore,
     *,
     capture_relative_paths: bool = False,
-) -> AsyncGenerator[MetadataIngestDriveProgress | MetadataIngestPrepared]:
+) -> AsyncGenerator[MetadataDriveIngestProgress | MetadataDriveIngestPrepared]:
     """Scan and stage one drive without publishing it."""
-    run: MetadataIngestRun | None = None
+    run: MetadataDriveIngestRun | None = None
     with anyio.CancelScope(shield=True):
         run = await _begin_metadata_run(store, principal_id, req)
     assert run is not None
@@ -219,8 +219,8 @@ async def stage_metadata_refresh(
         finally:
             with anyio.CancelScope(shield=True):
                 await staged_document_events.aclose()
-        yield MetadataIngestPrepared(
-            MetadataRunPublication(
+        yield MetadataDriveIngestPrepared(
+            MetadataDriveRunPublication(
                 run.id, scan.delta_link, scan.baseline, run.same_selection
             )
         )
@@ -231,20 +231,20 @@ async def stage_metadata_refresh(
 
 async def refresh_drive_metadata_atomically(
     principal_id: str,
-    req: MetadataIngestDriveRequest,
+    req: MetadataDriveIngestRequest,
     source: DocumentRefreshSource,
     store: DocumentRefreshStore,
-) -> AsyncGenerator[MetadataIngestDriveProgress]:
+) -> AsyncGenerator[MetadataDriveIngestProgress]:
     """Scan, stage, then publish one drive's metadata and cursor atomically."""
-    publication: MetadataRunPublication | None = None
+    publication: MetadataDriveRunPublication | None = None
     try:
         preparation_events = stage_metadata_refresh(principal_id, req, source, store)
         try:
             async for preparation_event in preparation_events:
                 match preparation_event:
-                    case MetadataIngestPrepared(publication=prepared_publication):
+                    case MetadataDriveIngestPrepared(publication=prepared_publication):
                         publication = prepared_publication
-                    case MetadataIngestDriveProgress():
+                    case MetadataDriveIngestProgress():
                         yield preparation_event
         finally:
             with anyio.CancelScope(shield=True):

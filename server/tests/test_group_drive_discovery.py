@@ -20,11 +20,11 @@ from domain.ports.documents.group_drive_source import (
     UserGroup,
 )
 from domain.use_cases.group_drive_discovery import (
-    GroupNotAccessible,
-    get_group_drives,
-    get_user_groups,
+    GroupDriveNotAccessible,
+    list_group_drives,
+    list_user_groups,
 )
-from infrastructure.msgraph.group_drive_source import MsGraphGroupDriveSource
+from infrastructure.msgraph.group_drive_source import GroupDriveSourceMsGraph
 
 
 class FakeGroupDriveSource:
@@ -61,16 +61,16 @@ class FakeGroupDriveSource:
 
 def test_use_cases_deduplicate_groups_and_list_only_requested_group_drives() -> None:
     source = FakeGroupDriveSource()
-    groups = asyncio.run(get_user_groups("user", source))
+    groups = asyncio.run(list_user_groups("user", source))
     assert [(group.id, group.name) for group in groups] == [
         ("group-a", "Research"),
         ("group-b", "Teaching"),
         ("group-c", "No drive"),
     ]
-    group = asyncio.run(get_group_drives("user", "group-a", source))
+    group = asyncio.run(list_group_drives("user", "group-a", source))
     assert group.drive_ids == ("drive-1", "drive-2", "private-drive")
-    with pytest.raises(GroupNotAccessible):
-        asyncio.run(get_group_drives("user", "unknown", source))
+    with pytest.raises(GroupDriveNotAccessible):
+        asyncio.run(list_group_drives("user", "unknown", source))
 
 
 def test_graph_source_follows_membership_and_drive_pages() -> None:
@@ -116,9 +116,9 @@ def test_graph_source_follows_membership_and_drive_pages() -> None:
     client.teams.by_team_id.return_value.channels.with_url.return_value.get = AsyncMock(
         return_value=Response(200, json={"value": []})
     )
-    source = MsGraphGroupDriveSource(cast(GraphServiceClient, client))
+    source = GroupDriveSourceMsGraph(cast(GraphServiceClient, client))
 
-    group = asyncio.run(get_group_drives("user", "group", source))
+    group = asyncio.run(list_group_drives("user", "group", source))
 
     assert group.group_id == "group"
     assert group.group_name == "Research"
@@ -161,7 +161,7 @@ def test_graph_source_omits_drives_that_reject_delta_access() -> None:
     client.teams.by_team_id.return_value.channels.with_url.return_value.get = AsyncMock(
         return_value=Response(200, json={"value": []})
     )
-    source = MsGraphGroupDriveSource(cast(GraphServiceClient, client))
+    source = GroupDriveSourceMsGraph(cast(GraphServiceClient, client))
 
     async def collect() -> list[str]:
         return [drive_id async for drive_id in source.stream_group_drive_ids("group")]
@@ -181,7 +181,7 @@ def test_graph_source_reports_drive_probe_server_failure() -> None:
     client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta.with_url.return_value.get = AsyncMock(
         return_value=Response(503, json={"error": {"message": "Graph unavailable"}})
     )
-    source = MsGraphGroupDriveSource(cast(GraphServiceClient, client))
+    source = GroupDriveSourceMsGraph(cast(GraphServiceClient, client))
 
     async def collect() -> list[str]:
         return [drive_id async for drive_id in source.stream_group_drive_ids("group")]
@@ -249,7 +249,7 @@ def test_graph_source_discovers_private_channel_drive_across_pages() -> None:
     )
     client.teams.by_team_id.return_value.channels = channels
     client.teams.by_team_id.return_value.channels.by_channel_id.return_value.files_folder = folder
-    source = MsGraphGroupDriveSource(cast(GraphServiceClient, client))
+    source = GroupDriveSourceMsGraph(cast(GraphServiceClient, client))
 
     async def collect() -> list[GroupDriveLocation]:
         return [
@@ -308,7 +308,7 @@ def test_private_channel_drive_is_kept_without_a_drive_root_probe() -> None:
     client.drives.by_drive_id.return_value.with_url.return_value.get = AsyncMock(
         return_value=Response(403, json={"error": {"code": "accessDenied"}})
     )
-    source = MsGraphGroupDriveSource(cast(GraphServiceClient, client))
+    source = GroupDriveSourceMsGraph(cast(GraphServiceClient, client))
 
     async def collect() -> list[GroupDriveLocation]:
         return [
@@ -343,7 +343,7 @@ def test_graph_source_skips_inaccessible_channel_folder() -> None:
     )
     client.teams.by_team_id.return_value.channels = channels
     client.teams.by_team_id.return_value.channels.by_channel_id.return_value.files_folder = folder
-    source = MsGraphGroupDriveSource(cast(GraphServiceClient, client))
+    source = GroupDriveSourceMsGraph(cast(GraphServiceClient, client))
 
     async def collect() -> list[str]:
         return [drive_id async for drive_id in source.stream_group_drive_ids("team")]
@@ -475,7 +475,7 @@ def test_group_without_drive_is_skipped() -> None:
     client.teams.by_team_id.return_value.channels.with_url.return_value.get = AsyncMock(
         return_value=Response(404, json={"error": {"code": "itemNotFound"}})
     )
-    source = MsGraphGroupDriveSource(cast(GraphServiceClient, client))
+    source = GroupDriveSourceMsGraph(cast(GraphServiceClient, client))
 
     async def collect() -> list[str]:
         return [drive_id async for drive_id in source.stream_group_drive_ids("group")]

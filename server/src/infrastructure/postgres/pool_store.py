@@ -3,6 +3,6 @@
 from psycopg_pool import AsyncConnectionPool
 
 
-class PostgresPoolStore:
+class PoolStorePostgres:
     def __init__(self, pool: AsyncConnectionPool) -> None:
         self._pool: AsyncConnectionPool = pool

@@ -5,27 +5,27 @@ from uuid import UUID
 import anyio
 
 from domain.exceptions.employee_sync_errors import (
+    EmployeeSourceUnavailable,
+    EmployeeStoreUnavailable,
     InvalidLimit,
     NoEmployeesFound,
-    SourceUnavailable,
-    StoreUnavailable,
 )
 from domain.models.employee import Employee
 from domain.ports.employees.employee_source import EmployeeSource, EmployeeStreamItem
 from domain.ports.employees.employee_store import (
     EmployeeSyncCounts,
+    EmployeeWriteOutcome,
     EmployeeWriter,
-    WriteEmployeeOutcome,
 )
 
 
 @dataclass(frozen=True)
-class EmployeesSyncRequest:
+class EmployeeSyncRequest:
     limit: int | None = None
 
 
 @dataclass(frozen=True)
-class EmployeesSyncProgress:
+class EmployeeSyncProgress:
     total: int
     available: int
     created: int
@@ -39,12 +39,12 @@ class EmployeesSyncProgress:
 
 
 @dataclass(frozen=True)
-class EmployeesSyncStarted:
+class EmployeeSyncStarted:
     operation_id: UUID
 
 
 @dataclass(frozen=True)
-class EmployeesSyncResult:
+class EmployeeSyncResult:
     total: int | None
     available: int
     created: int
@@ -65,7 +65,7 @@ async def _stream_employee_source(
         async for item in updates:
             yield item
     except Exception as exc:
-        raise SourceUnavailable("Employee source is unavailable") from exc
+        raise EmployeeSourceUnavailable("Employee source is unavailable") from exc
     finally:
         close = getattr(updates, "aclose", None)
         if close is not None:
@@ -75,11 +75,11 @@ async def _stream_employee_source(
 
 async def _write_employee(
     store: EmployeeWriter, run_id: UUID, employee: Employee
-) -> WriteEmployeeOutcome:
+) -> EmployeeWriteOutcome:
     try:
         return await store.stage_employee(run_id, employee)
     except Exception as exc:
-        raise StoreUnavailable("Employee store is unavailable") from exc
+        raise EmployeeStoreUnavailable("Employee store is unavailable") from exc
 
 
 async def _begin_sync(store: EmployeeWriter, principal_id: str) -> UUID:
@@ -88,7 +88,7 @@ async def _begin_sync(store: EmployeeWriter, principal_id: str) -> UUID:
         try:
             run_id = await store.begin_sync(principal_id)
         except Exception as exc:
-            raise StoreUnavailable("Employee store is unavailable") from exc
+            raise EmployeeStoreUnavailable("Employee store is unavailable") from exc
     if run_id is None:
         raise RuntimeError("Employee sync run was not created")
     return run_id
@@ -98,7 +98,7 @@ async def _publish_sync(store: EmployeeWriter, run_id: UUID) -> EmployeeSyncCoun
     try:
         return await store.publish_sync(run_id)
     except Exception as exc:
-        raise StoreUnavailable("Employee store is unavailable") from exc
+        raise EmployeeStoreUnavailable("Employee store is unavailable") from exc
 
 
 async def _discard_sync(
@@ -117,15 +117,15 @@ async def _discard_sync(
             summary=summary,
         )
     except Exception as exc:
-        raise StoreUnavailable("Employee store is unavailable") from exc
+        raise EmployeeStoreUnavailable("Employee store is unavailable") from exc
 
 
 async def sync_employees(
-    req: EmployeesSyncRequest,
+    req: EmployeeSyncRequest,
     source: EmployeeSource,
     store: EmployeeWriter,
     principal_id: str,
-) -> AsyncGenerator[EmployeesSyncStarted | EmployeesSyncProgress | EmployeesSyncResult]:
+) -> AsyncGenerator[EmployeeSyncStarted | EmployeeSyncProgress | EmployeeSyncResult]:
     if req.limit is not None and req.limit <= 0:
         raise InvalidLimit("Employee sync limit must be positive")
 
@@ -142,18 +142,18 @@ async def sync_employees(
     failure_reason = "Employee sync failed"
     updates = _stream_employee_source(source, req.limit)
     try:
-        yield EmployeesSyncStarted(run_id)
+        yield EmployeeSyncStarted(run_id)
         async for item in updates:
             total = item.total
             available = item.available
             match await _write_employee(store, run_id, item.employee):
-                case WriteEmployeeOutcome.CREATED:
+                case EmployeeWriteOutcome.CREATED:
                     created += 1
-                case WriteEmployeeOutcome.UPDATED:
+                case EmployeeWriteOutcome.UPDATED:
                     updated += 1
-                case WriteEmployeeOutcome.UNCHANGED:
+                case EmployeeWriteOutcome.UNCHANGED:
                     unchanged += 1
-            yield EmployeesSyncProgress(
+            yield EmployeeSyncProgress(
                 total=item.total,
                 available=item.available,
                 created=created,
@@ -167,7 +167,7 @@ async def sync_employees(
 
         counts = await _publish_sync(store, run_id)
         published = True
-        yield EmployeesSyncResult(
+        yield EmployeeSyncResult(
             total,
             available,
             counts.created,
@@ -183,10 +183,10 @@ async def sync_employees(
         elif isinstance(exc, NoEmployeesFound):
             failure_code = "employee.no_employees"
             failure_reason = "No employees were found"
-        elif isinstance(exc, SourceUnavailable):
+        elif isinstance(exc, EmployeeSourceUnavailable):
             failure_code = "employee.source_unavailable"
             failure_reason = "Employee source is unavailable"
-        elif isinstance(exc, StoreUnavailable):
+        elif isinstance(exc, EmployeeStoreUnavailable):
             failure_code = "employee.store_unavailable"
             failure_reason = "Employee store is unavailable"
         raise

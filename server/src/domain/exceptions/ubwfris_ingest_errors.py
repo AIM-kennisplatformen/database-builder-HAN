@@ -6,7 +6,7 @@ from domain.exceptions.error import DomainError
 class InvalidWorkbook(DomainError):
     """The upload cannot be interpreted as the specified UBWFRIS format."""
 
-    invalid_rows: int
+    invalid_row_count: int
     invalid_row_numbers: tuple[int, ...]
 
     def __init__(
@@ -14,14 +14,14 @@ class InvalidWorkbook(DomainError):
     ) -> None:
         super().__init__(message)
         self.invalid_row_numbers = invalid_row_numbers
-        self.invalid_rows = len(invalid_row_numbers)
+        self.invalid_row_count = len(invalid_row_numbers)
 
 
 class DuplicateUpload(DomainError):
     """The uploaded bytes were previously imported for this format."""
 
 
-class StoreUnavailable(DomainError):
+class UbwfrisStoreUnavailable(DomainError):
     """The UBWFRIS store cannot complete an ingest."""
 
 

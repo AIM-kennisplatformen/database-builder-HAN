@@ -6,8 +6,8 @@ from httpx import Response
 from msgraph.graph_service_client import GraphServiceClient
 from sharepoint_document_metadata_test_support import selection
 
-from infrastructure.msgraph.document_metadata_source import (
-    SharePointDocumentMetadataSource,
+from infrastructure.msgraph.document_metadata.source import (
+    DocumentMetadataSourceSharePoint,
 )
 
 
@@ -29,7 +29,7 @@ def test_incremental_scan_uses_cursor_and_reports_deleted_items() -> None:
     client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
         delta
     )
-    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    source = DocumentMetadataSourceSharePoint(cast(GraphServiceClient, client))
     old_cursor = "https://graph.microsoft.com/v1.0/old-cursor"
 
     scan = asyncio.run(source.scan_metadata("drive", selection(), "root", old_cursor))
@@ -60,7 +60,7 @@ def test_incremental_scan_marks_file_renamed_out_of_selected_extension_invisible
     client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
         delta
     )
-    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    source = DocumentMetadataSourceSharePoint(cast(GraphServiceClient, client))
 
     scan = asyncio.run(
         source.scan_metadata(
@@ -100,7 +100,7 @@ def test_incremental_scan_uses_last_matching_entry_for_same_file() -> None:
     client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
         delta
     )
-    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    source = DocumentMetadataSourceSharePoint(cast(GraphServiceClient, client))
 
     scan = asyncio.run(
         source.scan_metadata(
@@ -131,7 +131,7 @@ def test_baseline_scan_does_not_mark_unselected_extension_invisible() -> None:
     client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
         delta
     )
-    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    source = DocumentMetadataSourceSharePoint(cast(GraphServiceClient, client))
 
     scan = asyncio.run(source.scan_metadata("drive", selection(extensions=["pdf"])))
 
@@ -158,7 +158,7 @@ def test_expired_cursor_restarts_full_baseline() -> None:
     client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
         delta
     )
-    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    source = DocumentMetadataSourceSharePoint(cast(GraphServiceClient, client))
 
     scan = asyncio.run(
         source.scan_metadata(
@@ -218,7 +218,7 @@ def test_stream_metadata_follows_pages_and_maps_matching_files() -> None:
     client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
         delta
     )
-    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    source = DocumentMetadataSourceSharePoint(cast(GraphServiceClient, client))
 
     async def collect():
         return [

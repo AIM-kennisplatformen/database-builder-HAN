@@ -68,7 +68,7 @@ GRAPH_EMPLOYEE_PROFILE_FIELDS = (
 )
 
 
-class MsGraphEmployeeSource(EmployeeSource):
+class EmployeeSourceMsGraph(EmployeeSource):
     def __init__(self, client: GraphServiceClient, group_id: str) -> None:
         self.client: GraphServiceClient = client
         self.group_id: str = group_id

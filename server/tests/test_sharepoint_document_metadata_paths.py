@@ -14,8 +14,8 @@ from domain.models.documents.metadata_selection import (
 from domain.ports.documents.document_metadata_source import (
     DocumentMetadataItem,
 )
-from infrastructure.msgraph.document_metadata_source import (
-    SharePointDocumentMetadataSource,
+from infrastructure.msgraph.document_metadata.source import (
+    DocumentMetadataSourceSharePoint,
 )
 
 
@@ -73,7 +73,7 @@ def test_stream_metadata_scopes_to_folder_and_accepts_all_file_types() -> None:
     client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
         delta
     )
-    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    source = DocumentMetadataSourceSharePoint(cast(GraphServiceClient, client))
 
     async def collect() -> list[DocumentMetadataItem]:
         return [
@@ -133,7 +133,7 @@ def test_selection_path_matches_graph_folder_name_case_insensitively() -> None:
     client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
         delta
     )
-    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    source = DocumentMetadataSourceSharePoint(cast(GraphServiceClient, client))
     selection = MetadataSelection(
         include_rules=(MetadataPathRule("research", ("pdf",)),),
         exclude_rules=(),
@@ -197,7 +197,7 @@ def test_path_scoped_scan_records_nested_relative_path_and_resolves_missing_fold
     )
     client = MagicMock()
     client.drives.by_drive_id.return_value = drive
-    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    source = DocumentMetadataSourceSharePoint(cast(GraphServiceClient, client))
 
     scan = asyncio.run(
         source.scan_metadata(
@@ -248,7 +248,7 @@ def test_capture_relative_paths_keeps_broad_selection_and_records_folder_path() 
     client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
         delta
     )
-    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    source = DocumentMetadataSourceSharePoint(cast(GraphServiceClient, client))
 
     scan = asyncio.run(
         source.scan_metadata(
@@ -352,7 +352,7 @@ def test_stream_metadata_excludes_nested_folders_and_deduplicates_includes() -> 
     client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
         delta
     )
-    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    source = DocumentMetadataSourceSharePoint(cast(GraphServiceClient, client))
 
     async def collect() -> list[DocumentMetadataItem]:
         return [

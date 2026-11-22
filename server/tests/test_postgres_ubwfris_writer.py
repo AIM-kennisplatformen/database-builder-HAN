@@ -12,8 +12,8 @@ from psycopg_pool import AsyncConnectionPool
 
 from domain.models.ubwfris import IbRow, RhaRow
 from infrastructure.postgres.ubwfris_writer import (
-    PostgresIbWriter,
-    PostgresRhaWriter,
+    IbWriterPostgres,
+    RhaWriterPostgres,
     interrupt_ubwfris_snapshots,
 )
 
@@ -83,9 +83,9 @@ def test_complete_snapshot_marks_running_snapshot_complete(
     pool.connection.return_value.__aenter__.return_value = connection
 
     if row_type == "ib":
-        writer = PostgresIbWriter(cast(AsyncConnectionPool, pool))
+        writer = IbWriterPostgres(cast(AsyncConnectionPool, pool))
     else:
-        writer = PostgresRhaWriter(cast(AsyncConnectionPool, pool))
+        writer = RhaWriterPostgres(cast(AsyncConnectionPool, pool))
     asyncio.run(writer.publish_snapshot("snapshot", uuid4(), {"created_rows": 1}))
 
     statements = [args.args[0] for args in connection.execute.await_args_list]
@@ -120,10 +120,10 @@ def test_row_writes_copy_to_staging_tables(row_type: str) -> None:
     pool.connection = MagicMock(side_effect=lambda: _async_resource(connection))
 
     if row_type == "ib":
-        writer = PostgresIbWriter(cast(AsyncConnectionPool, pool))
+        writer = IbWriterPostgres(cast(AsyncConnectionPool, pool))
         result = asyncio.run(writer.stage_ubwfris_rows("snapshot", [_ib_row()]))
     else:
-        writer = PostgresRhaWriter(cast(AsyncConnectionPool, pool))
+        writer = RhaWriterPostgres(cast(AsyncConnectionPool, pool))
         result = asyncio.run(writer.stage_ubwfris_rows("snapshot", [_rha_row()]))
 
     query = cursor.copy.call_args.args[0]
@@ -162,7 +162,7 @@ def test_discard_preserves_completed_snapshot() -> None:
     pool.connection.return_value.__aenter__.return_value = connection
 
     asyncio.run(
-        PostgresIbWriter(cast(AsyncConnectionPool, pool)).discard_snapshot("snapshot")
+        IbWriterPostgres(cast(AsyncConnectionPool, pool)).discard_snapshot("snapshot")
     )
 
     assert connection.execute.await_count == 1

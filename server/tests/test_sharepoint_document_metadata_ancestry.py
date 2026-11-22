@@ -10,8 +10,8 @@ from sharepoint_document_metadata_test_support import selection
 from domain.ports.documents.document_metadata_source import (
     DocumentMetadataItem,
 )
-from infrastructure.msgraph.document_metadata_source import (
-    SharePointDocumentMetadataSource,
+from infrastructure.msgraph.document_metadata.source import (
+    DocumentMetadataSourceSharePoint,
 )
 
 
@@ -52,7 +52,7 @@ def test_stream_metadata_exclusion_keeps_root_level_files() -> None:
     client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
         delta
     )
-    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    source = DocumentMetadataSourceSharePoint(cast(GraphServiceClient, client))
 
     async def collect() -> list[DocumentMetadataItem]:
         return [
@@ -107,7 +107,7 @@ def test_stream_metadata_rejects_incomplete_folder_ancestry(
     client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
         delta
     )
-    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    source = DocumentMetadataSourceSharePoint(cast(GraphServiceClient, client))
 
     async def collect() -> list[DocumentMetadataItem]:
         return [
@@ -175,7 +175,7 @@ def test_stream_metadata_uses_latest_parent_for_repeated_folder() -> None:
     client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
         delta
     )
-    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    source = DocumentMetadataSourceSharePoint(cast(GraphServiceClient, client))
 
     async def collect() -> list[DocumentMetadataItem]:
         return [
@@ -223,7 +223,7 @@ def test_stream_metadata_scans_from_channel_folder_root() -> None:
     client.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.delta = (
         delta
     )
-    source = SharePointDocumentMetadataSource(cast(GraphServiceClient, client))
+    source = DocumentMetadataSourceSharePoint(cast(GraphServiceClient, client))
 
     async def collect() -> list[DocumentMetadataItem]:
         return [

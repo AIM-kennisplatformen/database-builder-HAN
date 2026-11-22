@@ -21,7 +21,7 @@ class UbwfrisIngestProgress:
     total_rows: int
     processed_rows: int
     created_rows: int
-    invalid_rows: int
+    invalid_row_count: int
 
 
 class UbwfrisIngestStatus(StrEnum):
@@ -35,7 +35,7 @@ class UbwfrisIngestResult:
     total_rows: int
     processed_rows: int
     created_rows: int
-    invalid_rows: int
+    invalid_row_count: int
     invalid_row_numbers: tuple[int, ...]
     error: str | None = None
 

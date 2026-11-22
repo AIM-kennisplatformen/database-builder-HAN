@@ -1,21 +1,21 @@
 """Public error mappings shared by document metadata endpoints."""
 
-from api.errors import PublicError, internal_error
+from api.errors import PublicError, build_internal_error
 from domain.exceptions.metadata_ingest_errors import (
     InvalidMetadataSelection,
     MetadataRunAlreadyActive,
     MetadataSourceError,
-    SourceUnavailable,
-    StoreUnavailable,
+    MetadataSourceUnavailable,
+    MetadataStoreUnavailable,
 )
-from domain.use_cases.group_drive_discovery import GroupNotAccessible
-from domain.use_cases.metadata_refresh import MetadataIngestDriveFailure
+from domain.use_cases.group_drive_discovery import GroupDriveNotAccessible
+from domain.use_cases.metadata_refresh import MetadataDriveIngestFailure
 
 
 class MetadataErrorMapper:
     @staticmethod
     def describe(exc: Exception) -> PublicError:
-        if isinstance(exc, MetadataIngestDriveFailure):
+        if isinstance(exc, MetadataDriveIngestFailure):
             exc = exc.cause
         if isinstance(exc, MetadataSourceError):
             if exc.status_code in (403, 404):
@@ -31,18 +31,18 @@ class MetadataErrorMapper:
             return PublicError(
                 "metadata.run_already_active", 409, "A metadata run is already active"
             )
-        if isinstance(exc, GroupNotAccessible):
+        if isinstance(exc, GroupDriveNotAccessible):
             return PublicError(
                 "metadata.group_not_accessible", 404, "Group is not accessible"
             )
         if isinstance(exc, InvalidMetadataSelection):
             return PublicError("metadata.invalid_selection", 422, str(exc))
-        if isinstance(exc, SourceUnavailable):
+        if isinstance(exc, MetadataSourceUnavailable):
             return PublicError(
                 "metadata.source_unavailable", 503, "Metadata source is unavailable"
             )
-        if isinstance(exc, StoreUnavailable):
+        if isinstance(exc, MetadataStoreUnavailable):
             return PublicError(
                 "metadata.store_unavailable", 503, "Metadata store is unavailable"
             )
-        return internal_error()
+        return build_internal_error()

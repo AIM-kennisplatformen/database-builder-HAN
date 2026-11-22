@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from api.errors import (
     PublicError,
-    internal_error,
+    build_internal_error,
     log_api_failure,
     log_missing_outcome,
 )
@@ -24,18 +24,18 @@ from dependencies import (
     require_employee_delete_enabled,
 )
 from domain.exceptions.employee_sync_errors import (
+    EmployeeSourceUnavailable,
+    EmployeeStoreUnavailable,
     InvalidLimit,
     NoEmployeesFound,
-    SourceUnavailable,
-    StoreUnavailable,
 )
 from domain.ports.employees.employee_source import EmployeeSource
 from domain.ports.employees.employee_store import EmployeeDataDeleter, EmployeeWriter
 from domain.use_cases.employee_sync import (
-    EmployeesSyncProgress,
-    EmployeesSyncRequest,
-    EmployeesSyncResult,
-    EmployeesSyncStarted,
+    EmployeeSyncProgress,
+    EmployeeSyncRequest,
+    EmployeeSyncResult,
+    EmployeeSyncStarted,
     sync_employees,
 )
 
@@ -102,27 +102,27 @@ class EmployeeErrorMapper:
             return PublicError("employee.invalid_limit", 422, str(exc))
         if isinstance(exc, NoEmployeesFound):
             return PublicError("employee.no_employees", 404, "No employees were found")
-        if isinstance(exc, SourceUnavailable):
+        if isinstance(exc, EmployeeSourceUnavailable):
             return PublicError(
                 "employee.source_unavailable", 501, "Employee source is unavailable"
             )
-        if isinstance(exc, StoreUnavailable):
+        if isinstance(exc, EmployeeStoreUnavailable):
             return PublicError(
                 "employee.store_unavailable", 503, "Employee store is unavailable"
             )
-        return internal_error()
+        return build_internal_error()
 
 
-def _event(
-    update: EmployeesSyncStarted | EmployeesSyncProgress | EmployeesSyncResult,
+def _build_event(
+    update: EmployeeSyncStarted | EmployeeSyncProgress | EmployeeSyncResult,
 ) -> StreamEvent:
-    if isinstance(update, EmployeesSyncStarted):
+    if isinstance(update, EmployeeSyncStarted):
         return StreamEvent(
             "started",
             {"status": "running", "operation_id": str(update.operation_id)},
             StreamEventKind.NON_TERMINAL,
         )
-    if isinstance(update, EmployeesSyncResult):
+    if isinstance(update, EmployeeSyncResult):
         status = EmployeesSyncProgressStatus.COMPLETE
         kind = StreamEventKind.COMPLETE
     else:
@@ -146,9 +146,9 @@ def _event(
     )
 
 
-def _failure_event(
+def _build_failure_event(
     public_error: PublicError,
-    progress: EmployeesSyncProgress | None,
+    progress: EmployeeSyncProgress | None,
     operation_id: str | None,
 ) -> StreamEvent:
     return StreamEvent(
@@ -188,23 +188,23 @@ async def sync_employees_endpoint(
     source: Annotated[EmployeeSource, Depends(get_employee_source)],
     store: Annotated[EmployeeWriter, Depends(get_employee_store)],
 ) -> AsyncGenerator[ServerSentEvent]:
-    missing_outcome = _failure_event(internal_error(), None, None)
+    missing_outcome = _build_failure_event(build_internal_error(), None, None)
     lifecycle = StreamLifecycle(
         ProgressEventLimiter(config.stream_progress_interval_seconds),
         missing_outcome,
     )
     updates = sync_employees(
-        EmployeesSyncRequest(request.limit), source, store, principal_id
+        EmployeeSyncRequest(request.limit), source, store, principal_id
     )
-    last_progress: EmployeesSyncProgress | None = None
+    last_progress: EmployeeSyncProgress | None = None
     operation_id: str | None = None
     try:
         async for update in updates:
-            if isinstance(update, EmployeesSyncStarted):
+            if isinstance(update, EmployeeSyncStarted):
                 operation_id = str(update.operation_id)
-            if isinstance(update, EmployeesSyncProgress):
+            if isinstance(update, EmployeeSyncProgress):
                 last_progress = update
-            event = _event(update)
+            event = _build_event(update)
             response = lifecycle.encode(event)
             if response is not None:
                 yield response
@@ -217,7 +217,7 @@ async def sync_employees_endpoint(
             identifiers={"operation": "employee.sync"},
         )
         response = lifecycle.encode(
-            _failure_event(public_error, last_progress, operation_id)
+            _build_failure_event(public_error, last_progress, operation_id)
         )
         if response is not None:
             yield response

@@ -17,15 +17,15 @@ from domain.use_cases.document_ingestion._models import (
     DocumentCandidateSelectionFailure,
 )
 from domain.use_cases.document_ingestion._selectors import (
-    metadata_refresh_request,
-    path_capture_drive_ids,
+    build_metadata_refresh_request,
+    select_path_capture_drive_ids,
 )
 from domain.use_cases.metadata_refresh.group._models import (
     MetadataDriveFilesSelected,
     MetadataDrivePublished,
     MetadataDriveRefreshFailure,
-    MetadataIngestProgress,
-    MetadataIngestStarted,
+    MetadataGroupIngestProgress,
+    MetadataGroupIngestStarted,
     MetadataRefreshRunResult,
 )
 from domain.use_cases.metadata_refresh.group.per_drive import (
@@ -87,15 +87,15 @@ async def refresh_and_select_group_document_candidates(
     metadata_source: DocumentRefreshSource,
     store: CombinedDocumentRefreshStore,
 ) -> AsyncGenerator[
-    MetadataIngestStarted
-    | MetadataIngestProgress
+    MetadataGroupIngestStarted
+    | MetadataGroupIngestProgress
     | MetadataDrivePublished
     | MetadataDriveFilesSelected
     | MetadataDriveRefreshFailure
     | MetadataRefreshRunResult
 ]:
     """Refresh metadata, then persist eligible candidates per published drive."""
-    metadata_request = metadata_refresh_request(request)
+    metadata_request = build_metadata_refresh_request(request)
     metadata_refresh_events = refresh_group_metadata_per_drive(
         user_id,
         metadata_request,
@@ -108,13 +108,13 @@ async def refresh_and_select_group_document_candidates(
         validation_exclude_drive_ids=frozenset(
             selector.drive_id for selector in request.exclude
         ),
-        capture_relative_paths_drive_ids=path_capture_drive_ids(request),
+        capture_relative_paths_drive_ids=select_path_capture_drive_ids(request),
     )
     operation_id: UUID | None = None
     try:
         async for event in metadata_refresh_events:
             match event:
-                case MetadataIngestStarted(operation_id=started_operation_id):
+                case MetadataGroupIngestStarted(operation_id=started_operation_id):
                     operation_id = started_operation_id
                 case MetadataDrivePublished():
                     yield event
