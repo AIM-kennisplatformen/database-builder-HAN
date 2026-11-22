@@ -96,7 +96,10 @@ class EmployeeStore:
     async def get_operation_run(
         self, operation_id: UUID, principal_id: str
     ) -> OperationRun | None:
-        if operation_id not in self.statuses or self.owners[operation_id] != principal_id:
+        if (
+            operation_id not in self.statuses
+            or self.owners[operation_id] != principal_id
+        ):
             return None
         return OperationRun(
             id=operation_id,
@@ -211,7 +214,10 @@ def test_employee_sync_emits_rate_limited_progress_then_one_complete() -> None:
         return [
             event
             async for event in sync_employees_endpoint(
-                EmployeesSyncRequestBody(), "operator", EmployeeSource(), EmployeeStore()
+                EmployeesSyncRequestBody(),
+                "operator",
+                EmployeeSource(),
+                EmployeeStore(),
             )
         ]
 
@@ -259,7 +265,10 @@ def test_employee_sync_emits_one_error_terminal_after_source_failure() -> None:
             "http_status": 501,
             "detail": "Employee source is unavailable",
         },
-        "context": {"operation": "employee.sync", "operation_id": events[0].data["operation_id"]},
+        "context": {
+            "operation": "employee.sync",
+            "operation_id": events[0].data["operation_id"],
+        },
         "progress": {
             "processed": 1,
             "total": 3,
@@ -314,7 +323,10 @@ def test_employee_sync_emits_generic_unexpected_error_payload(
         return [
             event
             async for event in sync_employees_endpoint(
-                EmployeesSyncRequestBody(), "operator", EmployeeSource(), EmployeeStore()
+                EmployeesSyncRequestBody(),
+                "operator",
+                EmployeeSource(),
+                EmployeeStore(),
             )
         ]
 
@@ -378,7 +390,10 @@ def test_employee_sync_subclass_inherits_known_error_status(
         return [
             event
             async for event in sync_employees_endpoint(
-                EmployeesSyncRequestBody(), "operator", EmployeeSource(), EmployeeStore()
+                EmployeesSyncRequestBody(),
+                "operator",
+                EmployeeSource(),
+                EmployeeStore(),
             )
         ]
 

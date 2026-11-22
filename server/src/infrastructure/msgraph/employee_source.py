@@ -8,6 +8,9 @@ from httpx import Response
 from kiota_abstractions.base_request_configuration import RequestConfiguration
 from kiota_abstractions.native_response_handler import NativeResponseHandler
 from kiota_http.middleware.options import ResponseHandlerOption
+from msgraph.generated.groups.item.transitive_members.graph_user.graph_user_request_builder import (
+    GraphUserRequestBuilder,
+)
 from msgraph.graph_service_client import GraphServiceClient
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -122,6 +125,46 @@ class MsGraphEmployeeSource(EmployeeSource):
             ),
         )
 
+    async def _stream_member_pages(
+        self, members: GraphUserRequestBuilder, limit: int | None
+    ) -> AsyncIterator[GraphGroupMemberPage]:
+        next_page_url: str | None = self._first_page_url(limit)
+        seen_urls: set[str] = set()
+        while next_page_url is not None:
+            page_url = next_page_url
+            validate_graph_url(page_url)
+            if page_url in seen_urls:
+                raise ValueError("Graph repeated an @odata.nextLink")
+            seen_urls.add(page_url)
+            page = await self._get_member_page(members, page_url)
+            yield page
+            next_page_url = page.next_link
+
+    async def _get_member_page(
+        self, members: GraphUserRequestBuilder, page_url: str
+    ) -> GraphGroupMemberPage:
+        config = RequestConfiguration(
+            query_parameters=GraphUserRequestBuilder.GraphUserRequestBuilderGetQueryParameters(),
+            options=[ResponseHandlerOption(NativeResponseHandler())],
+        )
+        config.headers.add("ConsistencyLevel", "eventual")
+        response = cast(
+            Response | None,
+            await members.with_url(page_url).get(request_configuration=config),
+        )
+        if response is None:
+            raise ValueError("Graph returned no member page")
+        return GraphGroupMemberPage.model_validate_json(response.content)
+
+    @staticmethod
+    def _member_counts(
+        page: GraphGroupMemberPage, limit: int | None
+    ) -> tuple[int, int]:
+        if page.count is None:
+            raise ValueError("Graph did not return a group member count")
+        available = page.count
+        return (min(available, limit) if limit is not None else available, available)
+
     @override
     async def stream_employees(
         self, limit: int | None
@@ -132,42 +175,15 @@ class MsGraphEmployeeSource(EmployeeSource):
         members = self.client.groups.by_group_id(
             self.group_id
         ).transitive_members.graph_user
-        next_page_url: str | None = self._first_page_url(limit)
-        seen_urls: set[str] = set()
         processed = 0
         total: int | None = None
-        available: int = 0
-
-        while next_page_url is not None:
-            page_url = next_page_url
-            validate_graph_url(page_url)
-            if page_url in seen_urls:
-                raise ValueError("Graph repeated an @odata.nextLink")
-            seen_urls.add(page_url)
-
-            config = RequestConfiguration(
-                query_parameters=members.GraphUserRequestBuilderGetQueryParameters(),
-                options=[ResponseHandlerOption(NativeResponseHandler())],
-            )
-            config.headers.add("ConsistencyLevel", "eventual")
-            response = cast(
-                Response | None,
-                await members.with_url(page_url).get(request_configuration=config),
-            )
-            if response is None:
-                raise ValueError("Graph returned no member page")
-
-            page = GraphGroupMemberPage.model_validate_json(response.content)
+        available = 0
+        async for page in self._stream_member_pages(members, limit):
             if total is None:
-                if page.count is None:
-                    raise ValueError("Graph did not return a group member count")
-                available = page.count
-                total = min(available, limit) if limit is not None else available
+                total, available = self._member_counts(page, limit)
             for member in page.value:
                 employee = await self._fetch_profile(member.id)
                 processed += 1
                 yield EmployeeStreamItem(employee, total, available)
                 if limit is not None and processed >= limit:
                     return
-
-            next_page_url = page.next_link

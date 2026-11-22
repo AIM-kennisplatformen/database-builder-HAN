@@ -125,9 +125,7 @@ async def sync_employees(
     source: EmployeeSource,
     store: EmployeeWriter,
     principal_id: str,
-) -> AsyncGenerator[
-    EmployeesSyncStarted | EmployeesSyncProgress | EmployeesSyncResult
-]:
+) -> AsyncGenerator[EmployeesSyncStarted | EmployeesSyncProgress | EmployeesSyncResult]:
     if req.limit is not None and req.limit <= 0:
         raise InvalidLimit("Employee sync limit must be positive")
 
