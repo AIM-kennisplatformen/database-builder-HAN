@@ -18,9 +18,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     connection = op.get_bind()
-    connection.exec_driver_sql(
-        "DROP INDEX document_metadata_runs_operation_id"
-    )
+    connection.exec_driver_sql("DROP INDEX document_metadata_runs_operation_id")
     connection.exec_driver_sql(
         "ALTER TABLE document_metadata_runs DROP COLUMN operation_id"
     )
