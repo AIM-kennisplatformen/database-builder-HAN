@@ -10,6 +10,11 @@ from domain.use_cases.metadata_refresh.group._models import (
 def build_metadata_refresh_request(
     request: DocumentIngestRequest,
 ) -> MetadataGroupIngestRequest:
+    """Project document selectors into the metadata refresh request format.
+
+    Status-based selectors are omitted here because candidate selection applies
+    them after metadata publication.
+    """
     return MetadataGroupIngestRequest(
         request.group_id,
         include=[
@@ -33,6 +38,7 @@ def build_metadata_refresh_request(
 
 
 def select_path_capture_drive_ids(request: DocumentIngestRequest) -> frozenset[str]:
+    """Return drives whose status selectors need relative paths captured."""
     return frozenset(
         selector.drive_id
         for selector in request.include + request.exclude

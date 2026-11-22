@@ -32,6 +32,11 @@ async def _stream_ubwfris_parser[T: UbwfrisRow](
     parser: UbwfrisParser[T],
     workbook: UbwfrisWorkbook[T],
 ) -> AsyncIterator[ParsedUbwfrisRow[T]]:
+    """Forward parsed workbook rows while preserving validation errors.
+
+    Parser implementation errors are translated to ``ParserFailure`` so callers
+    can distinguish malformed workbooks from parser infrastructure failures.
+    """
     try:
         async for item in parser.stream_ubwfris_rows(workbook):
             yield item
@@ -44,6 +49,7 @@ async def _stream_ubwfris_parser[T: UbwfrisRow](
 async def _stage_ubwfris_rows[T: UbwfrisRow](
     writer: UbwfrisWriter[T], snapshot_id: str, rows: list[T]
 ) -> int:
+    """Stage a batch, preserving duplicate and workbook validation errors."""
     try:
         return await writer.stage_ubwfris_rows(snapshot_id, rows)
     except DuplicateUpload, InvalidWorkbook:
@@ -57,6 +63,7 @@ async def _stage_ubwfris_rows[T: UbwfrisRow](
 async def _begin_snapshot[T: UbwfrisRow](
     writer: UbwfrisWriter[T], snapshot_id: str
 ) -> None:
+    """Create a snapshot, preserving duplicate-upload conflicts."""
     try:
         await writer.begin_snapshot(snapshot_id)
     except DuplicateUpload:
@@ -100,6 +107,7 @@ async def _publish_snapshot[T: UbwfrisRow](
 
 
 def _validate_ubwfris_row(row: UbwfrisRow) -> tuple[UbwfrisRow, bool]:
+    """Normalize and validate a row using its workbook-specific rules."""
     match row:
         case IbRow():
             return _validate_ib_row(row)
@@ -110,6 +118,7 @@ def _validate_ubwfris_row(row: UbwfrisRow) -> tuple[UbwfrisRow, bool]:
 
 
 def _validate_ib_row(row: IbRow) -> tuple[IbRow, bool]:
+    """Trim IB text fields and validate required values, row number, and hours."""
     normalized = replace(
         row,
         project_id=row.project_id.strip(),
@@ -141,6 +150,7 @@ def _validate_ib_row(row: IbRow) -> tuple[IbRow, bool]:
 
 
 def _validate_rha_row(row: RhaRow) -> tuple[RhaRow, bool]:
+    """Trim RHA text fields and validate required values and typed measurements."""
     normalized = replace(
         row,
         employee_number=row.employee_number.strip(),
@@ -192,6 +202,8 @@ def _validate_rha_row(row: RhaRow) -> tuple[RhaRow, bool]:
 
 @dataclass
 class _WorkbookProgress[T: UbwfrisRow]:
+    """Accumulate row counts, duplicate tracking, and the current staging batch."""
+
     total_rows: int = 0
     processed_rows: int = 0
     created_rows: int = 0
@@ -241,6 +253,11 @@ async def _consume_workbook_rows[T: UbwfrisRow](
     snapshot_id: str,
     progress: _WorkbookProgress[T],
 ) -> AsyncIterator[UbwfrisIngestProgress]:
+    """Consume, validate, and stage rows, yielding progress as rows are parsed.
+
+    The workbook is rejected if it has no rows, any invalid or duplicate row, or
+    no valid rows to stage; callers therefore publish only wholly valid imports.
+    """
     async for item in _stream_ubwfris_parser(parser, workbook):
         progress.total_rows = item.total_rows
         await _accept_workbook_row(item, writer, snapshot_id, progress)
@@ -321,7 +338,29 @@ async def ingest_ubwfris_workbook[T: UbwfrisRow](
     operation_id: UUID,
     principal_id: str,
 ) -> AsyncGenerator[UbwfrisIngestEvent]:
-    """Validate and stage a workbook, then publish all rows in one transaction."""
+    """Validate a workbook and publish its staged rows as one snapshot.
+
+    Rows are staged in batches, but the snapshot is visible only after every row
+    passes validation. Any failure discards the incomplete snapshot and records
+    the failed or interrupted operation.
+
+    Args:
+        req: Workbook and workbook-specific row model.
+        parser: Parser that streams rows from the workbook.
+        writer: Store that stages and publishes the snapshot.
+        snapshot_id: Stable identifier used for duplicate-upload detection.
+        operation_id: Identifier for the upload operation record.
+        principal_id: Principal associated with the operation.
+
+    Yields:
+        Row progress events followed by the completed ingest result.
+
+    Raises:
+        InvalidWorkbook: If the workbook is empty or contains invalid rows.
+        DuplicateUpload: If this snapshot has already been imported.
+        ParserFailure: If parsing fails for an infrastructure reason.
+        UbwfrisStoreUnavailable: If persistence fails.
+    """
     progress = _WorkbookProgress[T]()
     completed = False
     operation_started = False
@@ -373,6 +412,7 @@ async def ingest_ubwfris_workbook[T: UbwfrisRow](
 
 
 def _ubwfris_failure(exc: BaseException, interrupted: bool) -> tuple[str, str]:
+    """Map an ingest error to its durable failure code and human-readable reason."""
     if interrupted:
         return "request_interrupted", "Upload was interrupted"
     if isinstance(exc, InvalidWorkbook):

@@ -21,11 +21,15 @@ from domain.ports.employees.employee_store import (
 
 @dataclass(frozen=True)
 class EmployeeSyncRequest:
+    """Configure an optional positive maximum for an employee synchronization."""
+
     limit: int | None = None
 
 
 @dataclass(frozen=True)
 class EmployeeSyncProgress:
+    """Report accumulated write counts after staging an employee."""
+
     total: int
     available: int
     created: int
@@ -35,16 +39,21 @@ class EmployeeSyncProgress:
 
     @property
     def processed(self) -> int:
+        """Return the number of records staged so far."""
         return self.created + self.updated + self.unchanged
 
 
 @dataclass(frozen=True)
 class EmployeeSyncStarted:
+    """Identify the employee sync run before record progress is emitted."""
+
     operation_id: UUID
 
 
 @dataclass(frozen=True)
 class EmployeeSyncResult:
+    """Report published counts after an employee sync completes."""
+
     total: int | None
     available: int
     created: int
@@ -54,6 +63,7 @@ class EmployeeSyncResult:
 
     @property
     def processed(self) -> int:
+        """Return the total number of records in the final counts."""
         return self.created + self.updated + self.unchanged
 
 
@@ -126,6 +136,24 @@ async def sync_employees(
     store: EmployeeWriter,
     principal_id: str,
 ) -> AsyncGenerator[EmployeeSyncStarted | EmployeeSyncProgress | EmployeeSyncResult]:
+    """Stream a staged employee sync and publish it only after records are read.
+
+    Args:
+        req: Optional positive maximum number of employees to synchronize; ``None``
+            means the source is not limited by this request.
+        source: Source that streams employee profiles.
+        store: Writer that stages, publishes, or discards the run.
+        principal_id: Principal to associate with the run.
+
+    Yields:
+        A started event, progress after each employee, and the published result.
+
+    Raises:
+        InvalidLimit: If a supplied limit is not positive.
+        NoEmployeesFound: If the source yields no employee records.
+        EmployeeSourceUnavailable: If reading the source fails.
+        EmployeeStoreUnavailable: If a store operation fails.
+    """
     if req.limit is not None and req.limit <= 0:
         raise InvalidLimit("Employee sync limit must be positive")
 

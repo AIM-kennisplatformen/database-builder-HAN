@@ -73,6 +73,7 @@ async def _select_independent_refresh_drives(
     validation_include_drive_ids: frozenset[str] | None,
     validation_exclude_drive_ids: frozenset[str] | None,
 ) -> tuple[list[MetadataDriveIngestRequest], bool]:
+    """Validate original selectors, including status-based selectors from document ingest."""
     group = await list_group_drives(user_id, request.group_id, drive_source)
     drive_locations_by_id = {
         location.drive_id: location for location in group.locations
@@ -236,6 +237,7 @@ async def _refresh_drive_metadata_independently(
 ) -> AsyncGenerator[
     MetadataGroupIngestProgress | MetadataDriveRefreshFailure | MetadataDrivePublished
 ]:
+    """Emit drive-local refresh failures as events so the group can continue."""
     drive_id = drive_request.drive_id
     state.active_drive_id = drive_id
     state.prepared_publication = None
@@ -393,7 +395,27 @@ async def refresh_group_metadata_per_drive(
     | MetadataDriveRefreshFailure
     | MetadataRefreshRunResult
 ]:
-    """Refresh and publish each selected drive independently for document work."""
+    """Refresh and publish selected drives independently for document work.
+
+    Each successful drive is published before the next is scanned. Drive-local
+    failures are emitted and do not prevent later drives from being processed;
+    operation-level failures terminate the stream and fail the group operation.
+
+    Args:
+        user_id: User whose membership grants access to the group.
+        request: Group ID and metadata drive selectors.
+        drive_source: Source of accessible group drive locations.
+        metadata_source: Source used to scan drive metadata.
+        store: Store for staging, publication, and operation outcomes.
+        validation_include_drive_ids: Optional original include IDs used when
+            candidate selection has additional selector categories.
+        validation_exclude_drive_ids: Optional original exclude IDs for validation.
+        capture_relative_paths_drive_ids: Drives that require paths in scan results.
+
+    Yields:
+        A started event, progress, per-drive published/failure events, and a final
+        operation result.
+    """
     included_rules = build_selector_rules(request.include)
     excluded_rules = build_selector_rules(request.exclude)
     validate_selector_conflicts(included_rules, excluded_rules)

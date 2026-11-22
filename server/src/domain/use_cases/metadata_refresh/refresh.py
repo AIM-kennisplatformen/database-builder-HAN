@@ -47,7 +47,11 @@ async def _refresh_group_metadata_atomically(
 ) -> AsyncGenerator[
     MetadataGroupIngestProgress | MetadataGroupIngestSkipped | MetadataGroupIngestResult
 ]:
-    """Stage every selected drive, then publish the group atomically."""
+    """Stage selected drives and publish them together after all scans succeed.
+
+    A staging or publication failure discards every prepared drive run, so the
+    group does not expose a partial refresh.
+    """
     (
         drive_requests,
         has_explicit_include_drive_selector,
@@ -181,6 +185,22 @@ async def refresh_group_metadata_atomically(
     | MetadataGroupIngestSkipped
     | MetadataGroupIngestResult
 ]:
+    """Refresh all selected group drives as one atomic metadata operation.
+
+    Selectors are validated before an operation is created. Inaccessible drives
+    may be skipped only when there is no explicit include-drive selector.
+
+    Args:
+        user_id: User whose membership grants access to the group.
+        request: Group ID and include/exclude drive selectors.
+        drive_source: Source of accessible group drive locations.
+        metadata_source: Source used to scan drive metadata.
+        store: Store used to stage, publish, and record the operation.
+
+    Yields:
+        A started event, document progress, optional skipped-drive events, and a
+        result after all prepared runs have been published.
+    """
     # Normalize and reject malformed or ambiguous selectors before creating a run.
     included_rules = build_selector_rules(request.include)
     excluded_rules = build_selector_rules(request.exclude)

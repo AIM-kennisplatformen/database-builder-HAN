@@ -12,6 +12,7 @@ from domain.use_cases.metadata_refresh.group._models import MetadataDriveIngestF
 
 
 def _failure_cause(exc: Exception, summary: dict[str, object]) -> Exception:
+    """Unwrap a drive failure and add its drive ID to the persisted summary."""
     match exc:
         case MetadataDriveIngestFailure(drive_id=drive_id, cause=drive_cause):
             summary["failed_drive_id"] = drive_id
@@ -25,6 +26,11 @@ def build_failure_details(
     processed_document_count: int,
     skipped_drive_ids: list[str],
 ) -> tuple[str, dict[str, object]]:
+    """Map a refresh exception to a stable failure code and operation summary.
+
+    Source status codes and nested drive IDs are retained in the summary so the
+    caller can report actionable failure details.
+    """
     summary: dict[str, object] = {
         "processed": processed_document_count,
         "skipped_drive_ids": skipped_drive_ids,

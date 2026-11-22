@@ -33,6 +33,11 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class MetadataDriveIngestRequest:
+    """Configure a drive scan, including normalized include and exclude rules.
+
+    Construction rejects blank drive or root IDs and normalizes selector rules.
+    """
+
     drive_id: str
     include_rules: tuple[MetadataPathRule, ...] = ()
     exclude_rules: tuple[MetadataPathRule, ...] = ()
@@ -40,6 +45,7 @@ class MetadataDriveIngestRequest:
     operation_id: UUID | None = None
 
     def __post_init__(self) -> None:
+        """Validate required IDs and normalize selection rules."""
         if not self.drive_id.strip():
             raise InvalidMetadataSelection("drive_id is required")
         if not self.root_item_id.strip():
@@ -59,6 +65,8 @@ class MetadataDriveIngestRequest:
 
 @dataclass(frozen=True)
 class MetadataDriveIngestProgress:
+    """Report one staged document and the source counts for its scan."""
+
     document: Document
     total: int
     available: int
@@ -66,6 +74,8 @@ class MetadataDriveIngestProgress:
 
 @dataclass(frozen=True)
 class MetadataDriveIngestPrepared:
+    """Carry a staged drive publication for a caller to commit later."""
+
     publication: MetadataDriveRunPublication
 
 
@@ -74,6 +84,7 @@ async def _begin_metadata_run(
     principal_id: str,
     req: MetadataDriveIngestRequest,
 ) -> MetadataDriveIngestRun:
+    """Create a run, preserving active-run conflicts and mapping store failures."""
     selection = MetadataSelection(req.include_rules, req.exclude_rules)
     try:
         return await store.begin_metadata_run(
@@ -91,6 +102,11 @@ async def _scan_metadata_source(
     cursor: str | None,
     capture_relative_paths: bool = False,
 ) -> DocumentMetadataScan:
+    """Scan selected metadata, disabling cursor use when paths must be captured.
+
+    Path selectors require a full scan because a cursor does not include unchanged
+    items needed to evaluate paths. Source status errors are preserved for callers.
+    """
     try:
         selection = MetadataSelection(req.include_rules, req.exclude_rules)
         capture_paths = capture_relative_paths or any(
@@ -139,6 +155,15 @@ async def publish_metadata_runs(
     store: DocumentRefreshStore,
     publications: tuple[MetadataDriveRunPublication, ...],
 ) -> None:
+    """Publish prepared drive runs together so readers see one consistent update.
+
+    Args:
+        store: Metadata store that owns the staged runs.
+        publications: Prepared runs and cursors to publish in one transaction.
+
+    Raises:
+        MetadataStoreUnavailable: If publication fails.
+    """
     try:
         await store.publish_metadata_runs(publications)
     except Exception as exc:
@@ -189,7 +214,12 @@ async def _discard_metadata_run(store: DocumentRefreshStore, run_id: UUID) -> No
 async def discard_metadata_runs(
     store: DocumentRefreshStore, run_ids: tuple[UUID, ...]
 ) -> None:
-    """Clear every staged drive in one cancelled or failed group request."""
+    """Clear staged runs after a failed or cancelled multi-drive request.
+
+    Args:
+        store: Metadata store that owns the staged runs.
+        run_ids: Staged run identifiers to discard.
+    """
     with anyio.CancelScope(shield=True):
         for run_id in run_ids:
             await _discard_metadata_run(store, run_id)
@@ -203,7 +233,29 @@ async def stage_metadata_refresh(
     *,
     capture_relative_paths: bool = False,
 ) -> AsyncGenerator[MetadataDriveIngestProgress | MetadataDriveIngestPrepared]:
-    """Scan and stage one drive without publishing it."""
+    """Scan and stage one drive without making its metadata visible.
+
+    The caller must publish the prepared token; closing or failing this generator
+    discards the staged run.
+
+    Args:
+        principal_id: Principal associated with the metadata run.
+        req: Drive ID, root item, and include/exclude rules.
+        source: Source used to scan drive metadata.
+        store: Store used to stage documents and deletions.
+        capture_relative_paths: Include relative paths in the source scan when
+            downstream selection rules need them.
+
+    Yields:
+        Progress for each staged document, followed by a publication token.
+
+    Raises:
+        MetadataRunAlreadyActive: If this principal already has an active run
+            for the drive.
+        MetadataSourceError: If the source rejects the scan with a known status.
+        MetadataSourceUnavailable: If the source fails for an unexpected reason.
+        MetadataStoreUnavailable: If a staging operation fails.
+    """
     run: MetadataDriveIngestRun | None = None
     with anyio.CancelScope(shield=True):
         run = await _begin_metadata_run(store, principal_id, req)
@@ -235,7 +287,26 @@ async def refresh_drive_metadata_atomically(
     source: DocumentRefreshSource,
     store: DocumentRefreshStore,
 ) -> AsyncGenerator[MetadataDriveIngestProgress]:
-    """Scan, stage, then publish one drive's metadata and cursor atomically."""
+    """Scan, stage, and publish one drive's metadata and cursor atomically.
+
+    If the operation fails after preparation, its staged run is discarded before
+    the error is propagated.
+
+    Args:
+        principal_id: Principal associated with the metadata run.
+        req: Drive ID, root item, and include/exclude rules.
+        source: Source used to scan drive metadata.
+        store: Store used to stage and publish documents.
+
+    Yields:
+        Progress for each document staged from the source.
+
+    Raises:
+        MetadataRunAlreadyActive: If another refresh is active for the drive.
+        MetadataSourceError: If the source rejects the scan with a known status.
+        MetadataSourceUnavailable: If the source fails for an unexpected reason.
+        MetadataStoreUnavailable: If staging or publication fails.
+    """
     publication: MetadataDriveRunPublication | None = None
     try:
         preparation_events = stage_metadata_refresh(principal_id, req, source, store)

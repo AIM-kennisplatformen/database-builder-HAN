@@ -42,6 +42,7 @@ async def _select_published_drive(
     operation_id: UUID,
     event: MetadataDrivePublished,
 ) -> MetadataDriveFilesSelected:
+    """Query candidates visible in the published run and record their selection."""
     candidate_documents = await store.query_visible_document_candidates(
         user_id, event.drive_id, event.metadata_run_id
     )
@@ -62,6 +63,7 @@ async def _record_selection_failure(
     store: CombinedDocumentRefreshStore,
     metadata_refresh_events: AsyncGenerator[object],
 ) -> None:
+    """Persist candidate selection failures and preserve cancellation status."""
     cancelled = isinstance(exc, anyio.get_cancelled_exc_class() | GeneratorExit)
     if not cancelled and isinstance(exc, Exception):
         logger.exception("Document candidate selection failed")
@@ -94,7 +96,20 @@ async def refresh_and_select_group_document_candidates(
     | MetadataDriveRefreshFailure
     | MetadataRefreshRunResult
 ]:
-    """Refresh metadata, then persist eligible candidates per published drive."""
+    """Refresh metadata, then persist eligible candidates per published drive.
+
+    Args:
+        user_id: User whose group drives and visible documents are accessed.
+        request: Group and document-selection criteria.
+        drive_source: Source for the user's group drive locations.
+        metadata_source: Source used to refresh drive metadata.
+        store: Store for metadata refresh and candidate selections.
+
+    Yields:
+        Metadata refresh events, per-drive publication and selection events, and
+        the final refresh result.
+
+    """
     metadata_request = build_metadata_refresh_request(request)
     metadata_refresh_events = refresh_group_metadata_per_drive(
         user_id,

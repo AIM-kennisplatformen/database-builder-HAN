@@ -31,6 +31,23 @@ async def stage_drive_metadata_refresh(
 ) -> AsyncGenerator[
     MetadataGroupIngestProgress | MetadataGroupIngestSkipped | MetadataDriveIngestPrepared
 ]:
+    """Adapt one drive's staging events for group refresh consumers.
+
+    A 403 source error becomes a skipped event only when ``allow_skip`` is true;
+    every other drive failure is wrapped with its drive ID. Closing this stream
+    closes the underlying preparation stream, which discards uncommitted staging.
+
+    Args:
+        user_id: Principal whose metadata run is created.
+        request: Drive ID, root, and path selection for the scan.
+        metadata_source: Source used to scan drive metadata.
+        store: Store used to stage the scan.
+        allow_skip: Whether an inaccessible drive may be reported as skipped.
+        capture_relative_paths: Whether source scans must include relative paths.
+
+    Yields:
+        Group progress and skip events, followed by the prepared publication.
+    """
     preparation_events = stage_metadata_refresh(
         user_id,
         request,

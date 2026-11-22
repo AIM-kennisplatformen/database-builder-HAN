@@ -11,6 +11,11 @@ from domain.use_cases.metadata_refresh.group._models import MetadataDriveSelecto
 def build_selector_rules(
     selectors: list[MetadataDriveSelector],
 ) -> dict[str, tuple[MetadataPathRule, ...]]:
+    """Normalize selectors into path rules grouped by drive ID.
+
+    An empty path list means the drive root. Invalid blank paths or drive IDs
+    raise ``InvalidMetadataSelection`` before any refresh work begins.
+    """
     grouped: dict[str, list[MetadataPathRule]] = {}
     for selector in selectors:
         if not selector.drive_id.strip():
@@ -37,6 +42,7 @@ def validate_selector_conflicts(
     include_rules: dict[str, tuple[MetadataPathRule, ...]],
     exclude_rules: dict[str, tuple[MetadataPathRule, ...]],
 ) -> None:
+    """Reject include and exclude rules that match the same path and extensions."""
     for drive_id in include_rules.keys() & exclude_rules.keys():
         for include_rule in include_rules[drive_id]:
             for exclude_rule in exclude_rules[drive_id]:
@@ -52,6 +58,11 @@ def select_drive_ids(
     excluded_drive_ids: set[str],
     exclude_selectors: list[MetadataDriveSelector],
 ) -> tuple[str, ...]:
+    """Select available drive IDs in source order using include and exclude rules.
+
+    An empty include set leaves all drives eligible. A whole-drive exclude is
+    recognized only when its selector has neither paths nor extensions.
+    """
     whole_drive_excludes = {
         selector.drive_id
         for selector in exclude_selectors
@@ -68,6 +79,7 @@ def select_drive_ids(
 def _metadata_rules_overlap(
     include_rule: MetadataPathRule, exclude_rule: MetadataPathRule
 ) -> bool:
+    """Return whether two rules target the same path and any common extensions."""
     if include_rule.path != exclude_rule.path:
         return False
     if not include_rule.extensions or not exclude_rule.extensions:
