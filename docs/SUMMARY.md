@@ -18,3 +18,4 @@
   - [MS Graph API](data-sources/ms-graph-api.md)
   - [MS Graph files](data-sources/ms-graph-files.md)
   - [SharePoint document integration design](data-sources/sharepoint-document-integration.md)
+  - [Document ingestion plan](data-sources/document-ingestion-plan/README.md)

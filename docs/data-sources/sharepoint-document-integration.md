@@ -5,7 +5,7 @@
 This records the design decisions agreed for a local demonstration of document discovery.
 Document discovery is separate from the [expertise and project journeys](../software-guidebook/02-functional-overview.md).
 Its purpose is to consolidate access to information that the requesting user can already access in Microsoft Graph.
-The group-drive discovery and metadata scan are implemented. Metadata refresh now stages observations and publishes them with a per-operator delta cursor on successful completion; the remaining sections describe intended behavior unless stated otherwise. Document extractors, embedding models, chunking, and supported formats have not been selected.
+The group-drive discovery and metadata scan are implemented. Metadata refresh now stages observations and publishes them with a per-operator delta cursor on successful completion. The forward implementation plan for combined metadata refresh and document ingestion is now in the [document ingestion plan](document-ingestion-plan/README.md); it supersedes undecided and future-behavior statements below where they differ. Existing metadata-flow behavior and the accepted storage and access decisions remain useful context.
 The [Graph file retrieval guide](ms-graph-files.md) describes the source endpoints and their order.
 
 The design extends [ADR-004](../software-guidebook/adr/ADR-004-data-storage.md): PostgreSQL stores document metadata and processing state, Qdrant stores document vectors and passages, and TypeDB remains the knowledge graph for the existing discovery journeys.
@@ -36,12 +36,12 @@ Domain policies decide access eligibility and vectorization priority from suppli
 Adapters make Microsoft Graph, PostgreSQL, Qdrant, credential, and signing calls.
 An access-control use case returns accessible candidate document IDs and a `partial` indicator; API and MCP search use cases take that result as an argument and produce different responses.
 
-An eventual operation that runs metadata followed by vectors may compose the two use cases, but that operation is outside the current design.
+The combined metadata-refresh and document-ingestion operation is now specified in the [document ingestion plan](document-ingestion-plan/README.md). It composes the metadata refresh with per-file processing and is the forward plan for this capability.
 
 ## Metadata ingestion
 
 `GET /groups/drives` lists the signed-in caller's direct member groups that have available drives, including drives of visible private and shared channels, with group and drive names. `POST /groups/{group_id}/metadata` replaces the single-drive metadata endpoint and resolves its drives through the group-drive use case before scanning.
-The request has `include` and `exclude` lists of `{ "drive_id": "...", "paths": [...], "extensions": [...] }` selectors. An empty `include` selects every discovered drive. An include selector limits that drive to its recursive paths and file extensions; empty `paths` or `extensions` means all. An exclude selector with empty paths and extensions removes the whole drive. Otherwise its paths and extensions are excluded independently. Exclusions take precedence over inclusions. For channel drives, paths are relative to the folder returned by `filesFolder`; other paths are relative to the drive root. Duplicate selectors, unknown excluded drive IDs, and invalid filters fail before any metadata write. An included drive that discovery does not return produces a 403 error before any write.
+The request has `include` and `exclude` lists of `{ "drive_id": "...", "paths": [...], "extensions": [...] }` selectors. An empty `include` selects every discovered drive. An include selector limits that drive to its recursive paths and file extensions; empty `paths` or `extensions` means all. An exclude selector with empty paths and extensions removes the whole drive. The currently implemented metadata endpoint applies exclusions before inclusions. The planned selector precedence for metadata and ingestion is specified in the [document ingestion plan](document-ingestion-plan/selection-and-api.md) and will replace that behavior. For channel drives, paths are relative to the folder returned by `filesFolder`; other paths are relative to the drive root. Duplicate selectors, unknown excluded drive IDs, and invalid filters fail before any metadata write. An included drive that discovery does not return produces a 403 error before any write.
 Discovery omits Team-site drives whose delta access probe returns 403 or 404 and retains channel drives when `filesFolder` succeeds. Channel metadata scans start at the returned folder ID. During a run with an empty `include`, a drive that returns 403 emits a `skipped` event and the run continues; the final `complete` event lists skipped drive IDs. A 403 from an explicitly included drive is an `error` event and stops the run. Other failures also stop the run and report the failing drive ID and processed count. Previously published records remain available; staged records from the failed drive are discarded.
 Overlapping included paths yield each file once. There is no file-count limit. A path-scoped run fails if Graph does not supply enough folder ancestry to apply the paths reliably.
 A changed selection does not erase records for types omitted from a later run.
@@ -75,32 +75,11 @@ Previously ingested rows retain their old JSON metadata until the drive is inven
 
 ## Vectorization
 
-`POST /vectors` takes a completed metadata run ID and selects eligible documents from the published catalog.
-Retrieving metadata is a separate, higher-priority step; vectorization never starts from an incomplete inventory.
-The use case has no fixed list of document formats or extraction method yet.
-An extractor port will accommodate additional formats, and a file with no usable text can be recorded as deferred or skipped with a reason.
+The former standalone `POST /vectors` flow is superseded by the combined metadata-refresh and document-ingestion plan. Ingestion always refreshes metadata first, then processes eligible files using the newly published snapshot. The target processor coverage, structured extraction, metadata/chunk/embedding stages, low-priority OCR/vision, statuses, and per-file outcomes are described in the [plan](document-ingestion-plan/README.md).
 
-The priority policy lives in `domain/policies` and is configurable without changing the vectorization use case.
-It can rank by file type, size, measured extractable-text yield, waiting age, and a per-type total time budget.
-The initial heuristic favors Word documents over PDFs and PowerPoint files; it is adjustable because PDFs may contain exported slides and presentations may rely on images or external context.
-Per-file timeouts and per-type time budgets are distinct policy settings.
-Unused type budget may be reassigned, and waiting age prevents permanent starvation.
-The policy version and each skip or deferral reason are recorded.
+A changed file `cTag` or relevant processing-policy version marks its results outdated; it does not automatically incur a rebuild. Microsoft [describes `cTag` as a content tag](https://learn.microsoft.com/en-us/graph/api/resources/driveitem?view=graph-rest-1.0), while `eTag` can reflect metadata changes. If `cTag` is unavailable, the source adapter must establish whether content changed before reusing vectors. The per-file processing attempt verifies the source version before publication.
 
-A changed file `cTag` or changed processing-policy version makes its vectors eligible for rebuild.
-Microsoft [describes `cTag` as a content tag](https://learn.microsoft.com/en-us/graph/api/resources/driveitem?view=graph-rest-1.0), while `eTag` also reflects metadata changes.
-If `cTag` is unavailable, the source adapter must establish whether content changed before reusing vectors; metadata changes alone do not prove a content change.
-The per-file timeout covers Graph download, extraction, embedding, and Qdrant write.
-The vector-job deadline stops the job from starting new files; already started files may finish within their own timeouts.
-On reaching the start cutoff, the job reports a `deadline_reached` error with completed and deferred counts, and a later run resumes eligible work.
-Only one rebuild per document may be active at a time.
-
-Each Qdrant point stores a passage, its vector, `(drive_id, item_id)`, PostgreSQL metadata ID, vector generation, and chunk identity.
-The file's active vector generation is recorded in PostgreSQL.
-A complete new generation is written before PostgreSQL marks it active; old points are removed afterward.
-A failed or timed-out rebuild retains the previous active generation and reports its age.
-Search uses only active generations.
-Qdrant is not directly exposed to Studio or API callers.
+Each Qdrant point stores a passage, its vector, `(drive_id, item_id)`, PostgreSQL metadata ID, vector generation, chunk identity, and source location. PostgreSQL records the active generation. A complete new generation is written before PostgreSQL switches the active reference; a failed attempt retains the previous successful generation. Embedding-model changes require an explicit cutover: the old query model and generations remain searchable until cutover, after which search uses only compatible vectors from the new model. Qdrant is not directly exposed to Studio or API callers.
 
 ## Access-first search
 
@@ -164,7 +143,7 @@ An app-only token by itself does not establish an individual user's access and c
 
 ## SSE and failure recovery
 
-`POST /groups/{group_id}/metadata` runs inventory in the request and streams `progress`, `skipped`, `complete`, and `error` SSE events. There is no durable job or reconnect endpoint. Disconnecting cancels the request and its metadata run; staging is cleared, while the published catalog and cursor remain unchanged. The caller can start a new request, which resumes from the last published delta cursor. Startup recovery handles runs left `running` by a process crash by marking them interrupted and clearing staging; it does not resume them automatically.
+The currently implemented `POST /groups/{group_id}/metadata` runs inventory in the request and streams `progress`, `skipped`, `complete`, and `error` SSE events. It has no durable job or reconnect endpoint. Disconnecting cancels that metadata request; staging is cleared, while the published catalog and cursor remain unchanged. The combined document-ingestion run has different target behavior, specified in the [plan](document-ingestion-plan/selection-and-api.md): it is durable, inspectable after disconnect, finishes already-started files, and starts no additional files after disconnect. A process crash discards unpublished work while retaining completed files and run history.
 
 ## Studio data destinations
 
@@ -177,11 +156,9 @@ An LLM response may quote a passage, and logging that response is an accepted tr
 ## Deferred decisions and validation gates
 
 - Validate the exact Graph Search hit-to-drive-item mapping in the HAN tenant before implementing the access-first join.
-- Select extractors, supported document types, OCR behavior, chunking, embedding model, and numeric time or size limits later.
-- Define the combined metadata-then-vectors operation later; it should compose the two existing use cases.
-- Design the operator purge use case later; delegated delta observations alone cannot trigger global deletion.
+- Select concrete extractors, model IDs and prompts, OCR/vision service, and measured numeric limits during implementation, following the [document ingestion plan](document-ingestion-plan/README.md).
+- Design the operator purge endpoint and authorization details during implementation; delegated delta observations alone cannot trigger global deletion.
 - Confirm Studio's selective Langfuse masking with an exported trace while preserving token usage and LLM response logging.
-- Choose whether an overlapping run is queued or rejected when implementing concurrency control.
 - Update the relevant Software Guidebook feature, interface, and data chapters when this separate capability moves from design into implementation.
 
-The read-only [tenant identity validator](../../server/scripts/validate_graph_search_identity.py) was attempted on 18 November 2026 with `InteractiveBrowserCredential` and an empty Graph SDK scopes list. Interactive sign-in succeeded, but `POST /search/query` returned 403: the configured application lacks a file-search permission. No search hit identities were observed, so the access-first join gate remains open. The [Microsoft Search permission table](https://learn.microsoft.com/en-us/graph/api/resources/search-api-overview?view=graph-rest-1.0) lists `Files.Read.All` and `Sites.Read.All` among the delegated permissions for `driveItem` search.
+Tenant identity validation was attempted on 18 November 2026 with `InteractiveBrowserCredential` and an empty Graph SDK scopes list. Interactive sign-in succeeded, but `POST /search/query` returned 403: the configured application lacks a file-search permission. No search hit identities were observed, so the access-first join gate remains open. The [Microsoft Search permission table](https://learn.microsoft.com/en-us/graph/api/resources/search-api-overview?view=graph-rest-1.0) lists `Files.Read.All` and `Sites.Read.All` among the delegated permissions for `driveItem` search.
